@@ -107,6 +107,7 @@ import { getData as defaultGetData, lookup } from './data.js';
 import { Match as DefaultMatch } from './match/Match.js';
 import { KITTED_CHARS } from './sim/content/kits/index.js';
 import { LobbyDiscovery } from './lobbyDiscovery.js';
+import { assetCacheReadinessMatches } from '../shared/assetCache.js';
 
 /** Room code alphabet: uppercase letters without I and O (and no digits, so no 0/1). */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -268,6 +269,8 @@ export class Lobby {
     this.opts = { ...LOBBY_DEFAULTS, ...options };
     /** @type {number | null} Owner-controlled AI ceiling, independent from the distributed bundle defaults. */
     this.maxAiPerRoom = null;
+    this.requireAssetCache = false;
+    this.getAssetCacheSummary = () => null;
     /** @type {Map<string, Room>} */
     this.rooms = new Map();
     this.discovery = new LobbyDiscovery(this);
@@ -294,6 +297,23 @@ export class Lobby {
       if (!room.match) this.trimBots(room);
       this.broadcastState(room);
     }
+  }
+
+  /** Owner policy affects new membership only. Network/Lobby dispatch stays entirely synchronous. */
+  setAssetCachePolicy({ required, getSummary = this.getAssetCacheSummary }) {
+    if (typeof required !== 'boolean' || typeof getSummary !== 'function') throw new TypeError('invalid asset-cache policy');
+    this.getAssetCacheSummary = getSummary;
+    if (this.requireAssetCache === required) return;
+    this.requireAssetCache = required;
+    this.discovery.changed();
+  }
+
+  assetCacheAdmission(report) {
+    if (!this.requireAssetCache) return null;
+    const expected = this.getAssetCacheSummary();
+    if (assetCacheReadinessMatches(report, expected)) return null;
+    return fail(ERR.ASSET_CACHE_REQUIRED, !expected ? 'server-assets-pending'
+      : !expected.complete || expected.missingFiles ? 'server-assets-incomplete' : 'precache-missing');
   }
 
   /** Preserve the earliest AI seats and every human; remove only surplus trailing AI seats. */
@@ -441,10 +461,12 @@ export class Lobby {
   // room.* handlers
   // ---------------------------------------------------------------------------------------------------
 
-  create(session, { mode, difficulty, capacity = DEFAULT_SEATS }) {
+  create(session, { mode, difficulty, capacity = DEFAULT_SEATS, assetCache }) {
     if (!ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
     const cur = this.roomOf(session);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
+    const admission = this.assetCacheAdmission(assetCache);
+    if (admission) return admission;
     if (this.rooms.size >= this.opts.maxRooms) return fail(ERR.INTERNAL, 'too many rooms');
     const key = session.limitKey || null;
     if (key && this.opts.maxRoomsPerAddr > 0) {
@@ -473,7 +495,7 @@ export class Lobby {
     return OK;
   }
 
-  join(session, { code }) {
+  join(session, { code, assetCache }) {
     const norm = String(code).trim().toUpperCase();
     const room = norm.length === ROOM_CODE_LEN ? this.rooms.get(norm) : undefined;
     if (!room) return fail(ERR.ROOM_NOT_FOUND);
@@ -482,6 +504,8 @@ export class Lobby {
     if (cur === room && !room.spectatorOf(session.playerId)) { this.discovery.forget(session.playerId); this.sendState(room, session); return OK; }
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     if (room.match) return fail(ERR.ROOM_STARTED);
+    const admission = this.assetCacheAdmission(assetCache);
+    if (admission) return admission;
     if (room.mode === 'solo') return fail(ERR.ROOM_FULL, 'solo room');
     const idx = room.freeSeat();
     if (idx < 0) return fail(ERR.ROOM_FULL);
@@ -507,7 +531,7 @@ export class Lobby {
    * room.spectate: one of a co-op room's MAX_SPECTATORS spectator seats, in its lobby or during its match (header). In a
    * running match the match registers the spectator and resends what it may see (Match.addSpectator).
    */
-  spectate(session, { code }) {
+  spectate(session, { code, assetCache }) {
     const norm = String(code).trim().toUpperCase();
     const room = norm.length === ROOM_CODE_LEN ? this.rooms.get(norm) : undefined;
     if (!room) return fail(ERR.ROOM_NOT_FOUND);
@@ -519,6 +543,8 @@ export class Lobby {
       return OK;
     }
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
+    const admission = this.assetCacheAdmission(assetCache);
+    if (admission) return admission;
     if (room.mode === 'solo') return fail(ERR.ROOM_FULL, 'solo room');
     if (room.spectators.length >= MAX_SPECTATORS) return fail(ERR.ROOM_FULL, 'no free spectator seat');
     if (cur) this.removeMember(cur, session.playerId);
@@ -791,9 +817,9 @@ export class Lobby {
     return OK;
   }
 
-  /** Extra fields of every `welcome` (net.js): the operators a 自选 slot may field (shared/diy.js `kitted`). */
+  /** Extra welcome fields: supported 自选 operators and the current owner-controlled precache policy. */
   welcomeInfo() {
-    return { diyKitted: KITTED_CHARS };
+    return { diyKitted: KITTED_CHARS, requireAssetCache: this.requireAssetCache };
   }
 
   // ---------------------------------------------------------------------------------------------------

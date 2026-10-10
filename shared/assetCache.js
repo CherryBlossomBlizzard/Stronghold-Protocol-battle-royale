@@ -102,6 +102,7 @@ export function isAssetCacheReadiness(value) {
 
 export function assetCacheReadinessMatches(value, summary) {
   return isAssetCacheReadiness(value) && !!summary && summary.complete && summary.missingFiles === 0
+    && summary.totalFiles > 0 && summary.totalBytes > 0
     && value.schema === summary.schema && value.version === summary.version
     && value.readyFiles === summary.totalFiles && value.readyBytes === summary.totalBytes;
 }

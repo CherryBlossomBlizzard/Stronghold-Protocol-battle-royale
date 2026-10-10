@@ -5,6 +5,7 @@ import { DIFFICULTIES, NAME_MAX_LEN, ROOM_CODE_LEN, MAX_SEATS, ROOM_CAPACITIES, 
 import { isDroppableChess } from './standIn.js';
 import { diySlotIds, validateDiyPicks } from './diy.js';
 import { cultivatedStats, isPotential, isCultivate, POTENTIAL_DEFAULT, CULTIVATE_DEFAULT } from './potential.js';
+import { isAssetCacheReadiness } from './assetCache.js';
 
 // ---- tiny validators -------------------------------------------------------
 const isInt = (v, lo = -Infinity, hi = Infinity) => Number.isInteger(v) && v >= lo && v <= hi;
@@ -388,9 +389,11 @@ export const C2S = {
   ping: { c: (v) => typeof v === 'number' && Number.isFinite(v) },
   // Lightweight directory subscription; only the opened list carries one bounded page of room summaries.
   'lobby.watch': { on: isBool, list: isBool, page: (v) => isInt(v, 0, 1e6), $optional: ['list', 'page'] },
-  'lobby.quickMatch': { capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
-  'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
-  'room.join': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v) },
+  // Admission metadata uses the existing wire-v1 extension slot; published position layouts stay unchanged.
+  'lobby.quickMatch': { capacity: (v) => ROOM_CAPACITIES.includes(v), assetCache: isAssetCacheReadiness, $optional: ['capacity', 'assetCache'] },
+  'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v),
+    assetCache: isAssetCacheReadiness, $optional: ['capacity', 'assetCache'] },
+  'room.join': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v), assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
   'room.leave': {},
   'room.ready': { ready: isBool },
   'room.setDifficulty': { difficulty: (v) => DIFFICULTIES.includes(v) },
@@ -419,7 +422,7 @@ export const C2S = {
   // spectator seats (remake feature, community report #26; MAX_SPECTATORS): take one of a co-op room's spectator seats —
   // in its lobby or while its match runs — never a player seat; the host frees one by playerId (the spectator gets
   // room.closed { reason: 'kicked' }). room.leave / g.leave leave a spectator seat like a player seat.
-  'room.spectate': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v) },
+  'room.spectate': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v), assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
   'room.removeSpectator': { playerId: isId },
 
   // match

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
-  createServerSettings, parseAiLimit, readServerSettings, serverSettingsDirectory, writeServerSettings,
+  createServerSettings, parseAiLimit, parseAssetCacheRequirement, readServerSettings, serverSettingsDirectory, writeServerSettings,
   SERVER_SETTINGS_FILE,
 } from '../server/serverSettings.js';
 import { MAX_SEATS } from '../shared/constants.js';
@@ -28,7 +28,7 @@ function fixture(t) {
   const dir = path.join(root, 'persistent');
   const file = path.join(dir, SERVER_SETTINGS_FILE);
   const run = (...args) => spawnSync(process.execPath, [TOOL, ...args, '--dir', dir], {
-    cwd: ROOT, env: { ...process.env, SP_SERVER_SETTINGS_DIR: '', SP_MAX_AI_PER_ROOM: '' }, encoding: 'utf8', timeout: 10000,
+    cwd: ROOT, env: { ...process.env, SP_SERVER_SETTINGS_DIR: '', SP_MAX_AI_PER_ROOM: '', SP_REQUIRE_ASSET_CACHE: '' }, encoding: 'utf8', timeout: 10000,
   });
   return { root, dir, file, run };
 }
@@ -50,7 +50,7 @@ test('unconfigured startup keeps unrestricted AI, does not create private storag
   const { dir } = fixture(t);
   const controller = createServerSettings({ dir, env: {}, pollMs: 0 });
   t.after(() => controller.close());
-  assert.deepEqual(controller.get(), { maxAiPerRoom: null });
+  assert.deepEqual(controller.get(), { maxAiPerRoom: null, requireAssetCache: false });
   assert.equal(fs.existsSync(dir), false);
   assert.equal(controller.poll(), false);
   assert.equal(controller.start(), controller);
@@ -64,15 +64,65 @@ test('unconfigured startup keeps unrestricted AI, does not create private storag
   assert.throws(() => createServerSettings({ dir, env: {}, pollMs: -1 }), /检查间隔/);
 });
 
+test('precache admission defaults to optional, accepts explicit environment values, and rejects coercion', (t) => {
+  const { dir } = fixture(t);
+  for (const [input, expected] of [['required', true], ['1', true], ['optional', false], ['0', false]]) {
+    assert.equal(parseAssetCacheRequirement(input), expected);
+    const controller = createServerSettings({ dir, env: { SP_REQUIRE_ASSET_CACHE: input }, pollMs: 0 });
+    assert.equal(controller.get().requireAssetCache, expected);
+    controller.close();
+  }
+  for (const input of [null, undefined, '', true, false, 'true', 'false', 'yes', '2']) {
+    assert.throws(() => parseAssetCacheRequirement(input), /预缓存准入/);
+  }
+  assert.throws(() => createServerSettings({ dir, env: { SP_REQUIRE_ASSET_CACHE: 'yes' } }), /预缓存准入/);
+});
+
+test('version-1 AI-only files remain compatible and updates preserve the other policy', (t) => {
+  const { dir, file } = fixture(t);
+  fs.mkdirSync(dir);
+  fs.writeFileSync(file, JSON.stringify({ version: 1, maxAiPerRoom: 2 }));
+  const controller = createServerSettings({ dir, env: { SP_REQUIRE_ASSET_CACHE: '1' }, pollMs: 0 });
+  t.after(() => controller.close());
+  assert.deepEqual(controller.get(), { maxAiPerRoom: 2, requireAssetCache: false });
+  writeServerSettings(dir, { requireAssetCache: true });
+  assert.equal(controller.poll(), true);
+  assert.deepEqual(controller.get(), { maxAiPerRoom: 2, requireAssetCache: true });
+  writeServerSettings(dir, 0);
+  assert.equal(controller.poll(), true);
+  assert.deepEqual(controller.get(), { maxAiPerRoom: 0, requireAssetCache: true });
+  writeServerSettings(dir, { requireAssetCache: false });
+  assert.equal(controller.poll(), true);
+  assert.deepEqual(controller.get(), { maxAiPerRoom: 0, requireAssetCache: false });
+  fs.unlinkSync(file);
+  assert.equal(controller.poll(), true);
+  assert.deepEqual(controller.get(), { maxAiPerRoom: null, requireAssetCache: true }, 'deletion restores the startup fallback');
+});
+
+test('corrupt settings cannot be partially overwritten to silently remove strict admission', (t) => {
+  const { dir, file } = fixture(t);
+  writeServerSettings(dir, { maxAiPerRoom: 2, requireAssetCache: true });
+  for (const invalid of [null, 'true', 1, {}, []]) {
+    assert.throws(() => writeServerSettings(dir, { requireAssetCache: invalid }), /配置字段/);
+  }
+  fs.writeFileSync(file, '{broken');
+  for (const patch of [0, { maxAiPerRoom: 0 }, { requireAssetCache: false }]) {
+    assert.throws(() => writeServerSettings(dir, patch));
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+  }
+  writeServerSettings(dir, { maxAiPerRoom: null, requireAssetCache: true });
+  assert.deepEqual(readServerSettings(dir), { maxAiPerRoom: null, requireAssetCache: true });
+});
+
 test('persisted zero and unlimited override the environment across process restarts; writes leave no temporary files', (t) => {
   const { dir } = fixture(t);
   for (const limit of [0, 3, null, 19]) {
     writeServerSettings(dir, limit);
     const controller = createServerSettings({ dir, env: { SP_MAX_AI_PER_ROOM: '1' }, pollMs: 0 });
-    assert.deepEqual(controller.get(), { maxAiPerRoom: limit });
+    assert.deepEqual(controller.get(), { maxAiPerRoom: limit, requireAssetCache: false });
     assert.ok(Object.isFrozen(controller.get()));
     controller.close();
-    assert.deepEqual(readServerSettings(dir), { maxAiPerRoom: limit });
+    assert.deepEqual(readServerSettings(dir), { maxAiPerRoom: limit, requireAssetCache: false });
     assert.deepEqual(fs.readdirSync(dir), [SERVER_SETTINGS_FILE]);
   }
 });
@@ -97,7 +147,7 @@ test('runtime updates notify only changed valid policies, broken files keep the 
   assert.equal(controller.poll(), false);
   assert.equal(controller.get().maxAiPerRoom, 0, 'a broken edit cannot silently lift the restriction');
   assert.equal(warnings.length, 1, 'unchanged failures are logged once');
-  writeServerSettings(dir, null);
+  writeServerSettings(dir, { maxAiPerRoom: null, requireAssetCache: false });
   assert.equal(controller.poll(), true);
   fs.unlinkSync(file);
   assert.equal(controller.poll(), true);
@@ -121,7 +171,7 @@ test('real scheduled polling applies changes and close releases the polling time
     const state = await Promise.race([observed, new Promise((_, reject) => {
       deadline = setTimeout(() => reject(new Error('settings poll did not run')), 2000);
     })]);
-    assert.deepEqual(state, { maxAiPerRoom: 2 });
+    assert.deepEqual(state, { maxAiPerRoom: 2, requireAssetCache: false });
   } finally { clearTimeout(deadline); controller.close(); }
 });
 
@@ -132,7 +182,8 @@ test('read/write reject invalid schema, oversize, non-UTF8 and non-file targets 
   for (const invalid of [-1, 20, 1.5, '3', undefined, true]) assert.throws(() => writeServerSettings(dir, invalid), /AI 上限/);
   assert.deepEqual(fs.readFileSync(file), before);
   for (const contents of ['{}', '[]', '{"version":2,"maxAiPerRoom":3}', '{"version":1,"maxAiPerRoom":"3"}',
-    '{"version":1,"maxAiPerRoom":3,"extra":true}', 'x'.repeat(4097), Buffer.from([0xff])]) {
+    '{"version":1,"maxAiPerRoom":3,"extra":true}', '{"version":1,"maxAiPerRoom":3,"requireAssetCache":1}',
+    'x'.repeat(4097), Buffer.from([0xff])]) {
     fs.writeFileSync(file, contents);
     assert.throws(() => readServerSettings(dir));
     assert.throws(() => createServerSettings({ dir, env: {}, pollMs: 0 }), undefined,
@@ -161,7 +212,7 @@ test('CLI shows without writes, persists valid limit and unlimited, rejects inva
   const { dir, file, run } = fixture(t);
   const shown = run('show', '--json');
   assert.equal(shown.status, 0, shown.stderr);
-  assert.deepEqual(JSON.parse(shown.stdout), { maxAiPerRoom: null });
+  assert.deepEqual(JSON.parse(shown.stdout), { maxAiPerRoom: null, requireAssetCache: false });
   assert.equal(fs.existsSync(dir), false);
   for (const args of [['ai-limit'], ['ai-limit', '20'], ['ai-limit', '-1'], ['ai-limit', '1.2'], ['show', '--oops'],
     ['show', '3'], ['ai-limit', '1', '2'], ['ai-limit', '1', '--json'], ['show', '--dir', dir, '--dir', dir]]) {
@@ -172,7 +223,7 @@ test('CLI shows without writes, persists valid limit and unlimited, rejects inva
     const saved = run('ai-limit', value);
     assert.equal(saved.status, 0, saved.stderr);
     assert.match(saved.stdout, /已保存每房 AI 上限/);
-    assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: parseAiLimit(value) });
+    assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: parseAiLimit(value), requireAssetCache: false });
   }
   fs.writeFileSync(file, '{bad', 'utf8');
   assert.equal(run('show').status, 1, 'show must not misreport the fallback as the running server last-good policy');
@@ -184,12 +235,29 @@ test('CLI and server share environment-selected storage and persisted values win
     cwd: path.dirname(ROOT), env: { ...process.env, SP_SERVER_SETTINGS_DIR: dir, SP_MAX_AI_PER_ROOM: '2' },
     encoding: 'utf8', timeout: 10000,
   });
-  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 2 });
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 2, requireAssetCache: false });
   assert.equal(run('ai-limit', '4').status, 0);
-  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 4 });
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 4, requireAssetCache: false });
   const controller = createServerSettings({ env: { SP_SERVER_SETTINGS_DIR: dir, SP_MAX_AI_PER_ROOM: '2' }, pollMs: 0 });
   assert.equal(controller.get().maxAiPerRoom, 4);
   controller.close();
+});
+
+test('owner CLI toggles strict admission without erasing the AI ceiling and validates before writing', (t) => {
+  const { dir, run } = fixture(t);
+  for (const args of [['asset-cache'], ['asset-cache', 'yes'], ['asset-cache', 'true'], ['asset-cache', 'required', '--json']]) {
+    assert.equal(run(...args).status, 2);
+  }
+  assert.equal(fs.existsSync(dir), false);
+  assert.equal(run('ai-limit', '3').status, 0);
+  const enabled = run('asset-cache', 'required');
+  assert.equal(enabled.status, 0, enabled.stderr);
+  assert.match(enabled.stdout, /严格，要求完整预缓存/);
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 3, requireAssetCache: true });
+  assert.equal(run('ai-limit', '0').status, 0);
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 0, requireAssetCache: true });
+  assert.equal(run('asset-cache', 'optional').status, 0);
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 0, requireAssetCache: false });
 });
 
 test('server startup applies private policy, CLI updates reach live waiting rooms, and closing stops reads', async (t) => {

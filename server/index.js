@@ -56,6 +56,7 @@ export {
  *   maxConnectionsPerAddr?: number, maxRoomsPerAddr?: number, maxMatchesPerAddr?: number, resyncMinGapMs?: number,
  *   heavyPerSec?: number, heavyBurst?: number, trustProxy?: 'auto' | boolean, soloReconnectWindowMs?: number,
  *   assetCacheLimits?: { totalBps?: number, clientBps?: number, maxDownloads?: number, maxDownloadsPerClient?: number },
+ *   assetCacheBuildCatalog?: Function,
  * }} [opts]
  * @returns {Promise<{ port: number, host: string, url: string, server: http.Server, wss: import('ws').WebSocketServer,
  *                     lobby: import('./lobby.js').Lobby, network: import('./net.js').Network,
@@ -72,16 +73,31 @@ export async function startServer(opts = {}) {
   // The process-wide singleton serves the default data dir; a custom dir (tests) gets its own copy.
   const data = opts.dataDir ? loadData(dataDir, { log }) : getData({ dir: dataDir, log });
   const serverSettings = createServerSettings({ dir: opts.serverSettingsDir, root: ROOT, log,
-    onChange: (next) => lobby.setAiLimit(next.maxAiPerRoom) });
+    onChange: (next) => applySettings(next) });
   const { registry, lobby, network } = createSessionStack(opts, { data, log });
-  lobby.setAiLimit(serverSettings.get().maxAiPerRoom);
   const announcements = createAnnouncementStore({ dir: opts.announcementsDir, root: ROOT, log });
   const announcementNotices = createAnnouncementNoticeMonitor({ store: announcements, network, log });
   // content packs (docs/PACKS.md): scanned now — the start log names them — and again whenever their folders change
   const packs = createPackRegistry({ publicDir, dataDir, packsDir }, { log });
   packs.refresh(true);
   const serveStatic = createStaticHandler({ publicDir, dataDir, sharedDir, packsDir, packs, runtimeCache: opts.runtimeCache, log });
-  const assetCache = createAssetCacheHandler({ publicDir, dataDir, log, limits: opts.assetCacheLimits, trustProxy: opts.trustProxy });
+  const assetCache = createAssetCacheHandler({ publicDir, dataDir, log, limits: opts.assetCacheLimits, trustProxy: opts.trustProxy,
+    buildCatalog: opts.assetCacheBuildCatalog, requireAssetCache: () => serverSettings.get().requireAssetCache });
+  let warmingAssetSummary = null;
+  function warmAssetSummary() {
+    if (!warmingAssetSummary) warmingAssetSummary = assetCache.summary()
+      .catch((error) => { log.warn('[asset-cache] admission summary unavailable', error.message); })
+      .finally(() => { warmingAssetSummary = null; });
+    return warmingAssetSummary;
+  }
+  function applySettings(next) {
+    lobby.setAiLimit(next.maxAiPerRoom);
+    lobby.setAssetCachePolicy({ required: next.requireAssetCache, getSummary: assetCache.currentSummary });
+    // Runtime enabling fails closed until a summary is ready; ordinary optional startup stays lazy.
+    if (next.requireAssetCache && !assetCache.currentSummary()) void warmAssetSummary();
+  }
+  applySettings(serverSettings.get());
+  if (serverSettings.get().requireAssetCache) await warmAssetSummary();
   const startedAt = Date.now();
   // The tag is per process (see buildTag): read the browser runtime once, here, not on every /healthz.
   resetBuildTag();

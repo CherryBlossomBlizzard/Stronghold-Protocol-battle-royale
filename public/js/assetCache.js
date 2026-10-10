@@ -331,6 +331,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   const scan = (options = {}) => operation && !options.deep ? Promise.resolve(getState()) : perform('scan', { refresh: true, ...options });
   const manager = {
     getState, state: getState, initialize, scan,
+    setRequirement(value) { if (typeof value === 'boolean' && state.requireAssetCache !== value) patch({ requireAssetCache: value }); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     downloadMissing: () => perform('download'),
     importZip(file) {

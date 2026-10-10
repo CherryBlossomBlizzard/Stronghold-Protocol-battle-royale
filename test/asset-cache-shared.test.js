@@ -91,4 +91,7 @@ test('readiness requires current complete server metadata plus exact local file 
     assert.equal(assetCacheReadinessMatches(report, summary), false);
   }
   assert.equal(assetCacheReadinessMatches(full, { ...summary, complete: false, missingFiles: 1 }), false);
+  assert.equal(assetCacheReadinessMatches({ ...full, readyFiles: 0, readyBytes: 0 },
+    { ...summary, totalFiles: 0, totalBytes: 0 }), false, 'empty server data cannot turn 0/0 into full readiness');
+  assert.equal(assetCacheReadinessMatches({ ...full, readyBytes: 0 }, { ...summary, totalBytes: 0 }), false);
 });

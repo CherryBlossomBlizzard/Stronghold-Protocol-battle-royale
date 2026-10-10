@@ -174,6 +174,10 @@ otherwise every "之后 / 后续的每场作战" card — e.g. 教鞭's 法术�
 A `choice:<effectId>` registry handler overrides the default application (§2.4).
 
 ### 1.3 Disconnects, AI takeover
+* Capacity-fork owner precache admission applies to new create/join/quick-match/spectate requests only, before
+  membership changes. Existing player/spectator token resume and same-role room resync retain their former rules.
+  The optional readiness report and tiny server summary are specified in [ASSET_CACHE.md](ASSET_CACHE.md) and
+  [SERVER_SETTINGS.md](SERVER_SETTINGS.md); compact-v1 uses its existing extension slot.
 * Local multi-window recovery (#431, DESIGN §28.27) sends optional `hello.noReplace` for a tentative shared token,
   and `hello.claimAt` for a previously welcomed token. Before binding a different socket, the server rejects a
   connected seat when no replacement was allowed or the request has a later stamp than the attached holder

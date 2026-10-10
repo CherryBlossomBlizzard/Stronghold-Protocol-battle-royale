@@ -4,14 +4,17 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { parseAiLimit, readServerSettings, serverSettingsDirectory, writeServerSettings } from '../server/serverSettings.js';
+import { parseAiLimit, parseAssetCacheRequirement, initialServerSettings, readServerSettings,
+  serverSettingsDirectory, writeServerSettings } from '../server/serverSettings.js';
 
 const USAGE = `服务器配置（UTF-8）：
   node tools/server-settings.mjs ai-limit <整数|unlimited> [--dir <目录>]
+  node tools/server-settings.mjs asset-cache <required|optional> [--dir <目录>]
   node tools/server-settings.mjs show [--json] [--dir <目录>]
   默认目录：runtime；可用 SP_SERVER_SETTINGS_DIR 指定持久化目录。
-  ai-limit 会持久保存，运行中的服务器约 1 秒内读取；进行中的对局结束后再应用。
-  未配置时不限制 AI；SP_MAX_AI_PER_ROOM 仅作为没有持久配置时的启动默认值。`;
+  设置会持久保存，运行中的服务器约 1 秒内读取；AI 上限在对局结束后应用。
+  asset-cache 默认 optional，required 限制新创建、加入、最快匹配和观战；不踢出现有成员或阻止续玩。
+  修改一个设置保留另一个；SP_MAX_AI_PER_ROOM / SP_REQUIRE_ASSET_CACHE 仅作无持久配置时的启动默认值。`;
 const writeUtf8 = (stream, value) => stream.write(Buffer.from(`${value}\n`, 'utf8'));
 
 /** Interactive Windows cmd uses UTF-8 too; redirected output always remains explicit UTF-8. */
@@ -24,14 +27,14 @@ export function prepareServerSettingsConsole({ platform = process.platform, stdo
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   if (!command || command === '--help' || command === '-h') return { command: 'help' };
-  if (!['ai-limit', 'show'].includes(command)) throw new Error(`未知命令 ${command}`);
+  if (!['ai-limit', 'asset-cache', 'show'].includes(command)) throw new Error(`未知命令 ${command}`);
   const options = { command, dir: undefined, json: false, value: undefined };
   const seen = new Set();
   for (let index = 0; index < rest.length; index++) {
     const token = rest[index];
     if (!token.startsWith('--')) {
-      if (command !== 'ai-limit' || options.value !== undefined) throw new Error(`不支持的参数 ${token}`);
-      options.value = parseAiLimit(token);
+      if (command === 'show' || options.value !== undefined) throw new Error(`不支持的参数 ${token}`);
+      options.value = command === 'ai-limit' ? parseAiLimit(token) : parseAssetCacheRequirement(token);
     } else {
       if (seen.has(token)) throw new Error(`参数 ${token} 重复`);
       seen.add(token);
@@ -44,6 +47,7 @@ function parseArgs(argv) {
     }
   }
   if (command === 'ai-limit' && options.value === undefined) throw new Error('ai-limit 需要指定整数或 unlimited');
+  if (command === 'asset-cache' && options.value === undefined) throw new Error('asset-cache 需要指定 required 或 optional');
   return options;
 }
 
@@ -54,16 +58,18 @@ export function main(argv) {
   catch (error) { writeUtf8(process.stderr, `服务器配置：${error.message}\n${USAGE}`); return 2; }
   if (options.command === 'help') { writeUtf8(process.stdout, USAGE); return 0; }
   try {
-    if (options.command === 'ai-limit') {
+    if (options.command === 'ai-limit' || options.command === 'asset-cache') {
       const dir = serverSettingsDirectory({ dir: options.dir });
-      writeServerSettings(dir, options.value);
-      writeUtf8(process.stdout, `已保存每房 AI 上限：${options.value === null ? '不限' : options.value}。运行中的服务器约 1 秒内读取。`);
+      const ai = options.command === 'ai-limit';
+      writeServerSettings(dir, { [ai ? 'maxAiPerRoom' : 'requireAssetCache']: options.value });
+      writeUtf8(process.stdout, ai
+        ? `已保存每房 AI 上限：${options.value === null ? '不限' : options.value}。运行中的服务器约 1 秒内读取。`
+        : `已保存预缓存准入：${options.value ? '严格，要求完整预缓存' : '允许未完整预缓存'}。运行中的服务器约 1 秒内读取；已有对局可继续恢复。`);
     } else {
       const dir = serverSettingsDirectory({ dir: options.dir });
-      const initial = String(process.env.SP_MAX_AI_PER_ROOM ?? '').trim();
-      const state = readServerSettings(dir) || { maxAiPerRoom: initial ? parseAiLimit(initial) : null };
+      const state = readServerSettings(dir) || initialServerSettings();
       writeUtf8(process.stdout, options.json ? JSON.stringify(state, null, 2)
-        : `每房 AI 上限：${state.maxAiPerRoom === null ? '不限' : state.maxAiPerRoom}`);
+        : `每房 AI 上限：${state.maxAiPerRoom === null ? '不限' : state.maxAiPerRoom}\n预缓存准入：${state.requireAssetCache ? '严格，要求完整预缓存' : '允许未完整预缓存'}`);
     }
     return 0;
   } catch (error) { writeUtf8(process.stderr, `服务器配置：${error.message}`); return 1; }

@@ -33,6 +33,9 @@ import { PROTOCOL_VERSION, ERR_TEXT } from '../../shared/constants.js';
 import { validateC2S } from '../../shared/protocol.js';
 import { WIRE_VERSION, encodeWire, decodeWire } from '../../shared/wireCodec.js';
 import { N_ } from '../../shared/i18n.js';
+import { assetCache } from './assetCache.js';
+
+const ASSET_ADMISSION_TYPES = new Set(['room.create', 'room.join', 'lobby.quickMatch', 'room.spectate']);
 
 export const REQUEST_TIMEOUT_MS = 8000;
 export const HELLO_TIMEOUT_MS = 8000;
@@ -116,6 +119,7 @@ export class Net {
    * @param {any} [opts.WebSocket] WebSocket constructor (default: globalThis.WebSocket)
    * @param {() => (string|null)} [opts.getToken] reconnect-token provider for `hello`
    * @param {() => ({ noReplace: boolean, claimAt?: number })} [opts.getTokenClaim] local ownership for this hello
+   * @param {() => (object|null|Promise<object|null>)} [opts.getAssetCacheReadiness] local entry scan (never used for hello/resume)
    * @param {() => number} [opts.now]
    * @param {() => number} [opts.random]
    * @param {{setTimeout: Function, clearTimeout: Function, setInterval: Function, clearInterval: Function}} [opts.timers]
@@ -125,6 +129,7 @@ export class Net {
     this.WS = opts.WebSocket || null;
     this.getToken = typeof opts.getToken === 'function' ? opts.getToken : () => null;
     this.getTokenClaim = typeof opts.getTokenClaim === 'function' ? opts.getTokenClaim : () => null;
+    this.getAssetCacheReadiness = typeof opts.getAssetCacheReadiness === 'function' ? opts.getAssetCacheReadiness : null;
     this.now = opts.now || (() => Date.now());
     this.random = opts.random || Math.random;
     this.timers = opts.timers || {
@@ -441,6 +446,22 @@ export class Net {
    * @returns {Promise<any>}
    */
   request(t, fields = {}, opts = {}) {
+    const body = fields && typeof fields === 'object' ? fields : {};
+    const establishing = ['connecting', 'handshaking', 'reconnecting'].includes(this.status) && this.name && !this._manualClose;
+    if (this.getAssetCacheReadiness && ASSET_ADMISSION_TYPES.has(t) && !Object.hasOwn(body, 'assetCache')
+      && (this.status === 'online' || establishing) && !validateC2S({ ...body, t })) {
+      const send = (report) => this._request(t, report ? { ...body, assetCache: report } : body, opts);
+      let pending;
+      try { pending = this.getAssetCacheReadiness(); }
+      catch { return send(null); }
+      // Optional mode stays usable with unsupported/failed local storage; strict mode is checked on the server.
+      if (pending && typeof pending.then === 'function') return Promise.resolve(pending).catch(() => null).then(send);
+      return send(pending);
+    }
+    return this._request(t, body, opts);
+  }
+
+  _request(t, fields = {}, opts = {}) {
     return new Promise((resolve, reject) => {
       if (t === 'hello') { reject(new NetError('BAD_MSG', 'use setName() for hello')); return; }
       const rid = this._nextRid();
@@ -983,4 +1004,7 @@ export function createIdentity(deps = {}) {
 export const identity = createIdentity({ onYield: () => net.reconnectNow(net.helloName || net.name) });
 
 /** Browser connection singleton (created lazily-safe: nothing touches the network until connect()). */
-export const net = new Net({ getToken: () => identity.getToken(), getTokenClaim: () => identity.getTokenClaim() });
+export const net = new Net({ getToken: () => identity.getToken(), getTokenClaim: () => identity.getTokenClaim(),
+  getAssetCacheReadiness: () => assetCache.getState().supported ? assetCache.admission() : null });
+net.on('welcome', (message) => assetCache.setRequirement(message.requireAssetCache));
+net.on('lobby.state', (message) => assetCache.setRequirement(message.requireAssetCache));

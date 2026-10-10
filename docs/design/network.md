@@ -5,7 +5,11 @@ Part of [DESIGN.md](../DESIGN.md) (the index; section numbers are global).
 Capacity-fork asset transport: full catalogs are imported locally from an existing ZIP or standalone JSON;
 the server only exposes a tiny summary, and refuses the former full-catalog route. Cache persistence,
 hash/version verification and per-page match pins are specified in [ASSET_CACHE.md](../ASSET_CACHE.md),
-with decision [D023](../development/DECISIONS.md#d023). This does not change battle simulation or wire v1 positions.
+with decision [D023](../development/DECISIONS.md#d023). The default-permissive, owner-controlled admission gate
+([D024](../development/DECISIONS.md#d024), [SERVER_SETTINGS.md](../SERVER_SETTINGS.md)) synchronously checks new
+create/join/quick-match/spectate requests against a warmed complete summary before changing membership. Existing
+membership and token-based match/spectator resume remain available. Optional readiness reports and policy fields
+use the existing compact-v1 extension slot; battle simulation and published wire positions do not change.
 
 ## 8. Network protocol (shared/protocol.js is normative)
 

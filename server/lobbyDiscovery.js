@@ -113,7 +113,8 @@ export class LobbyDiscovery {
   snapshot(watcher, view = this.projection(watcher.list)) {
     const { list, page } = watcher;
     const { online, roomCount, matchCount, joinableCount } = view;
-    const state = { t: 'lobby.state', online, roomCount, matchCount, joinableCount };
+    const state = { t: 'lobby.state', online, roomCount, matchCount, joinableCount,
+      requireAssetCache: this.lobby.requireAssetCache };
     if (list) {
       const totalPages = Math.max(1, Math.ceil(view.rooms.length / LOBBY_PAGE_SIZE));
       const currentPage = Math.max(0, Math.min(page, totalPages - 1));
@@ -154,10 +155,12 @@ export class LobbyDiscovery {
   }
 
   /** Capacity preference falls back to fastest; ties are random and the join is synchronous. */
-  quickMatch(session, { capacity } = {}) {
+  quickMatch(session, { capacity, assetCache } = {}) {
     if (capacity != null && !ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
     const current = this.lobby.roomOf(session);
     if (current?.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
+    const admission = this.lobby.assetCacheAdmission(assetCache);
+    if (admission) return admission;
     let candidates = [...this.lobby.rooms.values()].filter((room) => room !== current
       && room.mode === 'coop' && !room.match && room.freeSeat() >= 0);
     if (capacity != null) {
@@ -169,7 +172,7 @@ export class LobbyDiscovery {
     const fewest = Math.min(...candidates.map(vacancies));
     const best = candidates.filter((room) => vacancies(room) === fewest);
     const room = best[this.chooseIndex(best.length)];
-    return this.lobby.join(session, { code: room.code });
+    return this.lobby.join(session, { code: room.code, assetCache });
   }
 
   close() {

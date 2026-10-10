@@ -14,6 +14,12 @@ import { makeMatch, DATA } from './match/harness.js';
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const roundTrip = (v, direction = null) => decodeWire(clone(encodeWire(clone(v), direction)), direction);
 const nameOf = (f) => typeof f === 'string' ? f : f[0];
+// Fields introduced after v1 was published use its existing extension slot. Keep this allowlist
+// explicit: adding a business field must not silently weaken coverage or renumber the fixed catalog.
+const V1_EXTENSIONS = Object.freeze({
+  'room.create': ['assetCache'], 'room.join': ['assetCache'],
+  'lobby.quickMatch': ['assetCache'], 'room.spectate': ['assetCache'],
+});
 
 test('v1 complete catalog fingerprint prevents accidental published field or enum renumbering', () => {
   const canonical = (v) => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
@@ -24,14 +30,23 @@ test('v1 complete catalog fingerprint prevents accidental published field or enu
     'the v1 contract is fixed: introduce a new version and preserve v1 decoding instead of editing this fingerprint');
 });
 
-test('wire ids cover every business message and C2S field; registries are immutable', () => {
+test('wire ids cover every business message and C2S field or declared v1 extension; registries are immutable', () => {
   const messages = wireCatalog().messages;
   assert.deepEqual(messages.filter((m) => m.direction === 's2c').map((m) => m.type).sort(), [...S2C].sort());
   assert.deepEqual(messages.filter((m) => m.direction === 'c2s').map((m) => m.type).sort(), Object.keys(C2S).sort());
   assert.equal(new Set(messages.map((m) => m.id)).size, messages.length);
   for (const m of messages.filter((m) => m.direction === 'c2s')) {
     for (const key of Object.keys(C2S[m.type]).filter((key) => key !== '$optional')) {
-      assert.ok(m.fields.map(nameOf).includes(key), `${m.type}.${key} needs a stable position`);
+      assert.ok(m.fields.map(nameOf).includes(key) || V1_EXTENSIONS[m.type]?.includes(key),
+        `${m.type}.${key} needs a stable position or an explicit v1 extension contract`);
+    }
+  }
+  for (const [type, fields] of Object.entries(V1_EXTENSIONS)) {
+    const message = messages.find((entry) => entry.type === type);
+    for (const field of fields) {
+      assert.ok(Object.hasOwn(C2S[type], field));
+      assert.ok(C2S[type].$optional.includes(field));
+      assert.equal(message.fields.map(nameOf).includes(field), false, 'published v1 positions must not be extended in place');
     }
   }
   assert.deepEqual(WIRE_ENUMS.phase, Object.values(PHASE));

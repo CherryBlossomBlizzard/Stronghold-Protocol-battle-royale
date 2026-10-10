@@ -24,6 +24,20 @@ export function parseAiLimit(value) {
   throw new RangeError(`AI 上限必须为 0–${MAX_SEATS - 1} 的整数或 unlimited`);
 }
 
+export function parseAssetCacheRequirement(value) {
+  const text = String(value ?? '').trim();
+  if (text === 'required' || text === '1') return true;
+  if (text === 'optional' || text === '0') return false;
+  throw new RangeError('预缓存准入必须为 required / optional，环境变量也可使用 1 / 0');
+}
+
+export function initialServerSettings(env = process.env) {
+  const ai = String(env.SP_MAX_AI_PER_ROOM ?? '').trim();
+  const precache = String(env.SP_REQUIRE_ASSET_CACHE ?? '').trim();
+  return Object.freeze({ maxAiPerRoom: ai ? parseAiLimit(ai) : null,
+    requireAssetCache: precache ? parseAssetCacheRequirement(precache) : false });
+}
+
 /** Explicit option, environment, then <root>/runtime. Relative paths resolve from the repository root. */
 export function serverSettingsDirectory({ dir, root = ROOT, env = process.env } = {}) {
   return path.resolve(root, dir || env.SP_SERVER_SETTINGS_DIR || 'runtime');
@@ -36,8 +50,11 @@ function verifyDirectory(dir) {
 
 function checkedSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1
-    || Object.keys(raw).length !== 2 || !validAiLimit(raw.maxAiPerRoom)) throw new Error('服务器配置格式无效');
-  return Object.freeze({ maxAiPerRoom: raw.maxAiPerRoom });
+    || Object.keys(raw).some((key) => !['version', 'maxAiPerRoom', 'requireAssetCache'].includes(key))
+    || !validAiLimit(raw.maxAiPerRoom)
+    || raw.requireAssetCache !== undefined && typeof raw.requireAssetCache !== 'boolean') throw new Error('服务器配置格式无效');
+  // Existing version-1 AI-only files keep their former permissive admission policy.
+  return Object.freeze({ maxAiPerRoom: raw.maxAiPerRoom, requireAssetCache: raw.requireAssetCache ?? false });
 }
 
 /** Read-only startup and show operations never create a directory. null means no persistent override. */
@@ -57,9 +74,14 @@ export function readServerSettings(dir) {
   }
 }
 
-/** Only one setting is replaced: concurrent valid commands have atomic last-writer-wins semantics. */
-export function writeServerSettings(dir, maxAiPerRoom) {
-  if (!validAiLimit(maxAiPerRoom)) throw new RangeError(`AI 上限必须为 0–${MAX_SEATS - 1} 的整数或 null`);
+/** Patch only named settings; concurrent commands retain atomic last-writer-wins semantics. */
+export function writeServerSettings(dir, value) {
+  const patch = value && typeof value === 'object' && !Array.isArray(value) ? value : { maxAiPerRoom: value };
+  if (Object.hasOwn(patch, 'maxAiPerRoom') && !validAiLimit(patch.maxAiPerRoom)) {
+    throw new RangeError(`AI 上限必须为 0–${MAX_SEATS - 1} 的整数或 null`);
+  }
+  if (!Object.keys(patch).length || Object.keys(patch).some((key) => !['maxAiPerRoom', 'requireAssetCache'].includes(key))
+    || Object.hasOwn(patch, 'requireAssetCache') && typeof patch.requireAssetCache !== 'boolean') throw new Error('服务器配置字段无效');
   fs.mkdirSync(dir, { recursive: true });
   verifyDirectory(dir);
   const file = path.join(dir, SERVER_SETTINGS_FILE);
@@ -67,12 +89,17 @@ export function writeServerSettings(dir, maxAiPerRoom) {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('服务器配置必须为普通文件，不能使用符号链接');
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // A full, explicit replacement can repair malformed settings. A partial command refuses to
+  // guess the other policy: in particular changing the AI ceiling must not silently remove strict admission.
+  const previous = Object.hasOwn(patch, 'maxAiPerRoom') && Object.hasOwn(patch, 'requireAssetCache')
+    ? null : readServerSettings(dir) || initialServerSettings();
+  const next = checkedSettings({ version: 1, ...previous, ...patch });
   const temporary = path.join(dir, `.server-settings-${randomUUID()}.tmp`);
   let fd;
   let failure;
   try {
     fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, Buffer.from(`${JSON.stringify({ version: 1, maxAiPerRoom }, null, 2)}\n`, 'utf8'));
+    fs.writeFileSync(fd, Buffer.from(`${JSON.stringify({ version: 1, ...next }, null, 2)}\n`, 'utf8'));
     fs.fsyncSync(fd);
     fs.closeSync(fd); fd = undefined;
     fs.renameSync(temporary, file);
@@ -82,7 +109,7 @@ export function writeServerSettings(dir, maxAiPerRoom) {
     try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') failure ||= error; }
   }
   if (failure) throw failure;
-  return Object.freeze({ maxAiPerRoom });
+  return next;
 }
 
 /**
@@ -90,14 +117,13 @@ export function writeServerSettings(dir, maxAiPerRoom) {
  * policy, so a partial manual edit cannot silently disable a restriction. Removing the file explicitly restores
  * the startup fallback. onChange is not invoked while constructing the controller.
  * @param {{ dir?: string, root?: string, env?: object, log?: {warn?: Function}, pollMs?: number,
- *   onChange?: (next: {maxAiPerRoom:number|null}, previous: {maxAiPerRoom:number|null}) => void }} [options]
+ *   onChange?: (next: {maxAiPerRoom:number|null, requireAssetCache:boolean}, previous: {maxAiPerRoom:number|null, requireAssetCache:boolean}) => void }} [options]
  */
 export function createServerSettings(options = {}) {
   const { env = process.env, log = console, pollMs = SERVER_SETTINGS_POLL_MS, onChange } = options;
   if (!Number.isSafeInteger(pollMs) || pollMs < 0) throw new RangeError('服务器配置检查间隔无效');
   const dir = serverSettingsDirectory({ ...options, env });
-  const initial = String(env.SP_MAX_AI_PER_ROOM ?? '').trim();
-  const fallback = Object.freeze({ maxAiPerRoom: initial ? parseAiLimit(initial) : null });
+  const fallback = initialServerSettings(env);
   // Startup has no last-good disk value to preserve. Refuse corrupt persistent settings rather than accidentally
   // booting an unrestricted public server. Only replacement errors during an already-running process are tolerated.
   let state = readServerSettings(dir) || fallback;
@@ -115,7 +141,7 @@ export function createServerSettings(options = {}) {
       if (message !== warning) { log.warn?.(`[server-settings] ${message}；保留最近有效设置。`); warning = message; }
       return false;
     }
-    if (next.maxAiPerRoom === state.maxAiPerRoom) return false;
+    if (next.maxAiPerRoom === state.maxAiPerRoom && next.requireAssetCache === state.requireAssetCache) return false;
     const previous = state;
     state = next;
     if (notify) onChange?.(state, previous);
