@@ -30,7 +30,7 @@ const request = (page, { t: type, ...fields }) => page.evaluate(async (type, fie
   catch (error) { return { t: 'error', code: error.code, message: error.message }; }
 }, type, fields);
 
-async function fixture(t, real = false) {
+async function fixture(t, real = false, reportName = 'report.json') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-admission-edge-'));
   const report = { browser: '', directoryRequests: 0, fillRequests: 0, statusRequests: 0, ordinaryRequests: 0, layouts: [], cleanup: {} };
   let server, browser, page;
@@ -48,7 +48,7 @@ async function fixture(t, real = false) {
     if (server) { await server.close(); report.cleanup.serverClosed = !server.server.listening; }
     report.errors = errors;
     await fs.mkdir(OUT, { recursive: true });
-    await fs.writeFile(path.join(OUT, real ? 'real-pack-report.json' : 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    await fs.writeFile(path.join(OUT, real ? 'real-pack-report.json' : reportName), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     assert.equal(path.dirname(dir), path.resolve(os.tmpdir()));
     assert.ok(path.basename(dir).startsWith('sp-admission-edge-'));
     await fs.rm(dir, { recursive: true, force: true });
@@ -117,6 +117,9 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   await page.click('[data-testid="asset-cache-open"]');
   await page.waitForSelector('.asset-cache-dialog');
   assert.match(await page.$eval('.asset-cache-dialog', (el) => el.innerText), /服主要求完整预缓存/);
+  assert.equal(await page.$eval('[data-testid="asset-cache-catalog-status"]', (el) => el.innerText), '本地目录：未导入');
+  assert.equal(await page.$('[data-testid="asset-cache-local-version"]'), null);
+  assert.equal(await page.$eval('[data-testid="asset-cache-server-version"]', (el) => el.innerText), catalog.version);
   for (const viewport of [{ width: 1920, height: 1080 }, { width: 1280, height: 720 }]) {
     await page.setViewport(viewport);
     const bounds = await page.$eval('.asset-cache-dialog', (el) => {
@@ -133,6 +136,28 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   await (await page.$('[data-testid="asset-cache-catalog-file"]')).uploadFile(jsonFile);
   await page.waitForFunction(() => window.admissionFixture.cache.getState().hasCatalog);
   assert.equal((await state(page)).readyFiles, 0);
+  await page.waitForFunction(() => document.querySelector('[data-testid="asset-cache-catalog-status"]')?.innerText.includes('已匹配服务器'));
+  assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), catalog.version);
+  assert.equal(await page.$eval('[data-testid="asset-cache-server-version"]', (el) => el.innerText), catalog.version);
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 844, height: 390 }, { width: 640, height: 360 }]) {
+    await page.setViewport(viewport);
+    const bounds = await page.$eval('.asset-cache-dialog', (el) => {
+      const box = el.getBoundingClientRect(), body = el.querySelector('.modal__body');
+      const versions = [...el.querySelectorAll('.asset-cache__catalog code')].map((code) => {
+        const rect = code.getBoundingClientRect(); return { left: rect.left, right: rect.right };
+      });
+      return { left: box.left, right: box.right, overflow: body.scrollWidth > body.clientWidth + 2, versions,
+        rotateHint: getComputedStyle(document.querySelector('.rotate-hint')).display !== 'none' };
+    });
+    assert.equal(bounds.overflow, false, 'full catalog hashes wrap on a narrow screen');
+    assert.equal(bounds.rotateHint, false, 'test the supported landscape layout without a portrait blocker');
+    for (const version of bounds.versions) {
+      assert.ok(version.left >= bounds.left && version.right <= bounds.right);
+    }
+    report.layouts.push({ screen: 'catalog-versions', ...viewport, ...bounds });
+    await page.screenshot({ path: path.join(OUT, `catalog-${viewport.width}.png`) });
+  }
+  await page.setViewport({ width: 1280, height: 720 });
   for (const intent of intents) assert.equal((await request(page, intent)).code, 'ASSET_CACHE_REQUIRED', 'directory alone grants no admission');
   const writer = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
   await writer.add('manifest.json', new Uint8ArrayReader(Buffer.from(JSON.stringify(catalog))), { useWebWorkers: false });
@@ -179,6 +204,13 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   });
   await page.waitForFunction(() => window.admissionFixture.net.status === 'online');
   await page.evaluate(() => window.admissionFixture.cache.clear());
+  await page.click('[data-testid="asset-cache-open"]');
+  await page.waitForSelector('.asset-cache-dialog');
+  assert.equal(await page.$eval('[data-testid="asset-cache-catalog-status"]', (el) => el.innerText), '本地目录：已导入，已匹配服务器');
+  assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), catalog.version);
+  assert.equal((await state(page)).readyFiles, 0, 'clearing assets preserves the directory without claiming readiness');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.asset-cache-dialog', { hidden: true });
   assert.equal((await request(page, create)).code, 'ASSET_CACHE_REQUIRED', 'eviction is rechecked before entering');
   policy(false);
   assert.equal((await request(page, create)).t, 'ok');
@@ -193,6 +225,42 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   assert.ok(server.lobby.roomOf(server.registry.byId(before)).match);
   assert.equal(report.directoryRequests, 0);
   assert.equal(report.fillRequests, 0, 'local ZIP import does not secretly trigger online fills');
+  assert.deepEqual(errors, []);
+  report.result = 'passed';
+});
+
+test('Edge displays a restored stale local catalog and distinguishes a failed server check', {
+  skip: process.env.SP_E2E === '1' ? false : 'set SP_E2E=1 (uses Edge)', timeout: 60000,
+}, async (t) => {
+  const { page, report, errors } = await fixture(t, false, 'catalog-status-report.json');
+  const oldFiles = files.map((file, index) => index ? file : { ...file, sha256: hash('old image'), bytes: 9 });
+  const oldCatalog = { ...catalog, files: oldFiles,
+    version: hash(JSON.stringify({ schema: 1, files: oldFiles })), totalBytes: 14 };
+  // Simulate a directory persisted by the previous deployment, rather than importing a currently rejected version.
+  await page.evaluate(async (local) => {
+    const meta = await caches.open('sp-asset-cache-meta-v1');
+    await meta.put('/__sp_asset_cache__/latest', new Response(JSON.stringify({ version: local.version })));
+    await meta.put(`/__sp_asset_cache__/catalog/${local.version}`, new Response(JSON.stringify(local)));
+  }, oldCatalog);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.lobby-screen');
+  await page.click('[data-testid="asset-cache-open"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="asset-cache-catalog-status"]')?.innerText.includes('与服务器版本不符'));
+  assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), oldCatalog.version);
+  assert.equal(await page.$eval('[data-testid="asset-cache-server-version"]', (el) => el.innerText), catalog.version);
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    if (new URL(req.url()).pathname === '/api/asset-cache/status') return req.respond({ status: 503, body: 'offline' });
+    return req.continue();
+  });
+  await page.evaluate(async () => {
+    const { assetCache } = await import('/js/assetCache.js');
+    await assetCache.scan({ deep: false }).catch(() => {});
+  });
+  await page.waitForFunction(() => document.querySelector('[data-testid="asset-cache-catalog-status"]')?.innerText.includes('等待服务器校验'));
+  assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), oldCatalog.version);
+  assert.equal(report.directoryRequests, 0);
+  assert.equal(report.fillRequests, 0);
   assert.deepEqual(errors, []);
   report.result = 'passed';
 });

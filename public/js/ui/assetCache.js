@@ -74,6 +74,16 @@ function phaseText(phase) {
   }
 }
 
+function catalogText(state) {
+  if (!state.hasCatalog) return t('本地目录：未导入');
+  if (state.catalogCurrent) return t('本地目录：已导入，已匹配服务器');
+  const error = typeof state.error === 'string' ? state.error : state.error?.code;
+  if (!state.serverVersion || error === 'ASSET_CACHE_CATALOG_UNAVAILABLE') {
+    return t('本地目录：已导入，等待服务器校验');
+  }
+  return t('本地目录：已导入，与服务器版本不符');
+}
+
 function persistenceText(state) {
   if (state.storage?.persisted) return t('浏览器已允许持久保存');
   switch (state.persistence) {
@@ -124,6 +134,13 @@ export function AssetCacheHost() {
         <strong>${phaseText(state.phase)}</strong>
         <span class="num">${t('已缓存 {ready} / {total} 个文件', { ready, total })}</span>
         <span>${t('已保存 {ready} / {total}', { ready: formatCacheBytes(state.readyBytes), total: formatCacheBytes(state.totalBytes) })}</span>
+      </div>
+      <div class="asset-cache__catalog" aria-live="polite">
+        <strong data-testid="asset-cache-catalog-status">${catalogText(state)}</strong>
+        ${state.hasCatalog ? html`<span>${t('本地目录版本')}：<code data-testid="asset-cache-local-version">${state.version}</code></span>` : null}
+        <span>${t('服务器目录版本')}：${state.serverVersion
+          ? html`<code data-testid="asset-cache-server-version">${state.serverVersion}</code>`
+          : t('尚未校验')}</span>
       </div>
       <progress class="asset-cache__progress" max="100" value=${percent} aria-label=${t('缓存进度')}></progress>
       <div class="asset-cache__details">
