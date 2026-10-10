@@ -8,7 +8,7 @@ const origin = 'https://game.test';
 const body = new TextEncoder().encode('atlas bytes');
 const sha256 = await helpers.sha256Hex(body);
 const entry = { url: '/assets/model.atlas', bytes: body.length, sha256, type: 'text/plain', aliases: [] };
-const catalog = { schema: 1, version: 'a'.repeat(64), files: [entry], totalFiles: 1, totalBytes: body.length,
+const catalog = { schema: 1, version: await helpers.sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: 1, files: [entry] }))), files: [entry], totalFiles: 1, totalBytes: body.length,
   complete: true, missing: [], app: 'test' };
 const source = (await fs.readFile(new URL('../public/asset-cache-sw.js', import.meta.url), 'utf8'))
   .replace(/import \{[\s\S]*?\} from '\/shared\/assetCache\.js';/, '');
@@ -91,4 +91,15 @@ test('SW serializes pin/playing writes and never lets a late same-version pin cl
   assert.equal((await f.message('page', { type: 'ASSET_CACHE_PIN', catalog, playing: false })).ok, true);
   assert.equal((await f.message('page', { type: 'ASSET_CACHE_CAN_MUTATE' })).playing, true);
   assert.equal((await f.message('page', { type: 'ASSET_CACHE_CLEAR' })).error, 'ASSET_CACHE_PLAYING');
+});
+
+test('SW allows the first verified pin during direct reconnect, but refuses directory changes during a live match', async () => {
+  const f = await fixture(); f.addClient('page');
+  assert.equal((await f.message('page', { type: 'ASSET_CACHE_PLAYING', playing: true })).playing, true);
+  assert.equal((await f.message('page', { type: 'ASSET_CACHE_PIN', catalog })).ok, true);
+  const changed = structuredClone(catalog);
+  changed.files[0].url = '/assets/other.atlas';
+  changed.version = await helpers.sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: 1, files: changed.files })));
+  assert.equal((await f.message('page', { type: 'ASSET_CACHE_PIN', catalog: changed })).error, 'ASSET_CACHE_PLAYING');
+  assert.equal((await f.message('page', { type: 'ASSET_CACHE_CAN_MUTATE' })).playing, true);
 });

@@ -82,6 +82,7 @@ so old imports keep working: `public/js/ui/gameLogic.js` (`public/js/ui/gameLogi
 | `server/index.js` | the process entry (`npm start`); `startServer()` wires `server/http/` |
 | `server/announcements.js`, `server/announcementNotices.js` | this fork's private Markdown announcement store, read-only HTTP content/images and explicit urgent-notification monitor; `tools/announcements.mjs` is the owner CLI |
 | `server/http/` | `config.js` (environment), `websocket.js` (sessions, `/ws`), `static.js` (mounts), `runtimeCache.js` (content-versioned module/data graph), `media.js`, `files.js` (MIME, Brotli/gzip, ETag, ranges), `buildTag.js`, `routes.js` (`/healthz`), `common.js`, `boot.js` (a pending update package first, banner, shutdown); see [HTTP_CACHE.md](HTTP_CACHE.md) |
+| `server/assetCacheCatalog.js`, `server/http/assetCache.js`, `shared/assetCache.js` | immutable content index, tiny online summary and bounded opt-in filling; the full online catalog is refused. Local ZIP / JSON import, persisted catalog and per-page SW pins are described in [ASSET_CACHE.md](ASSET_CACHE.md) |
 | `server/net.js` | sessions and reconnect tokens, rate limits, message validation |
 | `server/lobby.js` | rooms, seats, AI seats, spectators; starts a `Match` |
 | `server/lobbyDiscovery.js`, `shared/lobbyDiscovery.js` | lobby subscriptions, changed-only paged room summaries, atomic fastest matching; shared page size and update interval |

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { safeAssetPath, safeAssetZipName, decodedAssetPath, parseAssetRange, validateAssetCatalog,
   assetContentKey, isVerifiedAssetResponse, validatedCacheHeaders, sha256Hex } from '../shared/assetCache.js';
+import { verifyAssetCatalog, assetCacheSummary, catalogMatchesSummary, assetCacheReadinessMatches } from '../shared/assetCache.js';
 import { createAssetCacheManager } from '../public/js/assetCache.js';
 
 const entry = { url: '/assets/audio/中 文.mp3', bytes: 3,
@@ -67,4 +68,27 @@ test('manager imports under Node without DOM side effects; insecure contexts rem
   await manager.setPlaying(true);
   assert.equal(manager.getState().playing, true);
   manager.destroy();
+});
+
+test('local directory digest preserves schema-1 ZIP versions and detects changed URLs, hashes and aliases', async () => {
+  const value = fixture();
+  value.version = await sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: value.schema, files: value.files })));
+  assert.equal((await verifyAssetCatalog(value)).version, value.version);
+  const reordered = { ...value, files: value.files.map(({ aliases, type, sha256, bytes, url }) => ({ aliases, type, sha256, bytes, url })) };
+  assert.equal((await verifyAssetCatalog(reordered)).version, value.version, 'JSON property order does not require repacking existing assets');
+  for (const changes of [{ url: '/assets/audio/other.mp3' }, { sha256: 'c'.repeat(64) }, { aliases: ['/media/other'] }]) {
+    await assert.rejects(verifyAssetCatalog({ ...value, files: [{ ...entry, ...changes }] }), /BAD_CATALOG/);
+  }
+});
+
+test('readiness requires current complete server metadata plus exact local file and byte counts', () => {
+  const summary = assetCacheSummary(fixture());
+  const full = { schema: 1, version: summary.version, readyFiles: 1, readyBytes: 3 };
+  assert.equal(catalogMatchesSummary(fixture(), summary), true);
+  assert.equal(assetCacheReadinessMatches(full, summary), true);
+  for (const report of [null, true, {}, { ...full, readyFiles: 0 }, { ...full, readyBytes: 2 },
+    { ...full, version: 'c'.repeat(64) }, { ...full, ready: true }, { ...full, schema: 2 }]) {
+    assert.equal(assetCacheReadinessMatches(report, summary), false);
+  }
+  assert.equal(assetCacheReadinessMatches(full, { ...summary, complete: false, missingFiles: 1 }), false);
 });

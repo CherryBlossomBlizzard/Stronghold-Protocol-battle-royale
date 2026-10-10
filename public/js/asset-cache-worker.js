@@ -10,8 +10,63 @@ function cancelled() {
 }
 const send = (id, type, value = {}) => self.postMessage({ id, type, ...value });
 
+class LimitedWriter extends zip.Writer {
+  constructor(limit) { super(); this.limit = limit; this.chunks = []; this.length = 0; }
+  writeUint8Array(chunk) {
+    cancelled();
+    if (this.length + chunk.length > this.limit) {
+      throw Object.assign(new Error('ASSET_CACHE_FILE_TOO_LARGE'), { code: 'ASSET_CACHE_FILE_TOO_LARGE' });
+    }
+    this.chunks.push(chunk); this.length += chunk.length;
+  }
+  getData() { return new Blob(this.chunks); }
+}
+
+async function archiveEntries(reader, h) {
+  const entries = [], seen = new Set();
+  for await (const entry of reader.getEntriesGenerator()) {
+    cancelled();
+    if (entries.length >= h.MAX_CATALOG_FILES * 2) throw h.assetCacheError('ASSET_CACHE_ZIP_TOO_LARGE');
+    if (!h.safeAssetZipName(entry.filename) || entry.encrypted || entry.symlink || entry.executable || seen.has(entry.filename)) {
+      throw h.assetCacheError('ASSET_CACHE_ZIP_UNSAFE');
+    }
+    seen.add(entry.filename); entries.push(entry);
+  }
+  return entries;
+}
+
+async function readCatalog(message, h) {
+  if (!(message.file instanceof Blob)) throw h.assetCacheError('ASSET_CACHE_BAD_CATALOG');
+  let blob = message.file;
+  let reader;
+  try {
+    if (message.format === 'zip') {
+      reader = new zip.ZipReader(new zip.BlobReader(blob), { useWebWorkers: false, checkSignature: true });
+      const entries = await archiveEntries(reader, h);
+      const entry = entries.find((item) => !item.directory && item.filename === 'manifest.json');
+      if (!entry) throw h.assetCacheError('ASSET_CACHE_CATALOG_REQUIRED');
+      if (!Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 1
+        || entry.uncompressedSize > h.MAX_MANIFEST_BYTES || ![0, 8].includes(entry.compressionMethod)) {
+        throw h.assetCacheError('ASSET_CACHE_BAD_CATALOG');
+      }
+      blob = await entry.getData(new LimitedWriter(h.MAX_MANIFEST_BYTES), { useWebWorkers: false, checkSignature: true,
+        signal: active.abort.signal });
+    } else if (message.format !== 'json') throw h.assetCacheError('ASSET_CACHE_BAD_MESSAGE');
+    if (blob.size < 1 || blob.size > h.MAX_MANIFEST_BYTES) throw h.assetCacheError('ASSET_CACHE_BAD_CATALOG');
+    const bytes = await blob.arrayBuffer();
+    cancelled();
+    const catalog = await h.verifyAssetCatalog(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+    cancelled();
+    return { catalog };
+  } catch (error) {
+    if (error.code) throw error;
+    throw h.assetCacheError(message.format === 'zip' ? 'ASSET_CACHE_ZIP_INVALID' : 'ASSET_CACHE_BAD_CATALOG', error);
+  } finally { await reader?.close(); }
+}
+
 async function work(message) {
   const h = await helpers;
+  if (message.action === 'read-catalog') return readCatalog(message, h);
   const catalog = h.validateAssetCatalog(message.catalog);
   const origin = self.location.origin;
   const cache = await caches.open(h.ASSET_CACHE_NAME);
@@ -106,33 +161,12 @@ async function work(message) {
     const reader = new zip.ZipReader(new zip.BlobReader(message.file), { useWebWorkers: false, checkSignature: true });
     let entries;
     const expected = new Map(catalog.files.map((entry) => [entry.url.slice(1), entry]));
-    const seen = new Set();
     const stats = { imported: 0, reused: 0, invalid: 0, unknown: 0, absent: 0 };
     try {
-      entries = [];
-      for await (const entry of reader.getEntriesGenerator()) {
-        cancelled();
-        if (entries.length >= h.MAX_CATALOG_FILES * 2) throw h.assetCacheError('ASSET_CACHE_ZIP_TOO_LARGE');
-        entries.push(entry);
-      }
       // Reject unsafe archives before writing any file. Ordinary old/extra asset entries are skipped.
-      for (const entry of entries) {
-        const name = entry.filename;
-        if (!h.safeAssetZipName(name) || entry.encrypted || entry.symlink || entry.executable || seen.has(name))
-          throw h.assetCacheError('ASSET_CACHE_ZIP_UNSAFE');
-        seen.add(name);
-      }
+      entries = await archiveEntries(reader, h);
       const candidates = entries.filter((entry) => !entry.directory && entry.filename !== 'manifest.json');
       const importedHashes = new Set();
-      class LimitedWriter extends zip.Writer {
-        constructor(limit) { super(); this.limit = limit; this.chunks = []; this.length = 0; }
-        writeUint8Array(chunk) {
-          cancelled();
-          if (this.length + chunk.length > this.limit) throw h.assetCacheError('ASSET_CACHE_FILE_TOO_LARGE');
-          this.chunks.push(chunk); this.length += chunk.length;
-        }
-        getData() { return new Blob(this.chunks); }
-      }
       for (const entry of candidates) {
         cancelled();
         const target = expected.get(entry.filename);
@@ -175,7 +209,7 @@ self.onmessage = async ({ data }) => {
   if (data?.type === 'pause') { if (active) { active.paused = true; active.abort.abort(); } return; }
   if (active) { send(data?.id, 'error', { code: 'ASSET_CACHE_BUSY' }); return; }
   active = { id: data.id, paused: false, abort: new AbortController() };
-  try { await work(data); send(data.id, 'done'); }
+  try { const result = await work(data); send(data.id, 'done', result); }
   catch (error) { send(data.id, 'error', { code: active.paused ? 'ASSET_CACHE_PAUSED'
     : error.name === 'QuotaExceededError' ? 'ASSET_CACHE_QUOTA' : error.code || 'ASSET_CACHE_STORAGE_ERROR' }); }
   finally { active = null; }

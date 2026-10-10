@@ -1,7 +1,7 @@
 // Asset-only cache: HTML, application code, data, APIs and private announcements never enter it.
 // Content hashes let unchanged files survive upgrades; per-client catalogs pin live matches.
 import { ASSET_CACHE_NAME, ASSET_CACHE_META, assetContentKey, catalogURLMap,
-  validateAssetCatalog, decodedAssetPath, isVerifiedAssetResponse, validatedCacheHeaders,
+  verifyAssetCatalog, decodedAssetPath, isVerifiedAssetResponse, validatedCacheHeaders,
   parseAssetRange, sha256Hex } from '/shared/assetCache.js';
 
 const origin = self.location.origin;
@@ -27,7 +27,7 @@ async function getCatalog(version) {
   if (!catalogs.has(version)) {
     const meta = await caches.open(ASSET_CACHE_META);
     const catalog = await readJSON(meta, catalogPath(version));
-    try { validateAssetCatalog(catalog); catalogs.set(version, { catalog, urls: catalogURLMap(catalog) }); }
+    try { const checked = await verifyAssetCatalog(catalog); catalogs.set(version, { catalog: checked, urls: catalogURLMap(checked) }); }
     catch { return null; }
   }
   return catalogs.get(version);
@@ -63,10 +63,10 @@ async function handleMessage(event) {
   const meta = await caches.open(ASSET_CACHE_META);
   try {
     if (data.type === 'ASSET_CACHE_PIN') {
-      const catalog = validateAssetCatalog(data.catalog);
+      const catalog = await verifyAssetCatalog(data.catalog);
       const previous = await getPin(source.id);
       // A live page cannot change its material interpretation mid-match.
-      if (previous?.playing && previous.version !== catalog.version) throw new Error('ASSET_CACHE_PLAYING');
+      if (previous?.playing && previous.version && previous.version !== catalog.version) throw new Error('ASSET_CACHE_PLAYING');
       await meta.put(catalogPath(catalog.version), Response.json(catalog));
       await meta.put(latestPath, Response.json({ version: catalog.version }));
       catalogs.set(catalog.version, { catalog, urls: catalogURLMap(catalog) });

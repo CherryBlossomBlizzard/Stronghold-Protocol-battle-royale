@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createAssetCacheCatalog } from '../server/assetCacheCatalog.js';
-import { packAssetCache, assetCachePackManifest, parseAssetCachePackArgs } from '../tools/asset-cache-pack.mjs';
+import { packAssetCache, exportAssetCacheCatalog, assetCachePackManifest, parseAssetCachePackArgs } from '../tools/asset-cache-pack.mjs';
+import { verifyAssetCatalog } from '../shared/assetCache.js';
 import { readZip } from '../tools/package-update.mjs';
 import { writeAssetZip, updateCRC32 } from '../tools/asset-cache/zip.mjs';
 
@@ -79,6 +80,22 @@ test('ZIP writer rejects unsafe/duplicate paths and writes interoperable CRC-32'
 test('pack CLI supports safe explicit roots/output and rejects accidental switches', () => {
   assert.equal(parseAssetCachePackArgs(['--dry-run']).dryRun, true);
   assert.equal(parseAssetCachePackArgs(['--help']).help, true);
+  assert.equal(parseAssetCachePackArgs(['--catalog-only']).catalogOnly, true);
   assert.throws(() => parseAssetCachePackArgs(['--out', '--dry-run']), /需要目录/);
   assert.throws(() => parseAssetCachePackArgs(['--upload']), /未知参数/);
+});
+
+test('standalone JSON export matches the existing ZIP directory and never overwrites either file', async (t) => {
+  const root = await fixture(t);
+  const packed = await packAssetCache({ root });
+  const exported = await exportAssetCacheCatalog({ root });
+  let packedManifest;
+  readZip(packed.zipPath, (name, bytes) => { if (name === 'manifest.json') packedManifest = JSON.parse(bytes); });
+  const body = await fs.readFile(exported.catalogPath);
+  assert.deepEqual(JSON.parse(body), packedManifest);
+  assert.equal((await verifyAssetCatalog(JSON.parse(body))).version, packed.version);
+  assert.equal(body.length, exported.catalogBytes);
+  await assert.rejects(exportAssetCacheCatalog({ root }), /EEXIST/);
+  assert.equal((await fs.readFile(exported.catalogPath)).equals(body), true);
+  assert.ok(!(await fs.readdir(path.dirname(exported.catalogPath))).some((name) => name.endsWith('.part')));
 });

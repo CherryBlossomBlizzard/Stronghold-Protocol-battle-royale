@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { createAssetCacheCatalog, checkedAssetPath } from '../assetCacheCatalog.js';
 import { clientAddress } from '../net.js';
 import { parseTrustProxy } from './config.js';
-import { GzipCache, serveBuffer, MIME } from './files.js';
+import { MIME } from './files.js';
+import { assetCacheSummary } from '../../shared/assetCache.js';
 import { sendJson } from './common.js';
 import { CacheDownloadLimiter } from './cacheLimiter.js';
 
@@ -47,26 +48,29 @@ async function verifyAsset(handle, entry, canceled) {
   return digest.digest('hex') === entry.sha256 && sameFile(before, await handle.stat());
 }
 
-export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trustProxy, buildCatalog = createAssetCacheCatalog }) {
+export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trustProxy, buildCatalog = createAssetCacheCatalog,
+  requireAssetCache = () => false }) {
   const limiter = new CacheDownloadLimiter(limits);
-  const compressionCache = new GzipCache();
   const proxy = trustProxy ?? parseTrustProxy(process.env.TRUST_PROXY);
   let pending = null;
-  // One immutable catalog per server lifetime, shared by status, index and every filling request.
+  let current = null;
+  // One immutable catalog per server lifetime, shared by the tiny summary and filling allowlist.
   // Failure is retryable (e.g. setup still copying files); a successful snapshot changes only after restart.
   async function snapshot() {
     if (!pending) pending = Promise.resolve().then(() => buildCatalog({ publicDir, dataDir })).then((catalog) => {
-      const json = Buffer.from(JSON.stringify(catalog));
       const byUrl = new Map(catalog.files.map((entry) => [entry.url, entry]));
-      // `version` is the reusable file-content version; the HTTP validator must also change
-      // when completeness, warnings or application metadata changes without changing bytes.
-      const entityTag = createHash('sha256').update(json).digest('hex');
-      return { catalog, byUrl, json, tag: `asset-cache-${entityTag}` };
+      current = assetCacheSummary(catalog);
+      return { catalog, byUrl };
     }).catch((error) => { pending = null; throw error; });
     return pending;
   }
 
   async function serve(req, res, rawPath, query) {
+    // Refuse even legacy/cold clients, before expensive catalog construction. Never serve a full
+    // directory online: import manifest.json from a ZIP or a standalone owner-provided JSON instead.
+    if (rawPath === `${ASSET_CACHE_PREFIX}catalog`) {
+      failure(req, res, 403, 'ASSET_CACHE_CATALOG_LOCAL_ONLY'); return;
+    }
     if (rawPath !== `${ASSET_CACHE_PREFIX}status` && rawPath !== `${ASSET_CACHE_PREFIX}catalog` && rawPath !== `${ASSET_CACHE_PREFIX}file`) {
       failure(req, res, 404, 'ASSET_CACHE_ROUTE_NOT_FOUND'); return;
     }
@@ -78,13 +82,8 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     }
     if (res.destroyed) return;
     if (rawPath === `${ASSET_CACHE_PREFIX}status`) {
-      const { schema, version, app, totalFiles, totalBytes, complete, missing } = state.catalog;
-      sendJson(req, res, 200, { schema, version, app, totalFiles, totalBytes, complete,
-        missingFiles: missing.length, policy: limiter.policy() }); return;
-    }
-    if (rawPath === `${ASSET_CACHE_PREFIX}catalog`) {
-      await serveBuffer(req, res, state.json, { type: 'application/json; charset=utf-8', tag: state.tag, cache: compressionCache, minBytes: 0 });
-      return;
+      sendJson(req, res, 200, { ...current, catalogSource: 'local-import',
+        requireAssetCache: !!requireAssetCache(), policy: limiter.policy() }); return;
     }
     const params = new URLSearchParams(query);
     const url = params.get('url');
@@ -129,5 +128,6 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     }
   }
 
-  return { serve, close: () => limiter.close(), policy: () => limiter.policy() };
+  return { serve, close: () => limiter.close(), policy: () => limiter.policy(),
+    summary: async () => { await snapshot(); return current; }, currentSummary: () => current };
 }

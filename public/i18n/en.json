@@ -1348,5 +1348,15 @@
   "已就绪 · 等待房主开始模拟": "Ready · Waiting for the host to start the simulation",
   "准备就绪后，房主即可开始模拟": "Once ready, the host can start the simulation",
   "断线保留": "Retained for reconnect",
-  "断线保留房间等待原玩家重连，按原有断线期限自动释放。": "Retained rooms await their original players and expire after the existing reconnect timeout."
+  "断线保留房间等待原玩家重连，按原有断线期限自动释放。": "Retained rooms await their original players and expire after the existing reconnect timeout.",
+  "服务器素材版本校验失败，请检查连接后重试。": "Server asset version verification failed. Check your connection and retry.",
+  "本地素材目录无效，请选择本站提供的完整素材包或目录 JSON。": "The local asset catalog is invalid. Select this site’s complete asset ZIP or catalog JSON.",
+  "请先导入完整素材包内的目录，或单独导入当前目录 JSON。": "First import the catalog from a complete asset ZIP, or import the current catalog JSON separately.",
+  "本地目录与服务器版本不符，请导入当前完整素材包或目录 JSON；已缓存素材可继续复用。": "The local catalog does not match the server. Import the current full asset ZIP or catalog JSON; matching cached assets can be reused.",
+  "需要导入本地素材目录": "Import a local asset catalog",
+  "本地目录尚未匹配服务器": "Local catalog has not matched the server",
+  "完整素材包自带目录，只在本机解压和保存。也可单独导入目录 JSON，再补齐缺项；服务器仅校验版本，不提供完整目录下载。": "A full asset ZIP includes its catalog and is extracted and stored locally. You can also import a catalog JSON and fill missing files. The server only verifies the version; it does not distribute the full catalog.",
+  "服主要求完整预缓存：当前版本素材全部缓存后，才可创建、加入、最快匹配或观战。": "This server requires full precaching. Cache all assets of the current version before creating, joining, quick matching or spectating.",
+  "导入目录 JSON": "Import catalog JSON",
+  "服主要求完整预缓存，请先在「预缓存」中导入当前素材目录并补齐全部文件，再创建、加入、最快匹配或观战。": "This server requires full precaching. Open Precache, import the current asset catalog and fill all missing files before creating, joining, quick matching or spectating."
 }

@@ -3,6 +3,7 @@ export const CACHE_SCHEMA = 1;
 export const ASSET_CACHE_NAME = 'sp-asset-cache-v1';
 export const ASSET_CACHE_META = 'sp-asset-cache-meta-v1';
 export const CACHE_KEY_PREFIX = '/__sp_asset_cache__/sha256/';
+export const ASSET_CACHE_LATEST_KEY = '/__sp_asset_cache__/latest';
 export const MAX_ASSET_BYTES = 128 * 1024 * 1024;
 export const MAX_CATALOG_FILES = 100000;
 export const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
@@ -47,6 +48,62 @@ export function validateAssetCatalog(catalog) {
   if (!Number.isSafeInteger(bytes) || catalog.totalFiles !== catalog.files.length || catalog.totalBytes !== bytes
     || typeof catalog.complete !== 'boolean' || !Array.isArray(catalog.missing)) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
   return catalog;
+}
+
+/**
+ * The schema-1 digest is the server's original JSON({schema, files}) representation.
+ * Fix property order here so a separately saved JSON directory retains the existing ZIP version.
+ * Application labels/completeness are metadata; readiness must also match the live server summary.
+ */
+export async function verifyAssetCatalog(value, cryptoAPI = globalThis.crypto) {
+  validateAssetCatalog(value);
+  const files = value.files.map(({ url, bytes, sha256, type, aliases }) => ({ url, bytes, sha256, type, aliases }));
+  const version = await sha256Hex(new (/** @type {any} */ (globalThis).TextEncoder)().encode(JSON.stringify({ schema: value.schema, files })), cryptoAPI);
+  if (version !== value.version) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+  return { schema: value.schema, version, app: typeof value.app === 'string' ? value.app.slice(0, 128) : '',
+    files, totalFiles: value.totalFiles, totalBytes: value.totalBytes, complete: value.complete, missing: value.missing };
+}
+
+export function assetCacheCatalogKey(version) {
+  if (!SHA.test(version || '')) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+  return `/__sp_asset_cache__/catalog/${version}`;
+}
+
+/** The online response contains no filenames, URLs, aliases or per-file hashes. */
+export function assetCacheSummary(catalog) {
+  const { schema, version, app, totalFiles, totalBytes, complete, missing } = catalog;
+  return { schema, version, app, totalFiles, totalBytes, complete, missingFiles: missing.length };
+}
+
+export function validateAssetCacheSummary(value) {
+  if (!value || value.schema !== CACHE_SCHEMA || !SHA.test(value.version || '')
+    || !Number.isSafeInteger(value.totalFiles) || value.totalFiles < 1 || value.totalFiles > MAX_CATALOG_FILES
+    || !Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1
+    || typeof value.complete !== 'boolean' || !Number.isSafeInteger(value.missingFiles) || value.missingFiles < 0
+    || value.requireAssetCache !== undefined && typeof value.requireAssetCache !== 'boolean') {
+    throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
+  }
+  return value;
+}
+
+export function catalogMatchesSummary(catalog, summary) {
+  return !!catalog && !!summary && catalog.schema === summary.schema && catalog.version === summary.version
+    && catalog.totalFiles === summary.totalFiles && catalog.totalBytes === summary.totalBytes;
+}
+
+/** Operational admission report, not a cryptographic proof of a remote browser's disk contents. */
+export function isAssetCacheReadiness(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => ['schema', 'version', 'readyFiles', 'readyBytes'].includes(key))
+    && value.schema === CACHE_SCHEMA && SHA.test(value.version || '')
+    && Number.isSafeInteger(value.readyFiles) && value.readyFiles >= 0 && value.readyFiles <= MAX_CATALOG_FILES
+    && Number.isSafeInteger(value.readyBytes) && value.readyBytes >= 0;
+}
+
+export function assetCacheReadinessMatches(value, summary) {
+  return isAssetCacheReadiness(value) && !!summary && summary.complete && summary.missingFiles === 0
+    && value.schema === summary.schema && value.version === summary.version
+    && value.readyFiles === summary.totalFiles && value.readyBytes === summary.totalBytes;
 }
 
 export function catalogURLMap(catalog) {

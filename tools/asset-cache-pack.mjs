@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createAssetCacheCatalog, checkedAssetPath, assetCacheURLProblem } from '../server/assetCacheCatalog.js';
 import { writeAssetZip } from './asset-cache/zip.mjs';
 
@@ -81,11 +82,37 @@ export async function packAssetCache({ root = REPO, out, catalog, onProgress = (
   }
 }
 
+/** Export the same full directory without rewriting an already distributed ZIP. */
+export async function exportAssetCacheCatalog({ root = REPO, out, catalog } = {}) {
+  const source = catalog || await createAssetCacheCatalog({ publicDir: path.join(root, 'public'), dataDir: path.join(root, 'data') });
+  const manifest = assetCachePackManifest(source);
+  const destination = path.resolve(out || path.join(root, '.cache', 'asset-cache-pack'));
+  const stat = await fsp.lstat(destination).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (stat?.isSymbolicLink() || stat && !stat.isDirectory()) throw new Error('输出位置必须为普通目录');
+  await fsp.mkdir(destination, { recursive: true });
+  const catalogPath = path.join(destination, `Stronghold-Protocol-catalog-${source.version.slice(0, 12)}.json`);
+  const temporary = `${catalogPath}.part`;
+  const body = Buffer.from(JSON.stringify(manifest) + '\n', 'utf8');
+  let handle;
+  let opened = false;
+  try {
+    handle = await fsp.open(temporary, 'wx'); opened = true;
+    await handle.writeFile(body); await handle.sync();
+    await handle.close(); handle = null;
+    await fsp.link(temporary, catalogPath);
+    return { catalogPath, catalogBytes: body.length, totalFiles: source.totalFiles, totalBytes: source.totalBytes, version: source.version };
+  } finally {
+    if (handle) await handle.close();
+    if (opened) await fsp.unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+  }
+}
+
 export function parseAssetCachePackArgs(argv) {
-  const options = { root: REPO, out: '', dryRun: false, help: false };
+  const options = { root: REPO, out: '', dryRun: false, catalogOnly: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--catalog-only') options.catalogOnly = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--root' || arg === '--out') {
       const value = argv[++i];
@@ -98,10 +125,14 @@ export function parseAssetCachePackArgs(argv) {
 
 const MiB = (bytes) => `${(bytes / 1048576).toFixed(2)} MiB`;
 export async function main(argv) {
+  if (process.platform === 'win32' && (process.stdout.isTTY || process.stderr.isTTY)) {
+    try { spawnSync('cmd.exe', ['/d', '/c', 'chcp', '65001'], { stdio: 'ignore', windowsHide: true, timeout: 1000 }); }
+    catch { /* Redirected Node output is already UTF-8. */ }
+  }
   try {
     const options = parseAssetCachePackArgs(argv);
     if (options.help) {
-      console.log('用法：node tools/asset-cache-pack.mjs [--dry-run] [--out 输出目录] [--root 项目目录]');
+      console.log('用法：node tools/asset-cache-pack.mjs [--dry-run | --catalog-only] [--out 输出目录] [--root 项目目录]');
       return 0;
     }
     console.log('读取素材清单并计算逐文件 SHA-256…');
@@ -110,6 +141,11 @@ export async function main(argv) {
     assetCachePackManifest(catalog);
     for (const warning of catalog.warnings || []) console.log(`提示（不影响完整性）：${warning.url}：${warning.reason}`);
     if (options.dryRun) { console.log('清单完整；仅核对，未生成文件。'); return 0; }
+    if (options.catalogOnly) {
+      const result = await exportAssetCacheCatalog({ ...options, catalog });
+      console.log(`独立目录：${result.catalogPath}\n目录大小：${MiB(result.catalogBytes)}；可在预缓存窗口单独导入，无需重新生成完整 ZIP。`);
+      return 0;
+    }
     const result = await packAssetCache({ ...options, catalog, onProgress: ({ done, total }) => {
       if (done % 500 === 0 || done === total) console.log(`打包进度：${done}/${total}`);
     } });

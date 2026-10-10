@@ -1,6 +1,7 @@
 // Browser asset-cache coordinator; pure at import time so importing it under Node is safe.
 // All expensive work runs in a dedicated worker. UI consumes codes through i18n, never raw errors.
-import { validateAssetCatalog, assetCacheError } from '../../shared/assetCache.js';
+import { ASSET_CACHE_META, ASSET_CACHE_LATEST_KEY, MAX_MANIFEST_BYTES, verifyAssetCatalog,
+  assetCacheCatalogKey, validateAssetCacheSummary, catalogMatchesSummary, assetCacheError } from '../../shared/assetCache.js';
 
 const initialState = (env) => {
   const supported = !!(env.isSecureContext && env.caches && env.navigator?.serviceWorker
@@ -9,12 +10,13 @@ const initialState = (env) => {
     totalFiles: 0, readyFiles: 0, totalBytes: 0, readyBytes: 0, missingFiles: 0, missingBytes: 0,
     speedBps: 0, version: null, storage: { usage: 0, quota: 0, persisted: false,
       persistenceSupported: supported && typeof env.navigator?.storage?.persist === 'function' }, playing: false,
-    catalogComplete: false, serverMissingFiles: 0, importStats: null, scanStats: null, waiting: false, policy: null,
+    hasCatalog: false, catalogCurrent: false, catalogComplete: false, serverMissingFiles: 0,
+    serverVersion: null, requireAssetCache: false, importStats: null, scanStats: null, waiting: false, policy: null,
     persistence: 'idle' };
 };
 
 export function createAssetCacheManager({ environment = globalThis, doFetch, workerURL = '/js/asset-cache-worker.js',
-  swURL = '/asset-cache-sw.js', catalogURL = '/api/asset-cache/catalog', statusURL = '/api/asset-cache/status' } = {}) {
+  swURL = '/asset-cache-sw.js', statusURL = '/api/asset-cache/status' } = {}) {
   const env = environment;
   const state = initialState(env);
   const listeners = new Set();
@@ -30,7 +32,9 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   let operation = null;
   let backgroundTimer = null;
   let checkingStorage = null;
-  let checkingCatalog = null;
+  let summary = null;
+  let checkingSummary = null;
+  let summaryAt = 0;
   let persistenceRequest = null;
   const getState = () => ({ ...state, storage: { ...state.storage }, importStats: state.importStats && { ...state.importStats },
     scanStats: state.scanStats && { ...state.scanStats }, policy: state.policy && { ...state.policy } });
@@ -79,27 +83,71 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     });
   }
 
-  async function refreshCatalog() {
-    if (ownPlaying) return catalog;
-    if (checkingCatalog) return checkingCatalog;
-    checkingCatalog = (async () => {
+  const settledPhase = () => !catalog ? 'catalog-required' : !state.catalogCurrent ? 'catalog-stale'
+    : state.missingFiles || !state.catalogComplete ? 'idle' : 'ready';
+
+  async function refreshSummary({ force = false } = {}) {
+    if (checkingSummary) return checkingSummary;
+    if (!force && summary && Date.now() - summaryAt < 30000) return summary;
+    checkingSummary = (async () => {
       const abort = new env.AbortController();
       const timer = env.setTimeout(() => abort.abort(), 15000);
       try {
-        const response = await fetcher(catalogURL, { cache: 'no-cache', signal: abort.signal });
+        const response = await fetcher(statusURL, { cache: 'no-store', signal: abort.signal });
         if (!response.ok) throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
-        const next = validateAssetCatalog(await response.json());
-        if (ownPlaying) return catalog;
-        await swMessage('ASSET_CACHE_PIN', { catalog: next, playing: ownPlaying });
-        catalog = next;
-        patch({ version: next.version, totalFiles: next.totalFiles, totalBytes: next.totalBytes,
-          catalogComplete: next.complete, serverMissingFiles: next.missing.length,
-          importStats: state.version === next.version ? state.importStats : null });
+        const next = validateAssetCacheSummary(await response.json());
+        summary = next; summaryAt = Date.now();
+        patch({ catalogCurrent: catalogMatchesSummary(catalog, next), catalogComplete: next.complete,
+          serverMissingFiles: next.missingFiles, serverVersion: next.version,
+          requireAssetCache: !!next.requireAssetCache, policy: next.policy || null,
+          ...(!catalog ? { totalFiles: next.totalFiles, totalBytes: next.totalBytes,
+            missingFiles: next.totalFiles, missingBytes: next.totalBytes } : {}) });
         return next;
-      } catch (error) { throw error.code ? error : assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE', error); }
+      } catch (error) {
+        summary = null; summaryAt = 0;
+        patch({ catalogCurrent: false });
+        throw error.code ? error : assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE', error);
+      }
       finally { env.clearTimeout(timer); }
     })();
-    try { return await checkingCatalog; } finally { checkingCatalog = null; }
+    try { return await checkingSummary; } finally { checkingSummary = null; }
+  }
+
+  /** Cache Storage is the only directory source on reload, including older SW installations. */
+  async function localCatalog() {
+    const meta = await env.caches.open(ASSET_CACHE_META);
+    const origin = env.location.origin;
+    const latest = await (await meta.match(origin + ASSET_CACHE_LATEST_KEY))?.json();
+    if (!latest?.version) return null;
+    const response = await meta.match(origin + assetCacheCatalogKey(latest.version));
+    if (!response) return null;
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > MAX_MANIFEST_BYTES) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+    let value;
+    try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+    catch (error) { throw assetCacheError('ASSET_CACHE_BAD_CATALOG', error); }
+    const next = await verifyAssetCatalog(value, env.crypto);
+    if (next.version !== latest.version) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+    return next;
+  }
+
+  async function adoptCatalog(value, { restoring = false } = {}) {
+    const next = await verifyAssetCatalog(value, env.crypto);
+    if (!restoring && !catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+    if (ownPlaying && catalog && catalog.version !== next.version) throw assetCacheError('ASSET_CACHE_PLAYING');
+    await swMessage('ASSET_CACHE_PIN', { catalog: next, playing: ownPlaying });
+    const changed = catalog?.version !== next.version;
+    catalog = next;
+    patch({ version: next.version, hasCatalog: true, totalFiles: next.totalFiles, totalBytes: next.totalBytes,
+      catalogCurrent: catalogMatchesSummary(next, summary),
+      ...(changed ? { readyFiles: 0, readyBytes: 0, missingFiles: next.totalFiles, missingBytes: next.totalBytes, importStats: null } : {}) });
+    return next;
+  }
+
+  async function adoptMatchingLocalCatalog() {
+    if (ownPlaying || state.catalogCurrent) return;
+    const next = await localCatalog();
+    if (catalogMatchesSummary(next, summary)) await adoptCatalog(next);
   }
 
   function stopWorker(code = 'ASSET_CACHE_PAUSED') {
@@ -123,7 +171,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
             ...(scanStats ? { scanStats } : {}), ...(waiting === undefined ? {} : { waiting }) });
         } else if (data.type === 'done' || data.type === 'error') {
           const finished = task; task = null;
-          if (data.type === 'done') finished.resolve(getState());
+          if (data.type === 'done') finished.resolve(data.catalog ? { catalog: data.catalog } : getState());
           else finished.reject(assetCacheError(data.code || 'ASSET_CACHE_STORAGE_ERROR'));
         }
       };
@@ -138,7 +186,9 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   }
 
   async function assertMutable() {
-    if (ownPlaying || (await swMessage('ASSET_CACHE_CAN_MUTATE')).playing) throw assetCacheError('ASSET_CACHE_PLAYING');
+    const result = await swMessage('ASSET_CACHE_CAN_MUTATE');
+    patch({ playing: ownPlaying || !!result.playing });
+    if (state.playing) throw assetCacheError('ASSET_CACHE_PLAYING');
   }
 
   function passiveScan() {
@@ -156,9 +206,14 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     } else if (data?.type === 'ASSET_CACHE_UPDATED') passiveScan();
   }
 
-  async function initialize({ refresh = true } = {}) {
+  async function initialize() {
     if (initialized) {
-      if (refresh && !ownPlaying && !operation) return perform('scan', { refresh: true });
+      // Reopening the panel does not fetch or scan the directory. Recheck only the live-tab guard,
+      // since another playing tab may have closed without sending a final message.
+      if (!operation) {
+        try { const result = await swMessage('ASSET_CACHE_CAN_MUTATE'); patch({ playing: ownPlaying || !!result.playing }); }
+        catch { /* Explicit operations report SW failures; opening the dialog stays usable. */ }
+      }
       return getState();
     }
     if (initializing) return initializing;
@@ -173,21 +228,21 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           15000, 'ASSET_CACHE_SW_UNAVAILABLE');
         registration = await timeLimited(env.navigator.serviceWorker.ready, 15000, 'ASSET_CACHE_SW_UNAVAILABLE');
         env.navigator.serviceWorker.addEventListener('message', onSWMessage);
-        // Register the match guard immediately, including a reconnect directly into a match.
-        // Until this document has a catalog it uses the ordinary network path.
+        let restoreError = null;
+        try {
+          const local = await localCatalog();
+          // Pin before PLAYING so an older active SW can also restore a direct match reconnect.
+          if (local) await adoptCatalog(local, { restoring: true });
+        } catch (error) { restoreError = error.code || 'ASSET_CACHE_STORAGE_ERROR'; }
         const playback = await swMessage('ASSET_CACHE_PLAYING', { playing: ownPlaying });
         patch({ playing: ownPlaying || !!playback.playing });
-        await refreshCatalog();
-        if (!catalog) throw assetCacheError('ASSET_CACHE_PLAYING');
-        await runWorker('scan');
         initialized = true;
-        patch({ phase: state.missingFiles ? 'idle' : 'ready' });
+        let summaryError = null;
+        try { await refreshSummary(); }
+        catch (error) { summaryError = error.code || 'ASSET_CACHE_CATALOG_UNAVAILABLE'; }
+        if (catalog) await runWorker('scan');
+        patch({ phase: settledPhase(), error: restoreError || summaryError });
         await updateStorage();
-        // Status is optional UI information. Catalog/import remain available when online filling is disabled.
-        try {
-          const response = await timeLimited(fetcher(statusURL, { cache: 'no-store' }), 10000, 'ASSET_CACHE_CATALOG_UNAVAILABLE');
-          if (response.ok) patch({ policy: (await response.json()).policy || null });
-        } catch { /* Optional status endpoint must not disable local import. */ }
       } catch (error) {
         const paused = error.code === 'ASSET_CACHE_PLAYING' || error.code === 'ASSET_CACHE_PAUSED';
         patch({ phase: paused ? 'paused' : 'error', error: paused ? null : error.code || 'ASSET_CACHE_STORAGE_ERROR' });
@@ -198,14 +253,14 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   }
 
   async function ensureReady() {
-    await initialize({ refresh: false });
+    await initialize();
     if (!initialized) throw assetCacheError(state.error || 'ASSET_CACHE_UNSUPPORTED');
   }
 
   async function perform(action, { deep = false, file = null, refresh = false } = {}) {
     await ensureReady();
     if (operation) throw assetCacheError('ASSET_CACHE_BUSY');
-    const phase = action === 'import' ? 'importing' : action === 'download' ? 'downloading' : deep ? 'verifying' : 'checking';
+    const phase = action === 'import' || action === 'catalog' ? 'importing' : action === 'download' ? 'downloading' : deep ? 'verifying' : 'checking';
     const mutates = action !== 'scan' || deep;
     const job = { paused: false };
     operation = job;
@@ -216,9 +271,28 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
         if (mutates) {
           await assertMutable();
-          await refreshCatalog();
+          if (action !== 'clear') await refreshSummary({ force: true });
+          if (action === 'catalog') {
+            const result = await runWorker('read-catalog', { file, format: 'json' });
+            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+            await assertMutable();
+            await adoptCatalog(result.catalog);
+          } else if (action !== 'clear') {
+            await adoptMatchingLocalCatalog();
+            if (action === 'import' && !state.catalogCurrent) {
+              const result = await runWorker('read-catalog', { file, format: 'zip' });
+              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+              await assertMutable();
+              await adoptCatalog(result.catalog);
+            }
+            if (!catalog) throw assetCacheError('ASSET_CACHE_CATALOG_REQUIRED');
+            if (!state.catalogCurrent) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+          }
           await assertMutable();
-        } else if (refresh && !ownPlaying) await refreshCatalog();
+        } else if (refresh) {
+          await refreshSummary({ force: true });
+          await adoptMatchingLocalCatalog();
+        }
         if (!mutates) {
           const playback = await swMessage('ASSET_CACHE_CAN_MUTATE');
           patch({ playing: ownPlaying || !!playback.playing });
@@ -227,8 +301,8 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         if (action === 'clear') {
           await swMessage('ASSET_CACHE_CLEAR');
           patch({ readyFiles: 0, readyBytes: 0, missingFiles: state.totalFiles, missingBytes: state.totalBytes });
-        } else {
-          await runWorker(action, { deep, ...(file ? { file } : {}) });
+        } else if (catalog) {
+          await runWorker(action === 'catalog' ? 'scan' : action, { deep, ...(file ? { file } : {}) });
           if (action === 'import' || action === 'download') await swMessage('ASSET_CACHE_PRUNE');
         }
       };
@@ -237,7 +311,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         await run();
       });
       else await run();
-      patch({ phase: state.missingFiles ? 'idle' : 'ready', speedBps: 0, waiting: false });
+      patch({ phase: settledPhase(), speedBps: 0, waiting: false });
       return getState();
     } catch (error) {
       const code = job.paused ? 'ASSET_CACHE_PAUSED' : error.code || 'ASSET_CACHE_STORAGE_ERROR';
@@ -262,6 +336,20 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     importZip(file) {
       if (!(file instanceof env.Blob)) return Promise.reject(assetCacheError('ASSET_CACHE_ZIP_INVALID'));
       return perform('import', { file });
+    },
+    importCatalog(file) {
+      if (!(file instanceof env.Blob)) return Promise.reject(assetCacheError('ASSET_CACHE_BAD_CATALOG'));
+      return perform('catalog', { file });
+    },
+    async admission() {
+      // Fail open locally: optional mode remains usable when browser storage is unavailable.
+      // Required mode is enforced by the server and refuses an absent/partial report.
+      if (!state.supported || operation) return null;
+      try {
+        await scan({ refresh: true });
+        if (!catalog || !state.catalogCurrent || !state.catalogComplete || operation) return null;
+        return { schema: catalog.schema, version: catalog.version, readyFiles: state.readyFiles, readyBytes: state.readyBytes };
+      } catch { return null; }
     },
     pause, clear: () => perform('clear'),
     requestPersistence() {
@@ -309,7 +397,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           patch({ playing: ownPlaying || !!result.playing });
         } catch { /* No SW must never prevent entering a match. */ }
       }
-      if (!ownPlaying && !initialized && !initializing) await initialize({ refresh: false });
+      if (!ownPlaying && !initialized && !initializing) await initialize();
       // Do not apply catalog upgrades on this page automatically: assets/data modules may still
       // hold old manifests. Explicit operations in the lobby or a normal reload adopt the new catalog.
     },

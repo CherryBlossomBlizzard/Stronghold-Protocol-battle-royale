@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader } from '@zip.js/zip.js';
+import { assetCacheSummary } from '../shared/assetCache.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EDGE = process.env.CHROME_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
@@ -17,6 +18,7 @@ const PAGE = `<!doctype html><title>Asset cache fixture</title><link rel="icon" 
 <script type="module">
 import { createAssetCacheManager } from '/js/assetCache.js';
 const manager = createAssetCacheManager();
+if (location.search.includes('playing=1')) manager.setPlaying(true);
 window.cacheFixture = { manager, ready: manager.initialize(), state: () => manager.getState() };
 </script>`;
 
@@ -33,24 +35,27 @@ async function fixture(run) {
     ['/assets/audio/中 文.mp3', Buffer.from('1234567890')],
     ['/assets/local/spine/token/foo.skel', Buffer.from('local-token')],
   ]);
-  let version = 1, slow = false, failCatalog = false;
-  const downloads = [], ordinary = [], closed = [];
+  let slow = false, failSummary = false;
+  const downloads = [], ordinary = [], closed = [], catalogRequests = [], statusRequests = [];
   const catalog = () => {
     const files = [...contents].map(([url, body]) => ({ url, bytes: body.length, sha256: hash(body),
       type: url.endsWith('.png') ? 'image/png' : url.endsWith('.mp3') ? 'audio/mpeg' : 'application/octet-stream',
       aliases: url.includes('/audio/') ? ['/media/中 文'] : [] }));
-    return { schema: 1, version: hash(String(version)), app: 'fixture', files, totalFiles: files.length,
+    return { schema: 1, version: hash(JSON.stringify({ schema: 1, files })), app: 'fixture', files, totalFiles: files.length,
       totalBytes: files.reduce((sum, item) => sum + item.bytes, 0), complete: true, missing: [] };
   };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://fixture');
     if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end(PAGE); return; }
     if (url.pathname === '/api/asset-cache/catalog') {
-      res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-cache');
-      res.end(JSON.stringify(failCatalog ? {} : catalog())); return;
+      catalogRequests.push(req.url);
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' })); return;
     }
     if (url.pathname === '/api/asset-cache/status') {
-      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ policy: { enabled: true, totalBps: 1000000, clientBps: 500000 } })); return;
+      statusRequests.push(req.url);
+      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(failSummary ? {} : { ...assetCacheSummary(catalog()),
+        policy: { enabled: true, totalBps: 1000000, clientBps: 500000 } })); return;
     }
     if (url.pathname === '/api/asset-cache/file') {
       const target = url.searchParams.get('url'); const bytes = contents.get(target);
@@ -91,9 +96,10 @@ async function fixture(run) {
     await page.waitForFunction(() => window.cacheFixture);
     await page.evaluate(() => window.cacheFixture.ready);
     await page.waitForFunction(() => navigator.serviceWorker.controller);
-    await run({ page, browser, url, contents, downloads, ordinary, problems, closed, catalog,
-      setSlow: (value) => { slow = value; }, setFail: (value) => { failCatalog = value; },
-      upgrade: () => { version++; contents.set('/assets/a.png', Buffer.from('image-two')); } });
+    await run({ page, browser, url, contents, downloads, ordinary, problems, closed, catalog, catalogRequests, statusRequests,
+      setSlow: (value) => { slow = value; }, setFail: (value) => { failSummary = value; },
+      upgrade: () => { contents.set('/assets/a.png', Buffer.from('image-two')); } });
+    assert.deepEqual(catalogRequests, [], 'no full directory request, including cold start, import, reload and failure paths');
   } finally {
     await browser.close();
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
@@ -107,10 +113,15 @@ async function importBytes(page, bytes) {
   return page.evaluate((data) => window.cacheFixture.manager.importZip(new File([Uint8Array.from(data)], 'assets.zip')),
     [...bytes]);
 }
+const importCatalog = (page, value) => page.evaluate((catalog) => window.cacheFixture.manager.importCatalog(
+  new File([JSON.stringify(catalog)], 'catalog.json', { type: 'application/json' })), value);
 
 test('Edge caches full assets, audio aliases/ranges, reload persistence and only changed files after upgrade', opts, async () => {
-  await fixture(async ({ page, contents, downloads, ordinary, upgrade, problems }) => {
+  await fixture(async ({ page, contents, downloads, ordinary, upgrade, problems, catalog }) => {
     assert.equal((await state(page)).supported, true); assert.equal((await state(page)).readyFiles, 0);
+    assert.equal((await state(page)).phase, 'catalog-required');
+    await importCatalog(page, catalog());
+    assert.equal((await state(page)).readyFiles, 0, 'standalone directory import is not full precaching');
     await download(page);
     assert.equal((await state(page)).readyFiles, 3); assert.equal(downloads.length, 3);
     const bodies = await page.evaluate(async () => {
@@ -128,6 +139,9 @@ test('Edge caches full assets, audio aliases/ranges, reload persistence and only
     assert.equal((await state(page)).readyFiles, 3); assert.equal(downloads.length, 3);
     upgrade();
     await page.evaluate(() => window.cacheFixture.manager.scan());
+    assert.equal((await state(page)).phase, 'catalog-stale');
+    assert.match(await download(page).catch((error) => error.message), /ASSET_CACHE_STALE_CATALOG/);
+    await importCatalog(page, catalog());
     assert.equal((await state(page)).missingFiles, 1);
     await download(page); assert.equal(downloads.length, 4);
     assert.equal(downloads.at(-1), '/assets/a.png');
@@ -137,7 +151,8 @@ test('Edge caches full assets, audio aliases/ranges, reload persistence and only
 });
 
 test('Edge imports partial/old ZIP locally, refuses traversal, and deep verification repairs corrupt cache', opts, async () => {
-  await fixture(async ({ page, contents, downloads, ordinary, problems }) => {
+  await fixture(async ({ page, contents, downloads, ordinary, problems, catalog }) => {
+    await importCatalog(page, catalog());
     const entries = [...contents].map(([url, bytes]) => [url.slice(1), bytes]);
     const partial = await zipBytes([entries[0], [entries[1][0], 'wrong-data'], ['assets/obsolete.png', 'old'], ['manifest.json', '{}']]);
     await importBytes(page, partial);
@@ -162,7 +177,8 @@ test('Edge imports partial/old ZIP locally, refuses traversal, and deep verifica
 });
 
 test('Edge cross-tab playing guard pauses online filling, preserves files, releases locks and allows retries', opts, async () => {
-  await fixture(async ({ page, browser, url, downloads, setSlow, closed, problems }) => {
+  await fixture(async ({ page, browser, url, downloads, setSlow, closed, problems, catalog }) => {
+    await importCatalog(page, catalog());
     const second = await browser.newPage(); await second.goto(url);
     await second.waitForFunction(() => window.cacheFixture); await second.evaluate(() => window.cacheFixture.ready);
     await second.evaluate(() => window.cacheFixture.manager.setPlaying(true));
@@ -177,10 +193,49 @@ test('Edge cross-tab playing guard pauses online filling, preserves files, relea
     assert.equal((await state(page)).phase, 'paused');
     assert.equal((await state(page)).readyFiles, 0);
     await second.close();
+    await page.evaluate(() => window.cacheFixture.manager.initialize());
+    assert.equal((await state(page)).playing, false, 'closing the other playing tab releases the dialog guard');
     setSlow(false);
     await download(page);
     assert.equal((await state(page)).readyFiles, 3);
     assert.ok(downloads.length >= 3); assert.ok(closed.length <= 1);
     assert.deepEqual(problems, []);
+  });
+});
+
+test('Edge cold full-ZIP import, repeated panel opens and direct combat reload never request the online directory', opts, async () => {
+  await fixture(async ({ page, url, contents, downloads, ordinary, catalog, statusRequests, problems }) => {
+    assert.match(await download(page).catch((error) => error.message), /ASSET_CACHE_CATALOG_REQUIRED/);
+    const entries = [['manifest.json', JSON.stringify(catalog())], ...[...contents].map(([url, bytes]) => [url.slice(1), bytes])];
+    await importBytes(page, await zipBytes(entries));
+    assert.equal((await state(page)).phase, 'ready'); assert.equal((await state(page)).readyFiles, 3);
+    assert.deepEqual(downloads, []); assert.deepEqual(ordinary, []);
+    const before = statusRequests.length;
+    await page.evaluate(async () => { for (let i = 0; i < 20; i++) await window.cacheFixture.manager.initialize(); });
+    assert.equal(statusRequests.length, before, 'reopening sends only local SW messages');
+    await page.goto(url + '?playing=1');
+    await page.waitForFunction(() => window.cacheFixture); await page.evaluate(() => window.cacheFixture.ready);
+    assert.equal((await state(page)).readyFiles, 3); assert.equal((await state(page)).playing, true);
+    assert.equal(await page.evaluate(async () => (await fetch('/assets/a.png')).text()), 'image-one');
+    assert.deepEqual(ordinary, []); assert.deepEqual(problems, []);
+  });
+});
+
+test('Edge invalid, stale and missing ZIP directories cannot bootstrap or write assets; a summary failure can be retried locally', opts, async () => {
+  await fixture(async ({ page, contents, catalog, setFail, downloads, ordinary }) => {
+    const entry = [...contents].map(([url, bytes]) => [url.slice(1), bytes])[0];
+    assert.match(await importBytes(page, await zipBytes([entry])).catch((error) => error.message), /ASSET_CACHE_CATALOG_REQUIRED/);
+    const changed = catalog(); changed.files[0].sha256 = '0'.repeat(64);
+    assert.match(await importCatalog(page, changed).catch((error) => error.message), /ASSET_CACHE_BAD_CATALOG/);
+    const stale = catalog(); stale.files[0].url = '/assets/other.png';
+    stale.version = hash(JSON.stringify({ schema: stale.schema, files: stale.files }));
+    assert.match(await importBytes(page, await zipBytes([entry, ['manifest.json', JSON.stringify(stale)]])).catch((error) => error.message), /ASSET_CACHE_STALE_CATALOG/);
+    assert.equal((await state(page)).hasCatalog, false);
+    assert.equal(await page.evaluate(async () => (await (await caches.open('sp-asset-cache-v1')).keys()).length), 0);
+    setFail(true);
+    assert.match(await importCatalog(page, catalog()).catch((error) => error.message), /ASSET_CACHE_CATALOG_UNAVAILABLE/);
+    setFail(false); await importCatalog(page, catalog());
+    assert.equal((await state(page)).catalogCurrent, true); assert.equal((await state(page)).readyFiles, 0);
+    assert.deepEqual(downloads, []); assert.deepEqual(ordinary, []);
   });
 });

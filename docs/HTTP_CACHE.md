@@ -30,11 +30,11 @@
 
 ## Brotli 与压缩缓存
 
-`server/http/files.js` 支持标准 Brotli / gzip 协商：同权重优先 Brotli，显式排除和权重生效，不支持时仍可原文传输。Brotli quality 5，gzip level 6；文本小于 512 B 通常不压缩，素材目录 API 保持其原有小响应也可压缩的行为。图片 / 压缩音频不重复压缩，音频 Range 功能保留。
+`server/http/files.js` 支持标准 Brotli / gzip 协商：同权重优先 Brotli，显式排除和权重生效，不支持时仍可原文传输。Brotli quality 5，gzip level 6；文本小于 512 B 通常不压缩。图片 / 压缩音频不重复压缩，音频 Range 功能保留。
 
 - 每个编码表示有独立 ETag，`Vary: Accept-Encoding`，HEAD 与 GET 的表示长度一致；304 不发正文。Range 使用原文与现有 206 / 416 / If-Range 规则。
 - HTTP 压缩最多同时执行两项，重复请求共享同一计算；gzip / Brotli 结果按字节做 LRU，静态文件缓存上限 96 MiB。普通磁盘文件超过 8 MiB 时压缩为流；内容版本需要先校验字节，验证缓冲 LRU 上限 32 MiB、单文件上限 16 MiB。
-- 素材目录 API 不再同步 gzip 阻塞事件循环，使用同一异步压缩队列，并保留现有目录快照 / 完整度校验 / 8 Mbps 填充下载限制。目录 JSON 自身使用 `no-cache` 和独立表示 ETag。
+- 完整素材目录的线上出口已关闭：`/api/asset-cache/catalog` 在构建 / 压缩目录之前返回小型 403。目录从本地 ZIP / JSON 导入，`/api/asset-cache/status` 只发送小摘要；详见 [ASSET_CACHE](ASSET_CACHE.md) 与 [DEV-20261010-12](development/records/2026-10-10-12-offline-catalog-admission.md)。8 Mbps 文件补齐限制独立保留。
 
 应急开关（启动前的环境变量）：`SP_HTTP_RUNTIME_CACHE=0` 关闭首页版本目录，`SP_HTTP_BROTLI=0` 回退为 gzip / 原文。两者独立；修改后重启并刷新页面。Windows PowerShell 示例：
 

@@ -28,6 +28,7 @@ test('Edge title icons retain their shape; cache controls are visible and persis
     report.browser = await browser.version();
     const page = await browser.newPage();
     page.setDefaultTimeout(10000);
+    page.setDefaultNavigationTimeout(30000);
     page.on('pageerror', (error) => errors.push(error.message));
     await page.evaluateOnNewDocument(() => {
       // Permission policy is the browser's decision. Inject all outcomes to exercise the UI deterministically.
@@ -42,7 +43,8 @@ test('Edge title icons retain their shape; cache controls are visible and persis
       } });
     });
     await page.setViewport({ width: 1920, height: 1080 });
-    await page.goto(server.url, { waitUntil: 'networkidle0' });
+    // The background summary scan may still hash deployed assets; UI readiness is asserted below.
+    await page.goto(server.url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.title-login');
     // A fresh browser has no callsign yet and cannot handshake; reproduce the user's populated status row.
     await page.evaluate(async () => {
@@ -93,8 +95,10 @@ test('Edge title icons retain their shape; cache controls are visible and persis
     await page.click(open);
     await page.waitForFunction(async () => {
       const state = (await import('/js/assetCache.js')).assetCache.getState();
-      return state.version && !['initializing', 'checking'].includes(state.phase);
+      return state.serverVersion && !['initializing', 'checking'].includes(state.phase);
     });
+    assert.equal(await page.$eval('[data-testid="asset-cache-download"]', (el) => el.disabled), true, 'a cold browser needs a local catalog first');
+    assert.ok(await page.$('[data-testid="asset-cache-catalog-import"]'), 'standalone catalog import is visible');
     assert.match(await page.$eval('[data-testid="asset-cache-import"]', (el) => el.innerText), /强烈推荐/);
     assert.notEqual(await page.$eval(persist, (el) => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)');
     await page.click(persist);

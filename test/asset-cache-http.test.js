@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { gunzipSync, brotliDecompressSync } from 'node:zlib';
 import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
 import { createAssetCacheHandler } from '../server/http/assetCache.js';
@@ -22,7 +21,7 @@ async function fixture(run, { limits, trustProxy = false, sizes = [32_000, 32_00
   const files = sizes.map((bytes, i) => ({ url: `/assets/test-${i}.png`, bytes,
     sha256: sha256(Buffer.alloc(bytes, i + 1)), type: 'image/png', aliases: [] }));
   for (let i = 0; i < files.length; i++) await fs.writeFile(path.join(publicDir, files[i].url), Buffer.alloc(files[i].bytes, i + 1));
-  const catalog = { schema: 1, version: sha256(JSON.stringify(files)), app: 'test', files,
+  const catalog = { schema: 1, version: sha256(JSON.stringify({ schema: 1, files })), app: 'test', files,
     totalFiles: files.length, totalBytes: sizes.reduce((sum, value) => sum + value, 0), complete: true, missing: [] };
   let builds = 0;
   const assetCache = createAssetCacheHandler({ publicDir, dataDir: root, log, limits, trustProxy,
@@ -57,53 +56,58 @@ function request(server, url, { method = 'GET', headers = {}, onResponse, onChun
 const downloadURL = (entry) => `/api/asset-cache/file?url=${encodeURIComponent(entry.url)}&hash=${entry.sha256}`;
 const errorOf = (res) => JSON.parse(res.body.toString()).error;
 
-test('pre-cache status/catalog share one snapshot; gzip, conditional GET and HEAD preserve metadata', async () => {
-  await fixture(async ({ server, catalog, builds }) => {
-    const [status, index] = await Promise.all([request(server, '/api/asset-cache/status'), request(server, '/api/asset-cache/catalog')]);
+test('pre-cache status exposes only a tiny summary and shares the immutable snapshot with admission', async () => {
+  await fixture(async ({ server, catalog, builds, assetCache }) => {
+    assert.equal(assetCache.currentSummary(), null);
+    const [status, expected] = await Promise.all([request(server, '/api/asset-cache/status'), assetCache.summary()]);
     const report = JSON.parse(status.body);
     assert.equal(report.totalBytes, catalog.totalBytes); assert.equal(report.totalFiles, 2);
     assert.equal(report.policy.totalBps, 1_000_000); assert.equal(report.policy.clientBps, 500_000);
     assert.equal(report.policy.activeDownloads, 0); assert.equal(builds(), 1);
     assert.equal(status.headers['cache-control'], 'no-store');
-    assert.deepEqual(JSON.parse(index.body), catalog); assert.equal(index.headers['cache-control'], 'no-cache');
-    const gz = await request(server, '/api/asset-cache/catalog', { headers: { 'Accept-Encoding': 'gzip' } });
-    assert.equal(gz.headers['content-encoding'], 'gzip'); assert.deepEqual(JSON.parse(gunzipSync(gz.body)), catalog);
-    const hit = await request(server, '/api/asset-cache/catalog', { headers: { 'If-None-Match': index.headers.etag } });
-    assert.equal(hit.status, 304); assert.equal(hit.body.length, 0);
-    const head = await request(server, '/api/asset-cache/catalog', { method: 'HEAD' });
-    assert.equal(head.body.length, 0); assert.equal(head.headers['content-length'], index.headers['content-length']);
+    assert.equal(report.version, catalog.version); assert.equal(report.complete, true);
+    assert.equal(report.requireAssetCache, false); assert.equal(report.catalogSource, 'local-import');
+    for (const key of ['files', 'aliases', 'missing', 'warnings']) assert.equal(report[key], undefined);
+    assert.ok(status.body.length < 1024, 'summary size stays independent of full file/alias count');
+    assert.equal(expected, assetCache.currentSummary());
+    const head = await request(server, '/api/asset-cache/status', { method: 'HEAD' });
+    assert.equal(head.body.length, 0); assert.equal(head.headers['content-length'], status.headers['content-length']);
     assert.equal(builds(), 1);
   });
 });
 
-test('catalog HTTP validators change for completeness metadata even when asset content is unchanged', async () => {
+test('summary reports server completeness independently of the reusable file-content version', async () => {
   await fixture(async ({ server, catalog, publicDir, root, assetCache }) => {
-    const before = await request(server, '/api/asset-cache/catalog');
+    const before = await request(server, '/api/asset-cache/status');
     const next = { ...catalog, complete: false, missing: [{ url: '/assets/missing.png', reason: 'missing file' }] };
     assetCache.close();
     const replacement = createAssetCacheHandler({ publicDir, dataDir: root, log, buildCatalog: async () => next });
     server.removeAllListeners('request');
     server.on('request', createRequestHandler({ assetCache: replacement, log, serveStatic: async () => {} }));
     try {
-      const after = await request(server, '/api/asset-cache/catalog', { headers: { 'If-None-Match': before.headers.etag } });
-      assert.equal(after.status, 200); assert.notEqual(after.headers.etag, before.headers.etag);
+      const after = await request(server, '/api/asset-cache/status');
+      assert.equal(after.status, 200); assert.equal(JSON.parse(before.body).complete, true);
       assert.equal(JSON.parse(after.body).version, catalog.version);
       assert.equal(JSON.parse(after.body).complete, false);
+      assert.equal(JSON.parse(after.body).missingFiles, 1);
     } finally { replacement.close(); }
   });
 });
 
-test('pre-cache catalog negotiates Brotli and keeps representation validators separate', async () => {
-  await fixture(async ({ server, catalog }) => {
-    const br = await request(server, '/api/asset-cache/catalog', { headers: { 'Accept-Encoding': 'gzip, br' } });
-    const gzip = await request(server, '/api/asset-cache/catalog', { headers: { 'Accept-Encoding': 'br;q=0,gzip' } });
-    assert.equal(br.headers['content-encoding'], 'br'); assert.equal(gzip.headers['content-encoding'], 'gzip');
-    assert.deepEqual(JSON.parse(brotliDecompressSync(br.body)), catalog);
-    assert.notEqual(br.headers.etag, gzip.headers.etag);
-    const head = await request(server, '/api/asset-cache/catalog', { method: 'HEAD', headers: { 'Accept-Encoding': 'br' } });
-    assert.equal(head.body.length, 0); assert.equal(head.headers['content-length'], br.headers['content-length']);
-    assert.equal((await request(server, '/api/asset-cache/catalog', { headers: { 'Accept-Encoding': 'br', 'If-None-Match': br.headers.etag } })).status, 304);
-    assert.equal((await request(server, '/api/asset-cache/catalog', { headers: { 'Accept-Encoding': 'gzip', 'If-None-Match': br.headers.etag } })).status, 200);
+test('cold and legacy directory requests always receive a tiny refusal without constructing the catalog', async () => {
+  await fixture(async ({ server, builds }) => {
+    const responses = await Promise.all(Array.from({ length: 50 }, (_, i) => request(server, '/api/asset-cache/catalog?legacy=1', {
+      headers: { 'Accept-Encoding': i % 2 ? 'br, gzip' : 'gzip', 'If-None-Match': '"old-catalog"' },
+    })));
+    for (const response of responses) {
+      assert.equal(response.status, 403); assert.equal(errorOf(response), 'ASSET_CACHE_CATALOG_LOCAL_ONLY');
+      assert.equal(response.headers['content-encoding'], undefined);
+      assert.ok(response.body.length < 128); assert.equal(response.headers['cache-control'], 'no-store');
+    }
+    assert.ok(responses.reduce((bytes, response) => bytes + response.body.length, 0) < 6400);
+    const head = await request(server, '/api/asset-cache/catalog', { method: 'HEAD' });
+    assert.equal(head.status, 403); assert.equal(head.body.length, 0);
+    assert.equal(builds(), 0, 'directory spam cannot trigger a disk/hash scan or compression work');
   });
 });
 
@@ -129,7 +133,7 @@ test('pre-cache downloads only exact catalog paths/hashes, full uncompressed res
 
 test('changed and missing files never masquerade as the catalog hash', async () => {
   await fixture(async ({ server, publicDir, files }) => {
-    await request(server, '/api/asset-cache/catalog');
+    await request(server, '/api/asset-cache/status');
     const file = path.join(publicDir, files[0].url);
     await fs.writeFile(file, Buffer.alloc(files[0].bytes, 99));
     const changed = await request(server, downloadURL(files[0]));
@@ -141,7 +145,7 @@ test('changed and missing files never masquerade as the catalog hash', async () 
 
 test('a file replaced by a symlink after catalog construction is refused', async (t) => {
   await fixture(async ({ server, publicDir, files }) => {
-    await request(server, '/api/asset-cache/catalog');
+    await request(server, '/api/asset-cache/status');
     const file = path.join(publicDir, files[0].url);
     await fs.unlink(file);
     try { await fs.symlink(path.join(publicDir, files[1].url), file, 'file'); }

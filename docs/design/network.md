@@ -2,6 +2,11 @@
 
 Part of [DESIGN.md](../DESIGN.md) (the index; section numbers are global).
 
+Capacity-fork asset transport: full catalogs are imported locally from an existing ZIP or standalone JSON;
+the server only exposes a tiny summary, and refuses the former full-catalog route. Cache persistence,
+hash/version verification and per-page match pins are specified in [ASSET_CACHE.md](../ASSET_CACHE.md),
+with decision [D023](../development/DECISIONS.md#d023). This does not change battle simulation or wire v1 positions.
+
 ## 8. Network protocol (shared/protocol.js is normative)
 
 Transport: one WebSocket per tab at `/ws`. Business objects remain `{ t: '<type>', ...payload }`; `hello` / `welcome` negotiate compact position arrays independently for each connection, with original JSON for older peers. The complete versioned positions, enums, UTF-8 restoration tool and fallback rules are in [WIRE_PROTOCOL.md](../WIRE_PROTOCOL.md). Standard `permessage-deflate` retains the server's per-connection compression context. Client requests may carry `rid` (request id); the server's direct reply echoes `rid` (`ok`, a requested `lobby.state` view, or `error`). Server pushes have no `rid`. Max frame 64 KB inbound **after decompression**; rate limit 40 msgs/s per connection (excess dropped with `error RATE`). Ordinary public changes coalesce at 200 ms (maximum 5 Hz), identical views are deduplicated; explicit forced resyncs remain immediate.
