@@ -9,7 +9,7 @@ import { t } from '../../../shared/i18n.js';
 const viewers = new Set();
 let opened = false;
 const show = (value) => { opened = value; for (const fn of viewers) fn(value); };
-const active = (phase) => ['initializing', 'checking', 'verifying', 'downloading', 'importing'].includes(phase);
+const active = (phase) => ['initializing', 'checking', 'verifying', 'downloading', 'importing', 'updating-catalog'].includes(phase);
 
 export function formatCacheBytes(bytes = 0) {
   const n = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
@@ -50,7 +50,9 @@ export function cacheErrorText(code) {
     case 'ASSET_CACHE_ZIP_TOO_LARGE':
     case 'ASSET_CACHE_FILE_TOO_LARGE': return t('无法读取素材包，请选择本站提供的 ZIP 素材包。');
     case 'ASSET_CACHE_ONLINE_DISABLED': return t('服主已关闭在线补齐，请使用本地素材包导入。');
-    case 'ASSET_CACHE_STALE_CATALOG': return t('本地目录与服务器版本不符，请导入当前完整素材包或目录 JSON；已缓存素材可继续复用。');
+    case 'ASSET_CACHE_STALE_CATALOG': return t('本地目录与服务器版本不符，请导入当前完整素材包或目录 JSON；已有缓存时也可手动更新目录。');
+    case 'ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE': return t('手动更新目录需要已有的本地目录和素材缓存，请先导入本地素材包。');
+    case 'ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED': return t('目录更新请求过于频繁，请等待冷却结束后再试。');
     case 'ASSET_CACHE_BUSY': return t('另一个页面正在管理素材缓存，请稍后重试。');
     case 'ASSET_CACHE_PLAYING': return t('对局期间暂停批量缓存，返回大厅后可继续。');
     case 'ASSET_CACHE_DOWNLOAD_FAILED': return t('下载中断，已完成文件保留，请稍后继续。');
@@ -65,6 +67,7 @@ function phaseText(phase) {
     case 'verifying': return t('正在检查缓存');
     case 'importing': return t('正在导入本地包');
     case 'downloading': return t('正在补齐缺项');
+    case 'updating-catalog': return t('正在更新素材目录');
     case 'paused': return t('已暂停，可继续');
     case 'ready': return t('当前素材已缓存完整');
     case 'catalog-required': return t('需要导入本地素材目录');
@@ -98,14 +101,23 @@ function persistenceText(state) {
 
 export function AssetCacheHost() {
   const [open, setOpen] = useState(opened);
+  const [now, setNow] = useState(Date.now);
   const state = useAssetCache();
   const input = useRef(null);
   const catalogInput = useRef(null);
   useEffect(() => { viewers.add(setOpen); return () => viewers.delete(setOpen); }, []);
+  useEffect(() => {
+    if (!open || !(state.catalogUpdateRetryAt > now)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(1000, state.catalogUpdateRetryAt - now));
+    return () => clearTimeout(timer);
+  }, [open, state.catalogUpdateRetryAt, now]);
   if (!open) return null;
   const busy = active(state.phase);
   const disabled = busy || !state.supported || state.playing;
   const indexed = state.hasCatalog && state.catalogCurrent;
+  const canUpdateCatalog = state.hasCatalog && !!state.serverVersion && state.version !== state.serverVersion && !state.catalogCurrent
+    && state.readyFiles > 0 && state.readyBytes > 0;
+  const retrySeconds = Math.max(0, Math.ceil(((state.catalogUpdateRetryAt || 0) - Math.max(now, Date.now())) / 1000));
   const ready = state.readyFiles || 0, total = state.totalFiles || 0;
   const percent = total ? Math.min(100, 100 * ready / total) : 0;
   const run = (fn) => Promise.resolve().then(fn).catch(() => {});
@@ -129,7 +141,7 @@ export function AssetCacheHost() {
       width="min(7.8rem, 94vw)" onClose=${() => show(false)}
       actions=${html`<${Button} variant="secondary" onClick=${() => show(false)}>${t('关闭')}<//>`}>
     <div class="asset-cache">
-      <p class="asset-cache__intro">${t('完整素材包自带目录，只在本机解压和保存。也可单独导入目录 JSON，再补齐缺项；服务器仅校验版本，不提供完整目录下载。')}</p>
+      <p class="asset-cache__intro">${t('完整素材包自带目录，只在本机解压和保存。也可单独导入目录 JSON；已有缓存且目录版本落后时，可手动限速更新目录。')}</p>
       <div class="asset-cache__summary" aria-live="polite">
         <strong>${phaseText(state.phase)}</strong>
         <span class="num">${t('已缓存 {ready} / {total} 个文件', { ready, total })}</span>
@@ -141,6 +153,12 @@ export function AssetCacheHost() {
         <span>${t('服务器目录版本')}：${state.serverVersion
           ? html`<code data-testid="asset-cache-server-version">${state.serverVersion}</code>`
           : t('尚未校验')}</span>
+        ${canUpdateCatalog ? html`<div class="asset-cache__catalog-update">
+          <${Button} variant="secondary" size="sm" icon="download"
+              disabled=${disabled || state.policy?.enabled === false || retrySeconds > 0}
+              onClick=${() => run(() => assetCache.updateCatalog())} data-testid="asset-cache-catalog-update">${t('手动更新目录（限速）')}<//>
+          ${retrySeconds > 0 ? html`<span role="status">${t('请等待 {n} 秒后再试', { n: retrySeconds })}</span>` : null}
+        </div>` : null}
       </div>
       <progress class="asset-cache__progress" max="100" value=${percent} aria-label=${t('缓存进度')}></progress>
       <div class="asset-cache__details">
@@ -153,7 +171,7 @@ export function AssetCacheHost() {
       </div>
       ${state.playing ? html`<p class="asset-cache__warning" role="status">${t('对局期间暂停批量缓存，返回大厅后可继续。')}</p>` : null}
       ${state.serverMissingFiles > 0 ? html`<p class="asset-cache__warning">${t('服务器素材存在缺项，只能缓存当前可用文件，请联系服主补齐。')}</p>` : null}
-      ${state.requireAssetCache ? html`<p class="asset-cache__warning" role="status">${t('服主要求完整预缓存：当前版本素材全部缓存后，才可创建、加入、最快匹配或观战。')}</p>` : null}
+      ${state.requireAssetCache ? html`<p class="asset-cache__warning" role="status">${t('服主要求完整预缓存：当前版本素材全部缓存后，才可创建、加入、最快匹配或观战。')} ${t('完整的资源包将包含目录 JSON，无需单独导入。')}</p>` : null}
       ${!state.supported ? html`<p class="asset-cache__warning">${cacheErrorText('ASSET_CACHE_UNSUPPORTED')}</p>` : null}
       ${error && state.supported ? html`<p class="asset-cache__warning" role="alert">${cacheErrorText(error)}</p>` : null}
       <input ref=${input} type="file" accept=".zip,application/zip" class="asset-cache__file" onChange=${importFile} tabindex="-1" />
@@ -163,7 +181,7 @@ export function AssetCacheHost() {
           ${t('导入本地素材包')}<span class="asset-cache__recommend">${t('强烈推荐')}</span><//>
         <${Button} variant="secondary" icon="folder" disabled=${disabled} onClick=${() => catalogInput.current?.click()} data-testid="asset-cache-catalog-import">${t('导入目录 JSON')}<//>
         <${Button} variant="secondary" icon="download" disabled=${disabled || !indexed || !state.missingFiles || state.policy?.enabled === false}
-            onClick=${() => run(() => assetCache.downloadMissing())} data-testid="asset-cache-download">${t('在线补齐缺项')}<//>
+            onClick=${() => run(() => assetCache.downloadMissing())} data-testid="asset-cache-download">${t('在线补齐缺项（限速）')}<//>
         ${busy ? html`<${Button} variant="secondary" onClick=${() => assetCache.pause()} data-testid="asset-cache-pause">${t('暂停')}<//>` : null}
       </div>
       <p class="asset-cache__warning">${t('从服务器直接下载所有资源非常缓慢，推荐从公告中提供的素材包下载方式中下载')}</p>

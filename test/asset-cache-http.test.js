@@ -7,6 +7,7 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
+import { gunzipSync } from 'node:zlib';
 import { createAssetCacheHandler } from '../server/http/assetCache.js';
 import { createRequestHandler } from '../server/http/routes.js';
 import { CacheDownloadLimiter, assetCacheLimitOptions } from '../server/http/cacheLimiter.js';
@@ -14,7 +15,8 @@ import { CacheDownloadLimiter, assetCacheLimitOptions } from '../server/http/cac
 const log = { warn() {}, error() {}, debug() {} };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture(run, { limits, trustProxy = false, sizes = [32_000, 32_000], failFirstBuild = false } = {}) {
+async function fixture(run, { limits, trustProxy = false, sizes = [32_000, 32_000], failFirstBuild = false,
+  catalogProperties = {}, updateNow } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-cache-http-'));
   const publicDir = path.join(root, 'public');
   await fs.mkdir(path.join(publicDir, 'assets'), { recursive: true });
@@ -22,9 +24,9 @@ async function fixture(run, { limits, trustProxy = false, sizes = [32_000, 32_00
     sha256: sha256(Buffer.alloc(bytes, i + 1)), type: 'image/png', aliases: [] }));
   for (let i = 0; i < files.length; i++) await fs.writeFile(path.join(publicDir, files[i].url), Buffer.alloc(files[i].bytes, i + 1));
   const catalog = { schema: 1, version: sha256(JSON.stringify({ schema: 1, files })), app: 'test', files,
-    totalFiles: files.length, totalBytes: sizes.reduce((sum, value) => sum + value, 0), complete: true, missing: [] };
+    totalFiles: files.length, totalBytes: sizes.reduce((sum, value) => sum + value, 0), complete: true, missing: [], ...catalogProperties };
   let builds = 0;
-  const assetCache = createAssetCacheHandler({ publicDir, dataDir: root, log, limits, trustProxy,
+  const assetCache = createAssetCacheHandler({ publicDir, dataDir: root, log, limits, trustProxy, updateNow,
     buildCatalog: async () => { builds++; if (failFirstBuild && builds === 1) throw new Error('test setup not ready'); return catalog; } });
   const server = http.createServer(createRequestHandler({ assetCache, log,
     serveStatic: async (req, res) => { res.writeHead(200, { 'Content-Length': 4 }); res.end('game'); } }));
@@ -55,6 +57,10 @@ function request(server, url, { method = 'GET', headers = {}, onResponse, onChun
 
 const downloadURL = (entry) => `/api/asset-cache/file?url=${encodeURIComponent(entry.url)}&hash=${entry.sha256}`;
 const errorOf = (res) => JSON.parse(res.body.toString()).error;
+const updateURL = (catalog, values = {}) => '/api/asset-cache/catalog-update?' + new URLSearchParams({
+  from: '0'.repeat(64), to: catalog.version, readyFiles: '1', readyBytes: '1', ...values,
+});
+const manualHeaders = { 'X-Asset-Cache-Update': 'manual' };
 
 test('pre-cache status exposes only a tiny summary and shares the immutable snapshot with admission', async () => {
   await fixture(async ({ server, catalog, builds, assetCache }) => {
@@ -109,6 +115,121 @@ test('cold and legacy directory requests always receive a tiny refusal without c
     assert.equal(head.status, 403); assert.equal(head.body.length, 0);
     assert.equal(builds(), 0, 'directory spam cannot trigger a disk/hash scan or compression work');
   });
+});
+
+test('catalog updates require an explicit GET with an exact stale-version and positive cache report', async () => {
+  await fixture(async ({ server, catalog, builds }) => {
+    const noHeader = await request(server, updateURL(catalog));
+    assert.equal(noHeader.status, 403); assert.equal(errorOf(noHeader), 'ASSET_CACHE_CATALOG_UPDATE_MANUAL_ONLY');
+    const head = await request(server, updateURL(catalog), { method: 'HEAD', headers: manualHeaders });
+    assert.equal(head.status, 405); assert.equal(head.headers.allow, 'GET'); assert.equal(head.body.length, 0);
+    for (const values of [{ from: '' }, { from: 'old' }, { to: '' }, { readyFiles: '0' }, { readyBytes: '0' },
+      { readyFiles: '-1' }, { readyFiles: '1.5' }, { readyBytes: '9007199254740992' }, { readyBytes: '01' }]) {
+      const invalid = await request(server, updateURL(catalog, values), { headers: manualHeaders });
+      assert.equal(invalid.status, 400); assert.equal(errorOf(invalid), 'ASSET_CACHE_INVALID_REQUEST');
+      assert.ok(invalid.body.length < 128);
+    }
+    for (const extra of ['&from=' + '1'.repeat(64), '&to=' + catalog.version, '&readyFiles=1', '&readyBytes=1', '&extra=1']) {
+      assert.equal((await request(server, updateURL(catalog) + extra, { headers: manualHeaders })).status, 400);
+    }
+    assert.equal((await request(server, updateURL(catalog), { headers: { ...manualHeaders, Range: 'bytes=0-10' } })).status, 400);
+    const matched = await request(server, updateURL(catalog, { from: catalog.version }), { headers: manualHeaders });
+    assert.equal(matched.status, 409); assert.equal(errorOf(matched), 'ASSET_CACHE_CATALOG_ALREADY_CURRENT');
+    assert.equal(builds(), 0, 'cold/empty/non-manual/malformed calls cannot build or serialize a large directory');
+    const staleTarget = await request(server, updateURL(catalog, { to: '1'.repeat(64) }), { headers: manualHeaders });
+    assert.equal(staleTarget.status, 409); assert.equal(errorOf(staleTarget), 'ASSET_CACHE_CATALOG_VERSION_MISMATCH');
+    assert.equal(builds(), 1);
+  });
+});
+
+test('manual updates return gzip or identity JSON, with one snapshot and a per-IP 30-second cooldown', async () => {
+  let now = 1000;
+  await fixture(async ({ server, catalog, builds, assetCache }) => {
+    const gzip = await request(server, updateURL(catalog), { headers: {
+      ...manualHeaders, 'Accept-Encoding': 'br, gzip', 'X-Forwarded-For': '203.0.113.1',
+    } });
+    assert.equal(gzip.status, 200); assert.equal(gzip.headers['content-encoding'], 'gzip');
+    assert.equal(gzip.headers['content-length'], String(gzip.body.length));
+    assert.equal(gzip.headers.vary, 'Accept-Encoding'); assert.equal(gzip.headers['x-accel-buffering'], 'no');
+    assert.equal(gzip.headers['cache-control'], 'no-store');
+    assert.deepEqual(JSON.parse(gunzipSync(gzip.body)), catalog);
+    assert.ok(gzip.body.length < Buffer.byteLength(JSON.stringify(catalog)) / 10);
+    const repeat = await request(server, updateURL(catalog), { headers: {
+      ...manualHeaders, 'X-Forwarded-For': '203.0.113.1',
+    } });
+    assert.equal(repeat.status, 429); assert.equal(errorOf(repeat), 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN');
+    assert.equal(repeat.headers['retry-after'], '30'); assert.ok(repeat.body.length < 128);
+    const identity = await request(server, updateURL(catalog), { headers: {
+      ...manualHeaders, 'Accept-Encoding': 'gzip;q=0, *;q=1', 'X-Forwarded-For': '203.0.113.2',
+    } });
+    assert.equal(identity.status, 200); assert.equal(identity.headers['content-encoding'], undefined);
+    assert.deepEqual(JSON.parse(identity.body), catalog);
+    assert.equal(builds(), 1); assert.equal(assetCache.policy().activeDownloads, 0);
+    now += 30_000;
+    const afterCooldown = await request(server, updateURL(catalog), { headers: {
+      ...manualHeaders, 'Accept-Encoding': 'gzip', 'X-Forwarded-For': '203.0.113.1',
+    } });
+    assert.equal(afterCooldown.status, 200); assert.deepEqual(afterCooldown.body, gzip.body);
+    assert.equal(builds(), 1);
+  }, { trustProxy: true, updateNow: () => now, catalogProperties: { warnings: ['test '.repeat(5000)] } });
+});
+
+test('catalog updates obey the online-disable setting and oversized JSON fails before streaming headers', async () => {
+  await fixture(async ({ server, catalog, builds, assetCache }) => {
+    const result = await request(server, updateURL(catalog), { headers: manualHeaders });
+    assert.equal(result.status, 503); assert.equal(errorOf(result), 'ASSET_CACHE_ONLINE_DISABLED');
+    assert.equal(builds(), 0); assert.equal(assetCache.policy().activeDownloads, 0);
+  }, { limits: { totalBps: 0 } });
+  await fixture(async ({ server, catalog, assetCache }) => {
+    const result = await request(server, updateURL(catalog), { headers: manualHeaders });
+    assert.equal(result.status, 503); assert.equal(errorOf(result), 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+    assert.ok(result.body.length < 128); assert.equal(assetCache.policy().activeDownloads, 0);
+  }, { catalogProperties: { warnings: ['x'.repeat(32 * 1024 * 1024)] } });
+});
+
+test('catalog and file downloads share the aggregate and per-IP byte ceilings over real HTTP', async () => {
+  for (const sameIp of [false, true]) await fixture(async ({ server, catalog, files, assetCache }) => {
+    const started = performance.now();
+    const [directory, file] = await Promise.all([
+      request(server, updateURL(catalog), { headers: { ...manualHeaders, 'X-Forwarded-For': '203.0.113.1' } }),
+      request(server, downloadURL(files[0]), { headers: { 'X-Forwarded-For': '203.0.113.2' } }),
+    ]);
+    const elapsed = performance.now() - started;
+    const minimum = (directory.body.length + file.body.length) / 120_000 * 1000 * 0.85;
+    assert.equal(directory.status, 200); assert.equal(file.status, 200);
+    assert.deepEqual(JSON.parse(directory.body), catalog); assert.equal(sha256(file.body), files[0].sha256);
+    assert.ok(elapsed >= minimum, `catalog transfer bypassed aggregate file budget (${elapsed} ms < ${minimum} ms)`);
+    assert.ok(elapsed < 3500, 'both responses continue to make progress under the same scheduler');
+    assert.equal(assetCache.policy().activeDownloads, 0);
+  }, { trustProxy: !sameIp, sizes: [80_000], catalogProperties: { warnings: ['x'.repeat(80_000)] },
+    limits: { totalBps: sameIp ? 1_000_000 : 120_000, clientBps: 120_000 } });
+});
+
+test('catalog updates share file concurrency slots, and cancellation releases the slot but retains cooldown', async () => {
+  await fixture(async ({ server, catalog, files, assetCache }) => {
+    let begin;
+    const begun = new Promise((resolve) => { begin = resolve; });
+    const slow = request(server, downloadURL(files[0]), { onResponse: begin });
+    await begun;
+    const busy = await request(server, updateURL(catalog), { headers: manualHeaders });
+    assert.equal(busy.status, 429); assert.equal(errorOf(busy), 'ASSET_CACHE_BUSY');
+    await slow;
+    let canceled = false; let busyFile;
+    await assert.rejects(request(server, updateURL(catalog), { headers: manualHeaders, onResponse: () => {
+      busyFile = request(server, downloadURL(files[0]));
+    }, onChunk: (_chunk, req) => {
+      if (!canceled) { canceled = true; req.destroy(new Error('test canceled')); }
+    } }), /test canceled|aborted/);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const fileResult = await busyFile;
+    // The cancellation and file request may race; either result is safe and no slot remains held.
+    assert.ok(fileResult.status === 200 || fileResult.status === 429);
+    assert.equal(assetCache.policy().activeDownloads, 0);
+    const cooldown = await request(server, updateURL(catalog), { headers: manualHeaders });
+    assert.equal(cooldown.status, 429); assert.equal(errorOf(cooldown), 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN');
+    assert.equal((await request(server, downloadURL(files[0]))).status, 200);
+  }, { sizes: [20_000], catalogProperties: { warnings: ['x'.repeat(120_000)] },
+    limits: { totalBps: 120_000, clientBps: 120_000, maxDownloads: 1 } });
 });
 
 test('pre-cache downloads only exact catalog paths/hashes, full uncompressed responses and safe GET/HEAD', async () => {
@@ -268,4 +389,23 @@ test('backpressure bounds the buffered chunk; drain resumes and shutdown cancels
   limiter.close(); await streaming;
   assert.equal(limiter.policy().activeDownloads, 0); assert.equal(response.destroyed, true);
   assert.equal(limiter.acquire('late-client'), null);
+});
+
+test('catalog buffers honor bounded backpressure and cancellation without copying the full body per client', async () => {
+  const limiter = new CacheDownloadLimiter({ totalBps: 1_000_000, clientBps: 1_000_000 });
+  const response = new EventEmitter(); const chunks = []; const body = Buffer.alloc(100_000, 7);
+  response.write = (chunk) => { chunks.push(chunk); return false; };
+  response.destroy = () => { response.destroyed = true; response.emit('close'); };
+  response.end = () => { response.writableEnded = true; response.emit('close'); };
+  const lease = limiter.acquire('buffer-client'); const streaming = lease.streamBuffer(body, response);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    assert.equal(chunks.length, 1); assert.ok(chunks[0].length <= 8192);
+    assert.equal(chunks[0].buffer, body.buffer, 'a response retains a bounded view of the shared immutable catalog');
+    assert.throws(() => lease.streamBuffer(Buffer.from('replacement'), response), /already streaming/);
+    response.emit('drain');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(chunks.length, 2); assert.equal(chunks[1][0], 7, 'invalid double-start cannot replace the active body');
+  } finally { limiter.close(); await streaming; }
+  assert.equal(limiter.policy().activeDownloads, 0); assert.equal(response.destroyed, true);
 });

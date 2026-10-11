@@ -1,20 +1,53 @@
-// Only the opt-in filling route is rate-limited. Game requests continue through static.js/media.js unchanged.
+// Explicit filling and manual stale-catalog updates share one rate limit. Game requests remain unchanged.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import { createAssetCacheCatalog, checkedAssetPath } from '../assetCacheCatalog.js';
 import { clientAddress } from '../net.js';
 import { parseTrustProxy } from './config.js';
 import { MIME } from './files.js';
-import { assetCacheSummary } from '../../shared/assetCache.js';
+import { assetCacheSummary, MAX_MANIFEST_BYTES } from '../../shared/assetCache.js';
 import { sendJson } from './common.js';
 import { CacheDownloadLimiter } from './cacheLimiter.js';
 
 export const ASSET_CACHE_PREFIX = '/api/asset-cache/';
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const POSITIVE_INTEGER = /^[1-9]\d*$/;
+const UPDATE_COOLDOWN_MS = 30_000;
+const MAX_UPDATE_CLIENTS = 4096;
+const gzipAsync = promisify(gzip);
 
 function failure(req, res, status, error) { sendJson(req, res, status, { error }); }
+
+function updateParameters(query) {
+  const params = new URLSearchParams(query);
+  const names = ['from', 'to', 'readyFiles', 'readyBytes'];
+  if ([...params].length !== names.length || names.some((name) => params.getAll(name).length !== 1)) return null;
+  const from = params.get('from'); const to = params.get('to');
+  if (!HASH_PATTERN.test(from || '') || !HASH_PATTERN.test(to || '')) return null;
+  for (const name of ['readyFiles', 'readyBytes']) {
+    const value = params.get(name);
+    if (!POSITIVE_INTEGER.test(value || '') || !Number.isSafeInteger(Number(value))) return null;
+  }
+  return { from, to };
+}
+
+function acceptsGzip(value) {
+  let wildcard = false;
+  for (const item of String(value || '').toLowerCase().split(',')) {
+    const [name, ...parameters] = item.trim().split(';');
+    const q = parameters.map((part) => part.trim()).find((part) => part.startsWith('q='));
+    const weight = q == null ? 1 : Number(q.slice(2));
+    const accepted = Number.isFinite(weight) && weight > 0 && weight <= 1;
+    if (name === 'gzip') return accepted;
+    if (name === '*') wildcard = accepted;
+  }
+  return wildcard;
+}
 
 function sameFile(a, b) {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
@@ -49,11 +82,14 @@ async function verifyAsset(handle, entry, canceled) {
 }
 
 export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trustProxy, buildCatalog = createAssetCacheCatalog,
-  requireAssetCache = () => false }) {
+  requireAssetCache = () => false, updateNow = () => performance.now() }) {
   const limiter = new CacheDownloadLimiter(limits);
   const proxy = trustProxy ?? parseTrustProxy(process.env.TRUST_PROXY);
   let pending = null;
   let current = null;
+  let rawCatalogBody = null;
+  let gzipCatalogBody = null;
+  const updateClients = new Map();
   // One immutable catalog per server lifetime, shared by the tiny summary and filling allowlist.
   // Failure is retryable (e.g. setup still copying files); a successful snapshot changes only after restart.
   async function snapshot() {
@@ -65,12 +101,76 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     return pending;
   }
 
+  async function catalogBody(catalog, compressed) {
+    if (!rawCatalogBody) {
+      const body = Buffer.from(JSON.stringify(catalog));
+      // A server directory must fit the same bounded JSON format accepted by ZIP/JSON import.
+      if (body.length > MAX_MANIFEST_BYTES) throw new Error('asset cache catalog exceeds the import size limit');
+      rawCatalogBody = body;
+    }
+    if (!compressed) return rawCatalogBody;
+    if (!gzipCatalogBody) gzipCatalogBody = gzipAsync(rawCatalogBody).catch((error) => { gzipCatalogBody = null; throw error; });
+    return gzipCatalogBody;
+  }
+
+  async function serveCatalogUpdate(req, res, query) {
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET'); failure(req, res, 405, 'ASSET_CACHE_CATALOG_UPDATE_GET_ONLY'); return;
+    }
+    if (req.headers['x-asset-cache-update'] !== 'manual') {
+      failure(req, res, 403, 'ASSET_CACHE_CATALOG_UPDATE_MANUAL_ONLY'); return;
+    }
+    const request = updateParameters(query);
+    if (!request || req.headers.range) { failure(req, res, 400, 'ASSET_CACHE_INVALID_REQUEST'); return; }
+    if (request.from === request.to) { failure(req, res, 409, 'ASSET_CACHE_CATALOG_ALREADY_CURRENT'); return; }
+    if (!limiter.policy().enabled) { failure(req, res, 503, 'ASSET_CACHE_ONLINE_DISABLED'); return; }
+    let state;
+    try { state = await snapshot(); } catch (error) {
+      log?.warn?.('[asset-cache] catalog unavailable', error.message);
+      res.setHeader('Retry-After', '5'); failure(req, res, 503, 'ASSET_CACHE_CATALOG_UNAVAILABLE'); return;
+    }
+    if (res.destroyed) return;
+    if (request.to !== current.version) { failure(req, res, 409, 'ASSET_CACHE_CATALOG_VERSION_MISMATCH'); return; }
+    const key = clientAddress(req, proxy).ip;
+    const now = updateNow();
+    for (const [client, until] of updateClients) if (until <= now) updateClients.delete(client);
+    const until = updateClients.get(key);
+    if (until > now) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((until - now) / 1000))));
+      failure(req, res, 429, 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN'); return;
+    }
+    // Do not evict live cooldowns: rotation across many claimed addresses must not restore old ones.
+    if (updateClients.size >= MAX_UPDATE_CLIENTS) {
+      res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return;
+    }
+    const lease = limiter.acquire(key);
+    if (!lease) { res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return; }
+    updateClients.set(key, now + UPDATE_COOLDOWN_MS);
+    const cancel = () => lease.release();
+    res.once('close', cancel);
+    try {
+      const compressed = acceptsGzip(req.headers['accept-encoding']);
+      const body = await catalogBody(state.catalog, compressed);
+      if (lease.released || res.destroyed) return;
+      const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length,
+        'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Vary: 'Accept-Encoding',
+        ...(compressed ? { 'Content-Encoding': 'gzip' } : {}) };
+      res.writeHead(200, headers);
+      await lease.streamBuffer(body, res);
+    } catch (error) {
+      if (!res.destroyed && !res.headersSent) failure(req, res, 503, 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+      else if (!res.destroyed) res.destroy();
+      log?.warn?.('[asset-cache] catalog update unavailable', error.message);
+    } finally { res.off('close', cancel); lease.release(); }
+  }
+
   async function serve(req, res, rawPath, query) {
-    // Refuse even legacy/cold clients, before expensive catalog construction. Never serve a full
-    // directory online: import manifest.json from a ZIP or a standalone owner-provided JSON instead.
+    // Legacy and cold routes remain closed. Only the distinct explicit stale-directory update
+    // route can transfer a full directory; opening/checking the panel never calls it.
     if (rawPath === `${ASSET_CACHE_PREFIX}catalog`) {
       failure(req, res, 403, 'ASSET_CACHE_CATALOG_LOCAL_ONLY'); return;
     }
+    if (rawPath === `${ASSET_CACHE_PREFIX}catalog-update`) { await serveCatalogUpdate(req, res, query); return; }
     if (rawPath !== `${ASSET_CACHE_PREFIX}status` && rawPath !== `${ASSET_CACHE_PREFIX}catalog` && rawPath !== `${ASSET_CACHE_PREFIX}file`) {
       failure(req, res, 404, 'ASSET_CACHE_ROUTE_NOT_FOUND'); return;
     }
@@ -128,6 +228,6 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     }
   }
 
-  return { serve, close: () => limiter.close(), policy: () => limiter.policy(),
+  return { serve, close: () => { limiter.close(); updateClients.clear(); }, policy: () => limiter.policy(),
     summary: async () => { await snapshot(); return current; }, currentSummary: () => current };
 }

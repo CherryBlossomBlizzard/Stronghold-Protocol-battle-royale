@@ -32,7 +32,7 @@ const request = (page, { t: type, ...fields }) => page.evaluate(async (type, fie
 
 async function fixture(t, real = false, reportName = 'report.json') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-admission-edge-'));
-  const report = { browser: '', directoryRequests: 0, fillRequests: 0, statusRequests: 0, ordinaryRequests: 0, layouts: [], cleanup: {} };
+  const report = { browser: '', directoryRequests: 0, manualDirectoryRequests: 0, fillRequests: 0, statusRequests: 0, ordinaryRequests: 0, layouts: [], cleanup: {} };
   let server, browser, page;
   const clients = [], errors = [];
   t.after(async () => {
@@ -59,7 +59,8 @@ async function fixture(t, real = false, reportName = 'report.json') {
     serverSettingsDir: dir, announcementsDir: path.join(dir, 'announcements'),
     ...(real ? {} : { assetCacheBuildCatalog: async () => catalog }) });
   server.server.on('request', (req) => {
-    if (req.url.startsWith('/api/asset-cache/catalog')) report.directoryRequests++;
+    if (req.url.split('?')[0] === '/api/asset-cache/catalog') report.directoryRequests++;
+    if (req.url.split('?')[0] === '/api/asset-cache/catalog-update') report.manualDirectoryRequests++;
     if (req.url.startsWith('/api/asset-cache/file')) report.fillRequests++;
     if (req.url.startsWith('/api/asset-cache/status')) report.statusRequests++;
     if (/^\/(?:assets|fonts|media)\//.test(req.url)) report.ordinaryRequests++;
@@ -117,6 +118,9 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   await page.click('[data-testid="asset-cache-open"]');
   await page.waitForSelector('.asset-cache-dialog');
   assert.match(await page.$eval('.asset-cache-dialog', (el) => el.innerText), /服主要求完整预缓存/);
+  assert.match(await page.$eval('.asset-cache-dialog', (el) => el.innerText), /完整的资源包将包含目录 JSON，无需单独导入/);
+  assert.equal(await page.$eval('[data-testid="asset-cache-download"]', (el) => el.innerText), '在线补齐缺项（限速）');
+  assert.equal(await page.$('[data-testid="asset-cache-catalog-update"]'), null, 'a cold browser cannot update a directory online');
   assert.equal(await page.$eval('[data-testid="asset-cache-catalog-status"]', (el) => el.innerText), '本地目录：未导入');
   assert.equal(await page.$('[data-testid="asset-cache-local-version"]'), null);
   assert.equal(await page.$eval('[data-testid="asset-cache-server-version"]', (el) => el.innerText), catalog.version);
@@ -224,6 +228,7 @@ test('Edge strict admission follows actual imported contents, eviction, hot poli
   assert.equal(resumed.requireAssetCache, true);
   assert.ok(server.lobby.roomOf(server.registry.byId(before)).match);
   assert.equal(report.directoryRequests, 0);
+  assert.equal(report.manualDirectoryRequests, 0, 'scan, import, verify and reopening never request an online catalog');
   assert.equal(report.fillRequests, 0, 'local ZIP import does not secretly trigger online fills');
   assert.deepEqual(errors, []);
   report.result = 'passed';
@@ -248,6 +253,7 @@ test('Edge displays a restored stale local catalog and distinguishes a failed se
   await page.waitForFunction(() => document.querySelector('[data-testid="asset-cache-catalog-status"]')?.innerText.includes('与服务器版本不符'));
   assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), oldCatalog.version);
   assert.equal(await page.$eval('[data-testid="asset-cache-server-version"]', (el) => el.innerText), catalog.version);
+  assert.equal(await page.$('[data-testid="asset-cache-catalog-update"]'), null, 'a persisted directory without cached assets cannot update online');
   await page.setRequestInterception(true);
   page.on('request', (req) => {
     if (new URL(req.url()).pathname === '/api/asset-cache/status') return req.respond({ status: 503, body: 'offline' });
@@ -261,6 +267,81 @@ test('Edge displays a restored stale local catalog and distinguishes a failed se
   assert.equal(await page.$eval('[data-testid="asset-cache-local-version"]', (el) => el.innerText), oldCatalog.version);
   assert.equal(report.directoryRequests, 0);
   assert.equal(report.fillRequests, 0);
+  assert.deepEqual(errors, []);
+  report.result = 'passed';
+});
+
+test('Edge explicitly updates an old directory once, reuses assets and admits only after a current delta import', {
+  skip: process.env.SP_E2E === '1' ? false : 'set SP_E2E=1 (uses Edge)', timeout: 90000,
+}, async (t) => {
+  const { dir, page, report, errors } = await fixture(t, false, 'manual-catalog-report.json');
+  const oldFiles = files.map((file, index) => index ? file : { ...file, sha256: hash('old image'), bytes: 9 });
+  const oldCatalog = { ...catalog, files: oldFiles,
+    version: hash(JSON.stringify({ schema: 1, files: oldFiles })), totalBytes: 14 };
+  // This is a real previous-install state: its complete directory and old, hash-addressed contents.
+  await page.evaluate(async (local) => {
+    const { assetContentKey, validatedCacheHeaders } = await import('/shared/assetCache.js');
+    const meta = await caches.open('sp-asset-cache-meta-v1');
+    await meta.put('/__sp_asset_cache__/latest', new Response(JSON.stringify({ version: local.version })));
+    await meta.put(`/__sp_asset_cache__/catalog/${local.version}`, new Response(JSON.stringify(local)));
+    const assets = await caches.open('sp-asset-cache-v1');
+    for (const [index, body] of ['old image', 'sound'].entries()) {
+      const entry = local.files[index];
+      const key = new Request(location.origin + assetContentKey(entry.sha256), { headers: {
+        'X-SP-Asset-SHA256': entry.sha256, 'X-SP-Asset-Bytes': String(entry.bytes),
+      } });
+      await assets.put(key, new Response(body, { headers: validatedCacheHeaders(entry) }));
+    }
+  }, oldCatalog);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.lobby-screen');
+  await page.evaluate(async () => {
+    const { assetCache } = await import('/js/assetCache.js');
+    const { net } = await import('/js/net.js');
+    await assetCache.initialize();
+    window.admissionFixture = { cache: assetCache, net };
+  });
+  assert.equal((await request(page, create)).code, 'ASSET_CACHE_REQUIRED', 'old full contents still fail strict admission');
+  await page.click('[data-testid="asset-cache-open"]');
+  await page.waitForSelector('[data-testid="asset-cache-catalog-update"]');
+  for (const deep of [false, true]) {
+    await page.evaluate((deep) => window.admissionFixture.cache.scan({ deep }).catch((error) => error.code), deep);
+  }
+  assert.equal(report.manualDirectoryRequests, 0, 'checking and deep verification do not silently update the catalog');
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 844, height: 390 }]) {
+    await page.setViewport(viewport);
+    const bounds = await page.$eval('.asset-cache-dialog', (el) => {
+      const body = el.querySelector('.modal__body');
+      return { overflow: body.scrollWidth > body.clientWidth + 2 };
+    });
+    assert.equal(bounds.overflow, false);
+    report.layouts.push({ screen: 'manual-catalog-update', ...viewport, ...bounds });
+    await page.screenshot({ path: path.join(OUT, `manual-catalog-${viewport.width}.png`) });
+  }
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.click('[data-testid="asset-cache-catalog-update"]');
+  await page.waitForFunction(() => {
+    const cache = window.admissionFixture.cache.getState();
+    return cache.catalogCurrent && !['checking', 'updating-catalog'].includes(cache.phase);
+  });
+  assert.equal(report.manualDirectoryRequests, 1);
+  assert.equal((await state(page)).version, catalog.version);
+  assert.equal((await state(page)).readyFiles, 1, 'the unchanged audio content was reused');
+  assert.equal((await request(page, create)).code, 'ASSET_CACHE_REQUIRED', 'updating only the directory grants no admission');
+  assert.equal(await page.$('[data-testid="asset-cache-catalog-update"]'), null, 'an up-to-date catalog cannot be downloaded again');
+  const writer = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
+  await writer.add('manifest.json', new Uint8ArrayReader(Buffer.from(JSON.stringify(catalog))), { useWebWorkers: false });
+  await writer.add(files[0].url.slice(1), new Uint8ArrayReader(contents.get(files[0].url)), { useWebWorkers: false });
+  const delta = path.join(dir, 'current-delta.zip');
+  await fs.writeFile(delta, await writer.close());
+  await (await page.$('input[type="file"][accept^=".zip"]')).uploadFile(delta);
+  await page.waitForFunction(() => window.admissionFixture.cache.getState().phase === 'ready');
+  assert.equal((await state(page)).readyFiles, catalog.totalFiles);
+  assert.equal((await request(page, create)).t, 'ok');
+  assert.equal((await request(page, { t: 'room.leave' })).t, 'ok');
+  assert.equal(report.directoryRequests, 0, 'the old unrestricted directory route stays unused');
+  assert.equal(report.manualDirectoryRequests, 1, 'delta import never downloads its already embedded directory');
+  assert.equal(report.fillRequests, 0, 'no automatic online asset repair');
   assert.deepEqual(errors, []);
   report.result = 'passed';
 });

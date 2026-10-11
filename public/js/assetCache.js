@@ -12,11 +12,13 @@ const initialState = (env) => {
       persistenceSupported: supported && typeof env.navigator?.storage?.persist === 'function' }, playing: false,
     hasCatalog: false, catalogCurrent: false, catalogComplete: false, serverMissingFiles: 0,
     serverVersion: null, requireAssetCache: false, importStats: null, scanStats: null, waiting: false, policy: null,
+    catalogUpdateRetryAt: 0,
     persistence: 'idle' };
 };
 
 export function createAssetCacheManager({ environment = globalThis, doFetch, workerURL = '/js/asset-cache-worker.js',
-  swURL = '/asset-cache-sw.js', statusURL = '/api/asset-cache/status' } = {}) {
+  swURL = '/asset-cache-sw.js', statusURL = '/api/asset-cache/status',
+  catalogUpdateURL = '/api/asset-cache/catalog-update' } = {}) {
   const env = environment;
   const state = initialState(env);
   const listeners = new Set();
@@ -257,10 +259,113 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     if (!initialized) throw assetCacheError(state.error || 'ASSET_CACHE_UNSUPPORTED');
   }
 
+  // This is deliberately called only by the explicit updateCatalog action. Checking, admission,
+  // initialization and imports must never turn a small status check into a directory download.
+  async function fetchCatalogUpdate(job) {
+    if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
+    const abort = new env.AbortController();
+    job.abort = abort;
+    const timer = env.setTimeout(() => abort.abort(), 120000);
+    patch({ catalogUpdateRetryAt: Date.now() + 30000 });
+    try {
+      const params = new URLSearchParams({ from: catalog.version, to: summary.version,
+        readyFiles: String(state.readyFiles), readyBytes: String(state.readyBytes) });
+      const response = await fetcher(`${catalogUpdateURL}?${params}`, { cache: 'no-store', signal: abort.signal,
+        headers: { 'X-Asset-Cache-Update': 'manual' } });
+      if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          const delay = /^\d+(?:\.\d+)?$/.test(retryAfter || '')
+            ? Number(retryAfter) * 1000 : Date.parse(retryAfter || '') - Date.now();
+          if (Number.isFinite(delay) && delay > 0) patch({ catalogUpdateRetryAt: Math.max(state.catalogUpdateRetryAt, Date.now() + delay) });
+          throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
+        }
+        if (response.status === 409) {
+          await refreshSummary({ force: true });
+          throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+        }
+        if (response.status === 503) {
+          // 503 also means catalogue construction/compression failed. Only the server's explicit
+          // small error code proves that the owner disabled online transfers.
+          let disabled = false;
+          if (response.body && Number(response.headers.get('Content-Length')) <= 4096) {
+            const reader = response.body.getReader();
+            const cancel = () => { reader.cancel().catch(() => {}); };
+            abort.signal.addEventListener('abort', cancel, { once: true });
+            try {
+              const chunks = []; let size = 0;
+              while (true) {
+                if (job.paused || abort.signal.aborted) break;
+                const { done, value } = await reader.read();
+                if (done) break;
+                size += value.byteLength;
+                if (size > 4096) break;
+                chunks.push(value);
+              }
+              if (size <= 4096 && !abort.signal.aborted && !job.paused) {
+                const bytes = new Uint8Array(size); let offset = 0;
+                for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+                disabled = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))?.error === 'ASSET_CACHE_ONLINE_DISABLED';
+              }
+            } catch { /* Unknown/unreadable server errors stay unavailable, not owner-disabled. */ }
+            finally {
+              abort.signal.removeEventListener('abort', cancel);
+              await reader.cancel().catch(() => {});
+              reader.releaseLock();
+            }
+          }
+          throw assetCacheError(disabled ? 'ASSET_CACHE_ONLINE_DISABLED' : 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+        }
+        throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
+      }
+      // Content-Length can be compressed. Always bound the *decoded* stream too, before JSON
+      // parsing or adoption, so gzip cannot bypass the same limit used by local ZIP/JSON imports.
+      if (Number(response.headers.get('Content-Length')) > MAX_MANIFEST_BYTES) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+      if (!response.body) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+      const reader = response.body.getReader();
+      const cancel = () => { reader.cancel().catch(() => {}); };
+      abort.signal.addEventListener('abort', cancel, { once: true });
+      const chunks = []; let size = 0;
+      try {
+        while (true) {
+          if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+          if (abort.signal.aborted) throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > MAX_MANIFEST_BYTES) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+          chunks.push(value);
+        }
+      } finally {
+        abort.signal.removeEventListener('abort', cancel);
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+      if (abort.signal.aborted) throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
+      const bytes = new Uint8Array(size); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      let value;
+      try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+      catch (error) { throw assetCacheError('ASSET_CACHE_BAD_CATALOG', error); }
+      return await verifyAssetCatalog(value, env.crypto);
+    } catch (error) {
+      if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED', error);
+      throw error.code ? error : assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE', error);
+    } finally {
+      env.clearTimeout(timer);
+      // Header/body validation can reject before acquiring a reader. Abort in every exit path
+      // too, releasing the server's shared transfer lease rather than leaving a response flowing.
+      abort.abort();
+      job.abort = null;
+    }
+  }
+
   async function perform(action, { deep = false, file = null, refresh = false } = {}) {
     await ensureReady();
     if (operation) throw assetCacheError('ASSET_CACHE_BUSY');
-    const phase = action === 'import' || action === 'catalog' ? 'importing' : action === 'download' ? 'downloading' : deep ? 'verifying' : 'checking';
+    const phase = action === 'catalog-update' ? 'updating-catalog' : action === 'import' || action === 'catalog' ? 'importing'
+      : action === 'download' ? 'downloading' : deep ? 'verifying' : 'checking';
     const mutates = action !== 'scan' || deep;
     const job = { paused: false };
     operation = job;
@@ -272,7 +377,25 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         if (mutates) {
           await assertMutable();
           if (action !== 'clear') await refreshSummary({ force: true });
-          if (action === 'catalog') {
+          if (action === 'catalog-update') {
+            if (!catalog) throw assetCacheError('ASSET_CACHE_CATALOG_REQUIRED');
+            if (state.catalogCurrent) return;
+            if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
+            await runWorker('scan');
+            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+            if (!state.readyFiles || !state.readyBytes) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE');
+            await assertMutable();
+            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+            const next = await fetchCatalogUpdate(job);
+            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+            // A deploy may have happened during the throttled transfer. Recheck the small summary
+            // and the cross-tab playing guard before writing metadata. Failure preserves the old pin.
+            await refreshSummary({ force: true });
+            if (!catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+            await assertMutable();
+            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+            await adoptCatalog(next);
+          } else if (action === 'catalog') {
             const result = await runWorker('read-catalog', { file, format: 'json' });
             if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
             await assertMutable();
@@ -302,7 +425,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           await swMessage('ASSET_CACHE_CLEAR');
           patch({ readyFiles: 0, readyBytes: 0, missingFiles: state.totalFiles, missingBytes: state.totalBytes });
         } else if (catalog) {
-          await runWorker(action === 'catalog' ? 'scan' : action, { deep, ...(file ? { file } : {}) });
+          await runWorker(action === 'catalog' || action === 'catalog-update' ? 'scan' : action, { deep, ...(file ? { file } : {}) });
           if (action === 'import' || action === 'download') await swMessage('ASSET_CACHE_PRUNE');
         }
       };
@@ -325,12 +448,14 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
 
   function pause() {
     if (operation) operation.paused = true;
+    operation?.abort?.abort();
     stopWorker();
     if (operation) patch({ phase: 'paused', speedBps: 0, waiting: false, error: null });
   }
   const scan = (options = {}) => operation && !options.deep ? Promise.resolve(getState()) : perform('scan', { refresh: true, ...options });
   const manager = {
     getState, state: getState, initialize, scan,
+    updateCatalog: () => perform('catalog-update'),
     setRequirement(value) { if (typeof value === 'boolean' && state.requireAssetCache !== value) patch({ requireAssetCache: value }); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     downloadMissing: () => perform('download'),

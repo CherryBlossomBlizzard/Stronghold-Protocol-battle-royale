@@ -6,6 +6,7 @@
 .asset-cache__catalog { display: flex; flex-direction: column; gap: .08rem; color: var(--text-md); line-height: 1.5; }
 .asset-cache__catalog strong { color: var(--text-hi); }
 .asset-cache__catalog code { font-size: calc(.14 * var(--t)); overflow-wrap: anywhere; user-select: text; }
+.asset-cache__catalog-update { display: flex; flex-wrap: wrap; gap: .08rem; align-items: center; }
 .asset-cache__progress { display: block; width: 100%; height: .1rem; border: 0; appearance: none; background: var(--line); accent-color: var(--mint-500); }
 .asset-cache__progress::-webkit-progress-bar { background: var(--line); }
 .asset-cache__progress::-webkit-progress-value { background: var(--mint-500); transition: width .15s; }

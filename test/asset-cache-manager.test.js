@@ -2,15 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createAssetCacheManager } from '../public/js/assetCache.js';
-import { ASSET_CACHE_LATEST_KEY, assetCacheCatalogKey, assetCacheSummary } from '../shared/assetCache.js';
+import { ASSET_CACHE_LATEST_KEY, MAX_MANIFEST_BYTES, assetCacheCatalogKey, assetCacheSummary } from '../shared/assetCache.js';
 
 const catalog = { schema: 1, files: [{ url: '/assets/a.png', bytes: 3,
   sha256: 'b'.repeat(64), type: 'image/png', aliases: [] }], totalFiles: 1, totalBytes: 3, complete: true, missing: [] };
 catalog.version = createHash('sha256').update(JSON.stringify({ schema: 1, files: catalog.files })).digest('hex');
 
-function fixture({ storage = {}, secure = true, persistedCatalog = true } = {}) {
-  const messages = [], work = [], listeners = new Map();
+function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpdateTimeout = false } = {}) {
+  const messages = [], work = [], listeners = new Map(), catalogUpdates = [];
   let catalogReads = 0, statusReads = 0, broken = false, playing = false, ready = 0;
+  let updateResponse = () => Response.json({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' }, { status: 403 });
   let serverSummary = assetCacheSummary(catalog);
   const origin = 'https://game.test';
   const metadata = new Map();
@@ -32,7 +33,7 @@ function fixture({ storage = {}, secure = true, persistedCatalog = true } = {}) 
   const environment = {
     isSecureContext: secure, location: { origin }, crypto: globalThis.crypto, Blob, MessageChannel, AbortController,
     caches: { open: async () => ({ match: async (url) => metadata.has(url) ? Response.json(metadata.get(url)) : undefined }) },
-    setTimeout: (fn, ms) => setTimeout(fn, ms === 1000 ? 1 : ms), clearTimeout,
+    setTimeout: (fn, ms) => setTimeout(fn, ms === 1000 ? 1 : fastUpdateTimeout && ms === 120000 ? 20 : ms), clearTimeout,
     navigator: {
       serviceWorker: { controller: sw, ready: Promise.resolve(registration),
         register: async () => registration, addEventListener: (name, fn) => listeners.set(name, fn),
@@ -48,21 +49,30 @@ function fixture({ storage = {}, secure = true, persistedCatalog = true } = {}) 
             const parsed = message.format === 'json' ? JSON.parse(await message.file.text()) : catalog;
             this.onmessage?.({ data: { id: message.id, type: 'done', catalog: parsed } }); return;
           }
-          if (message.action === 'import' || message.action === 'download') ready = 1;
-          this.onmessage?.({ data: { id: message.id, type: 'progress', readyFiles: ready, readyBytes: ready * 3,
-            missingFiles: 1 - ready, missingBytes: (1 - ready) * 3 } });
+          if (message.action === 'import' || message.action === 'download') ready = message.catalog.totalFiles;
+          const readyFiles = Math.min(ready, message.catalog.totalFiles);
+          const readyBytes = message.catalog.files.slice(0, readyFiles).reduce((sum, item) => sum + item.bytes, 0);
+          this.onmessage?.({ data: { id: message.id, type: 'progress', readyFiles, readyBytes,
+            missingFiles: message.catalog.totalFiles - readyFiles, missingBytes: message.catalog.totalBytes - readyBytes } });
           this.onmessage?.({ data: { id: message.id, type: 'done' } });
         }, 0);
       }
       terminate() { this.onmessage = null; }
     },
   };
-  const manager = createAssetCacheManager({ environment, doFetch: async (url) => {
+  const manager = createAssetCacheManager({ environment, doFetch: async (url, options) => {
+    if (url.includes('catalog-update')) {
+      catalogUpdates.push({ url, options }); return updateResponse(url, options);
+    }
     if (url.includes('catalog')) { catalogReads++; return Response.json({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' }, { status: 403 }); }
     statusReads++;
     return Response.json(broken ? {} : { ...serverSummary, policy: { enabled: false } });
   } });
-  return { manager, messages, work, metadata, catalogReads: () => catalogReads, statusReads: () => statusReads,
+  return { manager, messages, work, metadata, catalogUpdates, catalogReads: () => catalogReads, statusReads: () => statusReads,
+    updateResponse: (value) => { updateResponse = typeof value === 'function' ? value : () => value; },
+    externalPlaying(value) {
+      playing = value; listeners.get('message')?.({ data: { type: 'ASSET_CACHE_PLAYING_CHANGED', playing: value } });
+    },
     broken: (value) => { broken = value; }, summary: (value) => { serverSummary = value; }, ready: (value) => { ready = value; },
     update: () => listeners.get('message')?.({ data: { type: 'ASSET_CACHE_UPDATED' } }) };
 }
@@ -155,6 +165,236 @@ test('tampered/stale directories cannot replace a valid pin, and admission recou
     assert.equal((await f.manager.admission()).readyFiles, 0, 'a previous full progress display is not an admission credential');
     assert.equal(f.catalogReads(), 0);
   } finally { f.manager.destroy(); }
+});
+
+function upgradedCatalog() {
+  const next = structuredClone(catalog);
+  next.files.push({ url: '/assets/new.png', bytes: 5, sha256: 'c'.repeat(64), type: 'image/png', aliases: [] });
+  next.totalFiles = 2; next.totalBytes = 8;
+  next.version = createHash('sha256').update(JSON.stringify({ schema: 1, files: next.files })).digest('hex');
+  return next;
+}
+
+async function outdatedFixture(options) {
+  const f = fixture(options); f.ready(1);
+  await f.manager.initialize();
+  const next = upgradedCatalog(); f.summary(assetCacheSummary(next)); f.updateResponse(Response.json(next));
+  return { ...f, next };
+}
+
+test('explicit directory update requires an old local directory and actual cached files; a current directory is a no-op', async () => {
+  for (const kind of ['cold', 'empty', 'cleared', 'current']) {
+    const f = fixture({ persistedCatalog: kind !== 'cold' });
+    try {
+      if (kind === 'cleared') f.ready(1);
+      await f.manager.initialize();
+      if (kind === 'cleared') await f.manager.clear();
+      if (kind !== 'current') f.summary(assetCacheSummary(upgradedCatalog()));
+      if (kind === 'current') await f.manager.updateCatalog();
+      else await assert.rejects(f.manager.updateCatalog(), new RegExp(kind === 'cold'
+        ? 'ASSET_CACHE_CATALOG_REQUIRED' : 'ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE'));
+      assert.equal(f.catalogUpdates.length, 0, kind);
+      assert.equal(f.catalogReads(), 0, kind);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('only an explicit manual update downloads a verified directory and reuses old content without filling or pruning', async () => {
+  const f = await outdatedFixture();
+  try {
+    await f.manager.initialize(); await f.manager.scan(); await f.manager.scan({ deep: true }).catch(() => {});
+    assert.equal(await f.manager.admission(), null);
+    assert.equal(f.catalogUpdates.length, 0, 'status checks and full verification do not download a directory');
+    const phases = []; f.manager.subscribe((state) => phases.push(state.phase));
+    const updated = await f.manager.updateCatalog();
+    assert.equal(updated.version, f.next.version); assert.equal(updated.catalogCurrent, true);
+    assert.equal(updated.readyFiles, 1); assert.equal(updated.missingFiles, 1); assert.equal(updated.readyBytes, 3);
+    assert.equal(f.catalogUpdates.length, 1); assert.equal(f.catalogReads(), 0);
+    const request = f.catalogUpdates[0], params = new URL(request.url, 'https://game.test').searchParams;
+    assert.equal(request.options.headers['X-Asset-Cache-Update'], 'manual');
+    assert.equal(params.get('from'), catalog.version); assert.equal(params.get('to'), f.next.version);
+    assert.equal(params.get('readyFiles'), '1'); assert.equal(params.get('readyBytes'), '3');
+    assert.ok(phases.includes('updating-catalog')); assert.ok(updated.catalogUpdateRetryAt > Date.now());
+    assert.equal(f.work.some((job) => job.action === 'download'), false);
+    assert.equal(f.messages.some((message) => message.type === 'ASSET_CACHE_PRUNE'), false);
+    assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, f.next.version);
+    await f.manager.updateCatalog();
+    assert.equal(f.catalogUpdates.length, 1, 'an already-current directory never downloads again');
+  } finally { f.manager.destroy(); }
+});
+
+test('actual local scan overrides a stale ready display before permitting manual directory update', async () => {
+  const f = await outdatedFixture();
+  try {
+    assert.equal(f.manager.getState().readyFiles, 1);
+    f.ready(0);
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE/);
+    assert.equal(f.catalogUpdates.length, 0); assert.equal(f.manager.getState().readyFiles, 0);
+  } finally { f.manager.destroy(); }
+});
+
+test('manual directory update is mutually exclusive and a failed request imposes local cooldown without retries', async () => {
+  const f = await outdatedFixture(); let finish, started;
+  const pendingFetch = new Promise((resolve) => { started = resolve; });
+  f.updateResponse(() => { started(); return new Promise((resolve) => { finish = resolve; }); });
+  try {
+    const first = f.manager.updateCatalog(); await pendingFetch;
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_BUSY/);
+    finish(Response.json({ error: 'ASSET_CACHE_CATALOG_UNAVAILABLE' }, { status: 500 }));
+    await assert.rejects(first, /ASSET_CACHE_CATALOG_UNAVAILABLE/);
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
+    assert.equal(f.catalogUpdates.length, 1); assert.equal(f.manager.getState().version, catalog.version);
+    assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, catalog.version);
+  } finally { f.manager.destroy(); }
+});
+
+test('HTTP 429 preserves a longer Retry-After countdown and never retries automatically', async () => {
+  const f = await outdatedFixture();
+  f.updateResponse(Response.json({ error: 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN' }, { status: 429, headers: { 'Retry-After': '120' } }));
+  try {
+    const before = Date.now();
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
+    assert.ok(f.manager.getState().catalogUpdateRetryAt >= before + 120000);
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
+    assert.equal(f.catalogUpdates.length, 1); assert.equal(f.manager.getState().version, catalog.version);
+  } finally { f.manager.destroy(); }
+});
+
+test('HTTP 503 distinguishes an explicit owner-disabled error from bounded/unreadable catalogue failures', async () => {
+  for (const kind of ['disabled', 'unavailable', 'invalid-json', 'oversized-header', 'oversized-body', 'no-body']) {
+    const f = await outdatedFixture(); let signal;
+    f.updateResponse((_url, options) => {
+      signal = options.signal;
+      if (kind === 'disabled') return Response.json({ error: 'ASSET_CACHE_ONLINE_DISABLED' }, { status: 503 });
+      if (kind === 'unavailable') return Response.json({ error: 'ASSET_CACHE_CATALOG_UNAVAILABLE' }, { status: 503 });
+      if (kind === 'invalid-json') return new Response('{', { status: 503 });
+      if (kind === 'no-body') return new Response(null, { status: 503 });
+      if (kind === 'oversized-header') return Response.json({ error: 'ASSET_CACHE_ONLINE_DISABLED' }, {
+        status: 503, headers: { 'Content-Length': '4097' },
+      });
+      return Response.json({ error: 'ASSET_CACHE_ONLINE_DISABLED', padding: ' '.repeat(4096) }, {
+        status: 503, headers: { 'Content-Length': '100' },
+      });
+    });
+    try {
+      await assert.rejects(f.manager.updateCatalog(), new RegExp(kind === 'disabled'
+        ? 'ASSET_CACHE_ONLINE_DISABLED' : 'ASSET_CACHE_CATALOG_UNAVAILABLE'));
+      assert.equal(signal.aborted, true, kind);
+      assert.equal(f.manager.getState().version, catalog.version, kind);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('early response rejection aborts HTTP transport even before a reader is acquired', async () => {
+  for (const kind of ['header-limit', 'no-body']) {
+    const f = await outdatedFixture(); let signal;
+    f.updateResponse((_url, options) => {
+      signal = options.signal;
+      return kind === 'header-limit' ? new Response('{}', { headers: { 'Content-Length': String(MAX_MANIFEST_BYTES + 1) } })
+        : new Response(null);
+    });
+    try {
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_BAD_CATALOG/);
+      assert.equal(signal.aborted, true, kind);
+      assert.equal(f.manager.getState().version, catalog.version, kind);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('directory transfer timeout aborts and cancels the stream while preserving the old pin', async () => {
+  const f = await outdatedFixture({ fastUpdateTimeout: true }); let signal, cancelled = false;
+  f.updateResponse((_url, options) => {
+    signal = options.signal;
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"schema":1,'));
+    }, cancel() { cancelled = true; } }));
+  });
+  try {
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UNAVAILABLE/);
+    assert.equal(signal.aborted, true); assert.equal(cancelled, true);
+    assert.equal(f.manager.getState().version, catalog.version);
+    assert.equal(f.manager.getState().phase, 'error');
+    assert.equal(f.catalogUpdates.length, 1, 'timeout has no automatic retry');
+  } finally { f.manager.destroy(); }
+});
+
+test('corrupt, oversized and mismatched downloaded directories preserve the existing pin and cache', async () => {
+  for (const kind of ['tampered', 'bad-json', 'header-limit', 'decoded-limit', 'wrong-version']) {
+    const f = await outdatedFixture();
+    try {
+      const pins = f.messages.filter((message) => message.type === 'ASSET_CACHE_PIN').length;
+      if (kind === 'tampered') {
+        const next = structuredClone(f.next); next.files[0].bytes++;
+        f.updateResponse(Response.json(next));
+      } else if (kind === 'bad-json') f.updateResponse(new Response('{'));
+      else if (kind === 'header-limit') f.updateResponse(new Response('{}', { headers: { 'Content-Length': String(MAX_MANIFEST_BYTES + 1) } }));
+      else if (kind === 'decoded-limit') {
+        const chunk = new Uint8Array(4 * 1024 * 1024);
+        f.updateResponse(new Response(new ReadableStream({ start(controller) {
+          for (let i = 0; i < 9; i++) controller.enqueue(chunk);
+          controller.close();
+        } }), { headers: { 'Content-Length': '100', 'Content-Encoding': 'gzip' } }));
+      } else f.updateResponse(Response.json(catalog));
+      await assert.rejects(f.manager.updateCatalog(), new RegExp(kind === 'wrong-version'
+        ? 'ASSET_CACHE_STALE_CATALOG' : 'ASSET_CACHE_BAD_CATALOG'));
+      assert.equal(f.manager.getState().version, catalog.version, kind);
+      assert.equal(f.messages.filter((message) => message.type === 'ASSET_CACHE_PIN').length, pins, kind);
+      assert.equal(f.manager.getState().readyFiles, 1, kind);
+      assert.equal(f.messages.some((message) => ['ASSET_CACHE_CLEAR', 'ASSET_CACHE_PRUNE'].includes(message.type)), false, kind);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('a server version change during transfer or HTTP 409 refreshes only the small summary and preserves the old directory', async () => {
+  for (const kind of ['during-transfer', 'http-409']) {
+    const f = await outdatedFixture();
+    const newerSummary = { ...assetCacheSummary(f.next), version: 'd'.repeat(64) };
+    f.updateResponse(() => {
+      f.summary(newerSummary);
+      return kind === 'http-409' ? Response.json({ error: 'ASSET_CACHE_CATALOG_VERSION_MISMATCH' }, { status: 409 }) : Response.json(f.next);
+    });
+    try {
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_STALE_CATALOG/);
+      assert.equal(f.catalogUpdates.length, 1); assert.equal(f.catalogReads(), 0);
+      assert.equal(f.manager.getState().version, catalog.version);
+      assert.equal(f.manager.getState().serverVersion, newerSummary.version);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('own or another tab playing blocks manual directory update before any download', async () => {
+  for (const anotherTab of [false, true]) {
+    const f = await outdatedFixture();
+    try {
+      if (anotherTab) f.externalPlaying(true); else await f.manager.setPlaying(true);
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_PLAYING/);
+      assert.equal(f.catalogUpdates.length, 0); assert.equal(f.manager.getState().version, catalog.version);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('pause, destruction and starting play abort an in-flight directory stream without adopting partial metadata', async () => {
+  for (const action of ['pause', 'destroy', 'playing', 'other-tab']) {
+    const f = await outdatedFixture(); let started, cancelled = false, signal;
+    const fetching = new Promise((resolve) => { started = resolve; });
+    f.updateResponse((_url, options) => {
+      signal = options.signal;
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"schema":1,')); started();
+      }, cancel() { cancelled = true; } }));
+    });
+    try {
+      const pending = f.manager.updateCatalog(); await fetching;
+      if (action === 'playing') await f.manager.setPlaying(true);
+      else if (action === 'other-tab') f.externalPlaying(true);
+      else f.manager[action]();
+      const result = await pending;
+      assert.equal(signal.aborted, true, action); assert.equal(cancelled, true, action);
+      assert.equal(result.phase, 'paused', action); assert.equal(result.error, null, action);
+      assert.equal(result.version, catalog.version, action);
+      assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, catalog.version, action);
+    } finally { f.manager.destroy(); }
+  }
 });
 
 test('persistence invokes the API during the click and reports the granted storage state', async () => {

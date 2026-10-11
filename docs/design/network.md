@@ -3,7 +3,9 @@
 Part of [DESIGN.md](../DESIGN.md) (the index; section numbers are global).
 
 Capacity-fork asset transport: full catalogs are imported locally from an existing ZIP or standalone JSON;
-the server only exposes a tiny summary, and refuses the former full-catalog route. Cache persistence,
+ordinary checks only fetch a tiny server summary, and the former full-catalog route stays closed. Explicit
+manual updates for an existing stale directory with cached assets share the filling byte/concurrency budget,
+with a 30-second per-IP cooldown ([D025](../development/DECISIONS.md#d025)). Cache persistence,
 hash/version verification and per-page match pins are specified in [ASSET_CACHE.md](../ASSET_CACHE.md),
 with decision [D023](../development/DECISIONS.md#d023). The default-permissive, owner-controlled admission gate
 ([D024](../development/DECISIONS.md#d024), [SERVER_SETTINGS.md](../SERVER_SETTINGS.md)) synchronously checks new

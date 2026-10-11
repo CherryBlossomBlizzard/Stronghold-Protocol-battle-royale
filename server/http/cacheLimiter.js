@@ -60,25 +60,33 @@ export class CacheDownloadLimiter {
     }
     let resolve;
     const done = new Promise((r) => { resolve = r; });
-    const job = { client, handle: null, res: null, size: 0, position: 0, blocked: false, released: false,
+    const job = { client, handle: null, buffer: null, res: null, size: 0, position: 0, blocked: false, released: false,
       cleanup: null, resolve, done };
     client.jobs.add(job);
     this.active++;
     const release = () => this.release(job);
+    const start = (handle, buffer, res, size) => {
+      if (job.released) return done;
+      if (job.res) throw new Error('asset cache lease already streaming');
+      job.handle = handle; job.buffer = buffer; job.res = res; job.size = size;
+      const onClose = () => release();
+      const onError = () => release();
+      const onDrain = () => { job.blocked = false; this.schedule(); };
+      res.once('close', onClose); res.once('error', onError); res.on('drain', onDrain);
+      job.cleanup = () => { res.off('close', onClose); res.off('error', onError); res.off('drain', onDrain); };
+      if (res.destroyed || res.writableEnded) release();
+      else this.schedule();
+      return done;
+    };
     return {
       release,
       get released() { return job.released; },
-      stream: (handle, res, size) => {
-        if (job.released) return done;
-        job.handle = handle; job.res = res; job.size = size;
-        const onClose = () => release();
-        const onError = () => release();
-        const onDrain = () => { job.blocked = false; this.schedule(); };
-        res.once('close', onClose); res.once('error', onError); res.on('drain', onDrain);
-        job.cleanup = () => { res.off('close', onClose); res.off('error', onError); res.off('drain', onDrain); };
-        if (res.destroyed || res.writableEnded) release();
-        else this.schedule();
-        return done;
+      stream: (handle, res, size) => start(handle, null, res, size),
+      // The immutable catalog body uses the exact same scheduler, byte budget, slots and backpressure
+      // as file downloads. Retain the shared body, rather than copying it once per requesting client.
+      streamBuffer: (buffer, res) => {
+        if (!Buffer.isBuffer(buffer)) throw new TypeError('asset cache body must be a Buffer');
+        return start(null, buffer, res, buffer.length);
       },
     };
   }
@@ -126,7 +134,7 @@ export class CacheDownloadLimiter {
         let job = null;
         for (let i = 0; i < jobs.length; i++) {
           const candidate = jobs[client.cursor++ % jobs.length];
-          if (!candidate.released && candidate.handle && !candidate.blocked) { job = candidate; break; }
+          if (!candidate.released && (candidate.handle || candidate.buffer) && !candidate.blocked) { job = candidate; break; }
         }
         if (!job || client.tokens < 1) { misses++; continue; }
         const length = Math.floor(Math.min(QUANTUM, this.tokens, client.tokens, job.size - job.position));
@@ -137,9 +145,9 @@ export class CacheDownloadLimiter {
         }
         misses = 0;
         try {
-          const buffer = Buffer.allocUnsafe(length);
+          const buffer = job.buffer ? job.buffer.subarray(job.position, job.position + length) : Buffer.allocUnsafe(length);
           // The file is opened and verified by assetCache.js; at most one small disk read is pending here.
-          const { bytesRead } = await job.handle.read(buffer, 0, length, job.position);
+          const bytesRead = job.buffer ? length : (await job.handle.read(buffer, 0, length, job.position)).bytesRead;
           if (job.released) continue;
           if (bytesRead !== length) throw new Error('asset cache file changed during transfer');
           this.tokens -= bytesRead; client.tokens -= bytesRead;
