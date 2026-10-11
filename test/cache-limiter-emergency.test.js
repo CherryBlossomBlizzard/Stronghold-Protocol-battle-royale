@@ -19,7 +19,7 @@ async function pump(limiter) {
 }
 
 test('demand metrics exclude preparation and count shared-IP demand only once', async () => {
-  const limiter = new CacheDownloadLimiter();
+  const limiter = new CacheDownloadLimiter({ totalBps: 1_000_000, clientBps: 500_000 });
   try {
     const firstRes = response();
     const a = limiter.acquire('ip-a', firstRes);
@@ -50,7 +50,7 @@ test('demand metrics exclude preparation and count shared-IP demand only once', 
 });
 
 test('IPv6 addresses keep their individual budgets but one /64 is not independent congestion evidence', () => {
-  const limiter = new CacheDownloadLimiter();
+  const limiter = new CacheDownloadLimiter({ totalBps: 1_000_000, clientBps: 1_000_000 });
   try {
     const aRes = response(), bRes = response();
     limiter.acquire('2001:db8::1', aRes, '2001:db8::/64').streamBuffer(Buffer.alloc(1_000_000), aRes);
@@ -96,8 +96,8 @@ test('trip aborts streaming and preparing responses, and resume admits only fres
     assert.equal(freshRes.writableFinished, true);
     assert.equal(Buffer.concat(freshRes.chunks).toString(), 'fresh');
     assert.equal(limiter.policy().enabled, true);
-    assert.equal(limiter.policy().totalBps, 1_000_000);
-    assert.equal(limiter.policy().clientBps, 500_000);
+    assert.equal(limiter.policy().totalBps, null);
+    assert.equal(limiter.policy().clientBps, null);
   } finally { limiter.close(); }
 });
 

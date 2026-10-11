@@ -31,11 +31,47 @@ export function parseAssetCacheRequirement(value) {
   throw new RangeError('预缓存准入必须为 required / optional，环境变量也可使用 1 / 0');
 }
 
+/** Owner CLI rate in Mbps, persisted as bytes per second. `unlimited` is null. */
+export function parseAssetCacheRate(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'unlimited') return null;
+  if (!/^\d+(?:\.\d+)?$/.test(text)) throw new RangeError('素材在线限速必须为非负 Mbps 数值或 unlimited');
+  const mbps = Number(text);
+  const bytes = mbps * 125_000;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError('素材在线限速超出安全范围');
+  return bytes;
+}
+
+function validAssetCacheRate(value) { return value === null || (Number.isSafeInteger(value) && value >= 0); }
+export function validAssetCacheLimits(value) {
+  return value === null || (value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => ['totalBps', 'clientBps'].includes(key))
+    && validAssetCacheRate(value.totalBps) && validAssetCacheRate(value.clientBps)
+    && !(value.clientBps === 0 && value.totalBps !== 0));
+}
+
+function initialAssetCacheLimits(env) {
+  const total = String(env.SP_ASSET_CACHE_TOTAL_BPS ?? '').trim();
+  const client = String(env.SP_ASSET_CACHE_CLIENT_BPS ?? '').trim();
+  if (!total && !client) return null;
+  const parsed = { totalBps: total ? parseAssetCacheByteRate(total) : null, clientBps: client ? parseAssetCacheByteRate(client) : null };
+  if (parsed.clientBps === 0 && parsed.totalBps !== 0) throw new RangeError('素材在线单 IP 限速必须在总限速启用时为正数');
+  return Object.freeze(parsed);
+}
+
+function parseAssetCacheByteRate(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'unlimited') return null;
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text))) throw new RangeError('素材在线限速必须为非负字节/秒整数或 unlimited');
+  return Number(text);
+}
+
 export function initialServerSettings(env = process.env) {
   const ai = String(env.SP_MAX_AI_PER_ROOM ?? '').trim();
   const precache = String(env.SP_REQUIRE_ASSET_CACHE ?? '').trim();
   return Object.freeze({ maxAiPerRoom: ai ? parseAiLimit(ai) : null,
-    requireAssetCache: precache ? parseAssetCacheRequirement(precache) : false });
+    requireAssetCache: precache ? parseAssetCacheRequirement(precache) : false,
+    assetCacheLimits: initialAssetCacheLimits(env) });
 }
 
 /** Explicit option, environment, then <root>/runtime. Relative paths resolve from the repository root. */
@@ -50,11 +86,13 @@ function verifyDirectory(dir) {
 
 function checkedSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1
-    || Object.keys(raw).some((key) => !['version', 'maxAiPerRoom', 'requireAssetCache'].includes(key))
+    || Object.keys(raw).some((key) => !['version', 'maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits'].includes(key))
     || !validAiLimit(raw.maxAiPerRoom)
-    || raw.requireAssetCache !== undefined && typeof raw.requireAssetCache !== 'boolean') throw new Error('服务器配置格式无效');
+    || raw.requireAssetCache !== undefined && typeof raw.requireAssetCache !== 'boolean'
+    || raw.assetCacheLimits !== undefined && !validAssetCacheLimits(raw.assetCacheLimits)) throw new Error('服务器配置格式无效');
   // Existing version-1 AI-only files keep their former permissive admission policy.
-  return Object.freeze({ maxAiPerRoom: raw.maxAiPerRoom, requireAssetCache: raw.requireAssetCache ?? false });
+  return Object.freeze({ maxAiPerRoom: raw.maxAiPerRoom, requireAssetCache: raw.requireAssetCache ?? false,
+    assetCacheLimits: raw.assetCacheLimits ?? null });
 }
 
 /** Read-only startup and show operations never create a directory. null means no persistent override. */
@@ -80,7 +118,10 @@ export function writeServerSettings(dir, value) {
   if (Object.hasOwn(patch, 'maxAiPerRoom') && !validAiLimit(patch.maxAiPerRoom)) {
     throw new RangeError(`AI 上限必须为 0–${MAX_SEATS - 1} 的整数或 null`);
   }
-  if (!Object.keys(patch).length || Object.keys(patch).some((key) => !['maxAiPerRoom', 'requireAssetCache'].includes(key))
+  if (Object.hasOwn(patch, 'assetCacheLimits') && !validAssetCacheLimits(patch.assetCacheLimits)) {
+    throw new RangeError('素材在线限速配置无效');
+  }
+  if (!Object.keys(patch).length || Object.keys(patch).some((key) => !['maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits'].includes(key))
     || Object.hasOwn(patch, 'requireAssetCache') && typeof patch.requireAssetCache !== 'boolean') throw new Error('服务器配置字段无效');
   fs.mkdirSync(dir, { recursive: true });
   verifyDirectory(dir);
@@ -117,7 +158,7 @@ export function writeServerSettings(dir, value) {
  * policy, so a partial manual edit cannot silently disable a restriction. Removing the file explicitly restores
  * the startup fallback. onChange is not invoked while constructing the controller.
  * @param {{ dir?: string, root?: string, env?: object, log?: {warn?: Function}, pollMs?: number,
- *   onChange?: (next: {maxAiPerRoom:number|null, requireAssetCache:boolean}, previous: {maxAiPerRoom:number|null, requireAssetCache:boolean}) => void }} [options]
+ *   onChange?: (next: {maxAiPerRoom:number|null, requireAssetCache:boolean, assetCacheLimits:object|null}, previous: object) => void }} [options]
  */
 export function createServerSettings(options = {}) {
   const { env = process.env, log = console, pollMs = SERVER_SETTINGS_POLL_MS, onChange } = options;
@@ -141,7 +182,8 @@ export function createServerSettings(options = {}) {
       if (message !== warning) { log.warn?.(`[server-settings] ${message}；保留最近有效设置。`); warning = message; }
       return false;
     }
-    if (next.maxAiPerRoom === state.maxAiPerRoom && next.requireAssetCache === state.requireAssetCache) return false;
+    if (next.maxAiPerRoom === state.maxAiPerRoom && next.requireAssetCache === state.requireAssetCache
+      && JSON.stringify(next.assetCacheLimits) === JSON.stringify(state.assetCacheLimits)) return false;
     const previous = state;
     state = next;
     if (notify) onChange?.(state, previous);

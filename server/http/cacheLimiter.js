@@ -3,7 +3,9 @@
 import { performance } from 'node:perf_hooks';
 
 export const ASSET_CACHE_LIMIT_DEFAULTS = Object.freeze({
-  totalBps: 1_000_000, clientBps: 500_000, maxDownloads: 24, maxDownloadsPerClient: 2,
+  // Online filling is unrestricted unless the owner opts in to a byte budget. `null` is the
+  // persisted/JSON representation; the limiter uses Infinity internally for arithmetic.
+  totalBps: null, clientBps: null, maxDownloads: 24, maxDownloadsPerClient: 2,
 });
 
 const QUANTUM = 8 * 1024;
@@ -12,18 +14,25 @@ const BURST_SECONDS = 0.1;
 const IDLE_CLIENT_MS = 2_000;
 
 function rate(value, fallback) {
-  const parsed = value == null || value === '' ? fallback : Number(value);
+  if (value === null || String(value).trim().toLowerCase() === 'unlimited') return Infinity;
+  const parsed = value === undefined || value === '' ? fallback : Number(value);
+  if (parsed === null) return Infinity;
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new RangeError('asset cache rate must be a non-negative integer');
   return parsed;
 }
 
 /** Bytes per second, not Mbps. A zero aggregate rate explicitly disables online filling. */
 export function assetCacheLimitOptions(opts = {}, env = process.env) {
-  const totalBps = rate(opts.totalBps ?? env.SP_ASSET_CACHE_TOTAL_BPS, ASSET_CACHE_LIMIT_DEFAULTS.totalBps);
-  const clientBps = rate(opts.clientBps ?? env.SP_ASSET_CACHE_CLIENT_BPS, ASSET_CACHE_LIMIT_DEFAULTS.clientBps);
+  opts ??= {};
+  const totalInput = Object.hasOwn(opts, 'totalBps') ? opts.totalBps : env.SP_ASSET_CACHE_TOTAL_BPS;
+  const clientInput = Object.hasOwn(opts, 'clientBps') ? opts.clientBps : env.SP_ASSET_CACHE_CLIENT_BPS;
+  const totalBps = rate(totalInput, ASSET_CACHE_LIMIT_DEFAULTS.totalBps);
+  const clientBps = rate(clientInput, ASSET_CACHE_LIMIT_DEFAULTS.clientBps);
   if (totalBps > 0 && clientBps === 0) throw new RangeError('asset cache client rate must be positive when online filling is enabled');
   return { ...ASSET_CACHE_LIMIT_DEFAULTS, ...opts, totalBps, clientBps };
 }
+
+function publicRate(value) { return Number.isFinite(value) ? value : null; }
 
 export class CacheDownloadLimiter {
   constructor(opts = {}) {
@@ -47,8 +56,8 @@ export class CacheDownloadLimiter {
   }
 
   policy() {
-    return { enabled: !this.closed && !this.tripped && this.opts.totalBps > 0, totalBps: this.opts.totalBps,
-      clientBps: this.opts.clientBps, maxDownloads: this.opts.maxDownloads,
+    return { enabled: !this.closed && !this.tripped && this.opts.totalBps > 0, totalBps: publicRate(this.opts.totalBps),
+      clientBps: publicRate(this.opts.clientBps), maxDownloads: this.opts.maxDownloads,
       maxDownloadsPerClient: this.opts.maxDownloadsPerClient, activeDownloads: this.active,
       emergency: this.tripped, emergencyReason: this.tripReason, emergencySince: this.tripSince };
   }
@@ -75,7 +84,8 @@ export class CacheDownloadLimiter {
     return { ...this.policy(), activeClients, demandClients, demandNetworks: demandNetworks.size, streamingDownloads, preparingDownloads,
       remainingBytes, blockedDownloads, bytesWritten: this.bytesWritten,
       backpressureEvents: this.backpressureEvents,
-      expectedBps: this.policy().enabled ? Math.min(this.opts.totalBps, this.opts.clientBps * demandClients) : 0 };
+      expectedBps: this.policy().enabled && Number.isFinite(this.opts.totalBps) && Number.isFinite(this.opts.clientBps)
+        ? Math.min(this.opts.totalBps, this.opts.clientBps * demandClients) : 0 };
   }
 
   /** Reserve before opening/hash-checking a file, bounding disk work as well as sockets. */
@@ -132,6 +142,18 @@ export class CacheDownloadLimiter {
     };
   }
 
+  /** Apply an owner setting without restarting the HTTP server. Zero aggregate rate aborts active fills. */
+  setLimits(opts = {}) {
+    const current = { ...this.opts, totalBps: publicRate(this.opts.totalBps), clientBps: publicRate(this.opts.clientBps) };
+    const next = assetCacheLimitOptions({ ...current, ...opts });
+    const wasEnabled = this.opts.totalBps > 0;
+    this.opts = next;
+    this.tokens = next.totalBps === Infinity ? Infinity : Math.min(this.tokens, Math.max(1, next.totalBps * BURST_SECONDS));
+    if (next.totalBps === 0 && wasEnabled) this.abortAll();
+    else if (this.active) this.schedule();
+    return this.policy();
+  }
+
   prune(now) {
     for (const [key, client] of this.clients) {
       if (!client.jobs.size && now - client.idleAt > IDLE_CLIENT_MS) this.clients.delete(key);
@@ -160,11 +182,13 @@ export class CacheDownloadLimiter {
     this.pumping = true;
     try {
       const now = performance.now();
-      this.tokens = Math.min(Math.max(1, this.opts.totalBps * BURST_SECONDS), this.tokens + (now - this.updatedAt) * this.opts.totalBps / 1000);
+      this.tokens = this.opts.totalBps === Infinity ? Infinity
+        : Math.min(Math.max(1, this.opts.totalBps * BURST_SECONDS), this.tokens + (now - this.updatedAt) * this.opts.totalBps / 1000);
       this.updatedAt = now;
       const clients = [...this.clients.values()].filter((client) => client.jobs.size);
       for (const client of clients) {
-        client.tokens = Math.min(Math.max(1, this.opts.clientBps * BURST_SECONDS), client.tokens + (now - client.updatedAt) * this.opts.clientBps / 1000);
+        client.tokens = this.opts.clientBps === Infinity ? Infinity
+          : Math.min(Math.max(1, this.opts.clientBps * BURST_SECONDS), client.tokens + (now - client.updatedAt) * this.opts.clientBps / 1000);
         client.updatedAt = now;
       }
       let misses = 0;

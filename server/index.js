@@ -85,7 +85,11 @@ export async function startServer(opts = {}) {
   const packs = createPackRegistry({ publicDir, dataDir, packsDir }, { log });
   packs.refresh(true);
   const serveStatic = createStaticHandler({ publicDir, dataDir, sharedDir, packsDir, packs, runtimeCache: opts.runtimeCache, log });
-  const assetCache = createAssetCacheHandler({ publicDir, dataDir, log, limits: opts.assetCacheLimits, trustProxy: opts.trustProxy,
+  // A persisted owner limit overrides the programmatic/env fallback. A null setting means the
+  // default unlimited limiter, while keeping tests and embedders' explicit opts usable.
+  const fallbackAssetCacheLimits = opts.assetCacheLimits;
+  const initialAssetCacheLimits = serverSettings.get().assetCacheLimits ?? fallbackAssetCacheLimits ?? undefined;
+  const assetCache = createAssetCacheHandler({ publicDir, dataDir, log, limits: initialAssetCacheLimits, trustProxy: opts.trustProxy,
     buildCatalog: opts.assetCacheBuildCatalog, requireAssetCache: () => serverSettings.get().requireAssetCache });
   let warmingAssetSummary = null;
   function warmAssetSummary() {
@@ -97,6 +101,7 @@ export async function startServer(opts = {}) {
   function applySettings(next) {
     lobby.setAiLimit(next.maxAiPerRoom);
     lobby.setAssetCachePolicy({ required: next.requireAssetCache, getSummary: assetCache.currentSummary });
+    assetCache.setLimits(next.assetCacheLimits ?? fallbackAssetCacheLimits);
     // Runtime enabling fails closed until a summary is ready; ordinary optional startup stays lazy.
     if (next.requireAssetCache && !assetCache.currentSummary()) void warmAssetSummary();
   }
