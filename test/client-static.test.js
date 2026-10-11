@@ -622,6 +622,40 @@ describe('net.js', () => {
     await assert.rejects(p, (e) => e.code === 'OFFLINE');
   });
 
+  test('emergency-refused visitors wait for the server retry window with jitter; focus and repeat errors do not churn', async () => {
+    const { net, ws, sockets, timers } = await makeNet();
+    const errors = [];
+    net.on('helloError', (e) => errors.push(e.code));
+    net.setName('A'); ws().open();
+    ws().recv({ t: 'm.emergency', active: true, retryAt: timers.now() + 120000 });
+    ws().recv({ t: 'error', rid: ws().last('hello').rid, code: 'SERVER_EMERGENCY' });
+    ws().drop(1008);
+    assert.equal(net.retryAt - timers.now(), 122500);
+    net.retryNow(); net.reconnectNow(); net.connect();
+    assert.equal(sockets.length, 1, 'automatic focus / online retries cannot skip emergency backoff');
+    timers.advance(122499);
+    assert.equal(sockets.length, 1);
+    timers.advance(1); ws().open();
+    ws().recv({ t: 'm.emergency', active: true, retryAt: timers.now() + 5000 });
+    ws().recv({ t: 'error', rid: ws().last('hello').rid, code: 'SERVER_EMERGENCY' });
+    ws().drop(1008);
+    assert.equal(net.retryAt - timers.now(), 32500, 'near retry windows retain a reasonable lower limit');
+    assert.deepEqual(errors, ['SERVER_EMERGENCY'], 'the persistent notice needs no repeated error toast');
+    timers.advance(32500); ws().open();
+    ws().recv({ t: 'welcome', rid: ws().last('hello').rid, playerId: 'p_1', token: 't', name: 'A' });
+    ws().drop();
+    assert.equal(net.retryAt - timers.now(), 500, 'accepted identity returns to normal reconnect');
+    net.close();
+  });
+
+  test('existing match members keep normal reconnect during emergency without a hello rejection', async () => {
+    const { net, ws, timers } = await onlineNet();
+    ws().recv({ t: 'm.emergency', active: true, retryAt: timers.now() + 120000 });
+    ws().drop();
+    assert.equal(net.retryAt - timers.now(), 500);
+    net.close();
+  });
+
   test('pushes are emitted by type and "*"; unsolicited errors as unhandledError; junk ignored', async () => {
     const { net, ws } = await onlineNet();
     const got = [];

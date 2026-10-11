@@ -16,7 +16,7 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } fro
 import htm from '../../vendor/htm.module.js';
 import { DIFFICULTY_NAMES, DIFFICULTY_COLORS } from '../../../shared/constants.js';
 import { t } from '../../../shared/i18n.js';
-import { serverNow } from '../store.js';
+import { matchClockNow, emergencyClockAt, useStore } from '../store.js';
 import { data, useData, localAsset } from '../data.js';
 import { uiUrl } from './assetUrls.js';
 
@@ -348,7 +348,7 @@ export const hasDeadline = (deadline) => Number.isFinite(deadline) && deadline >
  */
 export function secondsLeft(deadline) {
   if (!hasDeadline(deadline)) return null;
-  return Math.max(0, Math.ceil((deadline - serverNow()) / 1000));
+  return Math.max(0, Math.ceil((deadline - matchClockNow()) / 1000));
 }
 
 /**
@@ -361,8 +361,9 @@ export function secondsLeft(deadline) {
  *   deadline: server epoch ms (live); seconds: static value (overrides deadline); total: seconds for the gauge.
  */
 export function Countdown({ deadline, seconds, total, warnAt = 10, label = 'COUNTDOWN', size = 'md', gauge = true, onExpire, class: cls }) {
+  const emergencyAt = useStore(emergencyClockAt);
   const live = seconds == null && hasDeadline(deadline);
-  useTicker(live ? 200 : 0);
+  useTicker(live && emergencyAt == null ? 200 : 0);
   const remain = seconds != null && Number.isFinite(Number(seconds)) ? Math.max(0, Math.floor(Number(seconds))) : live ? secondsLeft(deadline) : null;
   const warn = remain != null && remain <= warnAt;
   const text = remain == null ? '--' : String(Math.min(999, remain)).padStart(2, '0');
@@ -371,7 +372,7 @@ export function Countdown({ deadline, seconds, total, warnAt = 10, label = 'COUN
 
   const expiredFor = useRef(null);
   useEffect(() => {
-    if (!onExpire || !live) return;
+    if (!onExpire || !live || emergencyAt != null) return;
     if (remain === 0 && expiredFor.current !== deadline) {
       expiredFor.current = deadline;
       onExpire();

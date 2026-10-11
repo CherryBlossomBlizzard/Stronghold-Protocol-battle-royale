@@ -12,7 +12,7 @@ const initialState = (env) => {
       persistenceSupported: supported && typeof env.navigator?.storage?.persist === 'function' }, playing: false,
     hasCatalog: false, catalogCurrent: false, catalogComplete: false, serverMissingFiles: 0,
     serverVersion: null, requireAssetCache: false, importStats: null, scanStats: null, waiting: false, policy: null,
-    catalogUpdateRetryAt: 0,
+    catalogUpdateRetryAt: 0, emergency: false,
     persistence: 'idle' };
 };
 
@@ -89,6 +89,10 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     : state.missingFiles || !state.catalogComplete ? 'idle' : 'ready';
 
   async function refreshSummary({ force = false } = {}) {
+    if (state.emergency) {
+      if (summary) return summary;
+      throw assetCacheError('ASSET_CACHE_EMERGENCY');
+    }
     if (checkingSummary) return checkingSummary;
     if (!force && summary && Date.now() - summaryAt < 30000) return summary;
     checkingSummary = (async () => {
@@ -287,7 +291,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         if (response.status === 503) {
           // 503 also means catalogue construction/compression failed. Only the server's explicit
           // small error code proves that the owner disabled online transfers.
-          let disabled = false;
+          let unavailable = 'ASSET_CACHE_CATALOG_UNAVAILABLE';
           if (response.body && Number(response.headers.get('Content-Length')) <= 4096) {
             const reader = response.body.getReader();
             const cancel = () => { reader.cancel().catch(() => {}); };
@@ -305,7 +309,9 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
               if (size <= 4096 && !abort.signal.aborted && !job.paused) {
                 const bytes = new Uint8Array(size); let offset = 0;
                 for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-                disabled = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))?.error === 'ASSET_CACHE_ONLINE_DISABLED';
+                const code = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))?.error;
+                if (code === 'ASSET_CACHE_ONLINE_DISABLED') unavailable = code;
+                else if (code === 'ASSET_CACHE_EMERGENCY' || code === 'SERVER_EMERGENCY') unavailable = 'ASSET_CACHE_EMERGENCY';
               }
             } catch { /* Unknown/unreadable server errors stay unavailable, not owner-disabled. */ }
             finally {
@@ -314,7 +320,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
               reader.releaseLock();
             }
           }
-          throw assetCacheError(disabled ? 'ASSET_CACHE_ONLINE_DISABLED' : 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+          throw assetCacheError(unavailable);
         }
         throw assetCacheError('ASSET_CACHE_CATALOG_UNAVAILABLE');
       }
@@ -362,12 +368,14 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   }
 
   async function perform(action, { deep = false, file = null, refresh = false } = {}) {
+    if (state.emergency && (action === 'download' || action === 'catalog-update')) throw assetCacheError('ASSET_CACHE_EMERGENCY');
     await ensureReady();
+    if (state.emergency && (action === 'download' || action === 'catalog-update')) throw assetCacheError('ASSET_CACHE_EMERGENCY');
     if (operation) throw assetCacheError('ASSET_CACHE_BUSY');
     const phase = action === 'catalog-update' ? 'updating-catalog' : action === 'import' || action === 'catalog' ? 'importing'
       : action === 'download' ? 'downloading' : deep ? 'verifying' : 'checking';
     const mutates = action !== 'scan' || deep;
-    const job = { paused: false };
+    const job = { paused: false, action };
     operation = job;
     patch({ phase, error: null, speedBps: 0, waiting: false,
       ...(action === 'import' ? { importStats: null } : {}), ...(deep ? { scanStats: null } : {}) });
@@ -456,6 +464,12 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   const manager = {
     getState, state: getState, initialize, scan,
     updateCatalog: () => perform('catalog-update'),
+    setEmergency(value) {
+      const emergency = !!value;
+      if (state.emergency === emergency) return;
+      patch({ emergency });
+      if (emergency && (operation?.action === 'download' || operation?.action === 'catalog-update')) pause();
+    },
     setRequirement(value) { if (typeof value === 'boolean' && state.requireAssetCache !== value) patch({ requireAssetCache: value }); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     downloadMissing: () => perform('download'),

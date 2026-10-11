@@ -70,7 +70,7 @@
 // (test/match/runner.test.js and test/match/runner-pending.test.js drive it under Node).
 
 import { net as appNet } from '../net.js';
-import { store as appStore } from '../store.js';
+import { store as appStore, emergencyActive } from '../store.js';
 import { unitStatsEntry, fxForm, RESULT_LIMITS } from '../../../shared/protocol.js';
 import { MAX_SEATS } from '../../../shared/constants.js';
 import { spectateEffects } from './observe.js';
@@ -118,7 +118,7 @@ export function compactHeld(list) {
 export const SIM_DATA_FILES = Object.freeze(['chess', 'enemies', 'tokens', 'stages', 'waves', 'bonds', 'items', 'garrisons', 'bands', 'effects', 'backups']);
 
 /** Request failures after which a b.result counts as never delivered (re-sent on resume / b.start). */
-export const LOST_RESULT_CODES = Object.freeze(['DISCONNECTED', 'OFFLINE', 'TIMEOUT']);
+export const LOST_RESULT_CODES = Object.freeze(['DISCONNECTED', 'OFFLINE', 'TIMEOUT', 'SERVER_EMERGENCY']);
 
 /** Ticks per frame at a speed (same cap as the server pacing: server/match/fields.js maxTicksPerInterval). */
 export const ticksPerFrameCap = (speed) => Math.max(8, Math.ceil((Number(speed) || 2) * 4));
@@ -219,6 +219,7 @@ export function createBattleRunner(deps) {
   let lastPool = null;
   /** solo pause: the runner clock's instant when m.public.paused turned true (null while running) */
   let pausedAt = null;
+  let emergencyFrozen = false;
   /** a normal field's leak count (or a battle's bond layers) changed since the last publishState() */
   let leaksDirty = false;
   const stats = { ticks: 0, stepMs: 0, maxFrameMs: 0, catchups: 0, errors: 0, battles: 0, frames: 0 };
@@ -271,7 +272,7 @@ export function createBattleRunner(deps) {
     if (!e) return loading ? { loading: true, battleId: loading.battleId, fieldId: loading.fieldId, kind: loading.kind, leaks: leakMap(), uniteLeft: uniteLeftMap(), bondLayers: layerMap() } : null;
     return {
       battleId: e.battleId, fieldId: e.fieldId, kind: e.kind, authoritative: e.authoritative, watch: e.watch,
-      done: e.done, own: e.own, members: e.members.slice(), loading: !!loading, speed: e.speed, paused: pausedAt != null,
+      done: e.done, own: e.own, members: e.members.slice(), loading: !!loading, speed: e.speed, paused: pausedAt != null, emergencyFrozen,
       leaks: leakMap(), uniteLeft: uniteLeftMap(), bondLayers: layerMap(),
     };
   }
@@ -508,6 +509,7 @@ export function createBattleRunner(deps) {
    */
   function deliver(e) {
     if (!net || (!e.result && e.deliveryType !== 'b.yield') || e.delivery === 'pending') return;
+    if (emergencyFrozen) { e.delivery = 'undelivered'; return; }
     e.delivery = 'pending';
     const type = e.deliveryType || 'b.result';
     const msg = type === 'b.yield' ? { battleId: e.battleId } : { battleId: e.battleId, result: e.result };
@@ -573,6 +575,7 @@ export function createBattleRunner(deps) {
 
   function frame() {
     rafH = null;
+    if (pausedAt != null) return;
     stats.frames++;
     const t = clock();
     for (const e of [...entries.values()]) if (running(e)) advance(e, t, e === cur);
@@ -582,7 +585,7 @@ export function createBattleRunner(deps) {
 
   function pump() {
     // hidden tab: no animation frames — keep authoritative battles on their clock (no rendering)
-    if (!hidden()) return;
+    if (!hidden() || pausedAt != null) return;
     for (const e of [...entries.values()]) if (e.authoritative && running(e)) advance(e, clock(), false);
     flushLeaks();
   }
@@ -817,8 +820,11 @@ export function createBattleRunner(deps) {
   if (store && typeof store.subscribe === 'function') {
     offs.push(store.subscribe((s) => {
       const pub = s && s.match && s.match.public ? s.match.public : null;
-      // solo pause (DESIGN §14): the local battle clocks follow m.public.paused
-      setPaused(!!(pub && pub.paused));
+      // Tiny global emergency frames freeze immediately; m.public preserves this across resyncs.
+      const wasEmergency = emergencyFrozen;
+      emergencyFrozen = emergencyActive(s);
+      setPaused(!!(pub && pub.paused) || emergencyFrozen);
+      if (wasEmergency && !emergencyFrozen) redeliver();
       const phase = pub ? pub.phase : null;
       if (phase === lastPhase) return;
       lastPhase = phase;

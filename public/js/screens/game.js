@@ -108,7 +108,7 @@ import { BriefingScreen } from './briefing.js';
 import { BandDraftScreen } from './bandDraft.js';
 import { ResultScreen } from './result.js';
 import { net } from '../net.js';
-import { store, useStore, shallowEqual, serverNow, isSpectating } from '../store.js';
+import { store, useStore, shallowEqual, serverNow, isSpectating, emergencyActive, matchClockNow } from '../store.js';
 import { battleRunner } from '../battle/runner.js';
 import { isClientCombat, observeTarget, teammateProgress, cameraLayers, layerCamera, sidesOf, resumedWatch, followedScout } from '../battle/observe.js';
 import { screenStrip, playerBonds, playerLayer, detailBondOwner, toggleBond, popupView } from '../ui/watchBonds.js';
@@ -161,6 +161,7 @@ function MatchScreen() {
   const field = useStore((s) => s.match.field);
   const myId = useStore((s) => s.me.playerId);
   const conn = useStore((s) => s.connection, shallowEqual);
+  const emergency = useStore(emergencyActive);
   const emotes = useStore((s) => s.emotes);
   const chatOpen = useStore((s) => s.open, Object.is, chatStore);
   const hasChat = useStore((s) => !!s.matchId, Object.is, chatStore);
@@ -232,7 +233,7 @@ function MatchScreen() {
   const scoutBandOwner = scoutPid ? (players.find((p) => p.playerId === scoutPid)?.name || null) : null;
   const personalChoice = !spectator && alive ? normalizePersonalChoice(pub, priv, myId) : null;
   const hasPersonalChoice = !!personalChoice;
-  const editable = phase === PHASE.PREP && !!priv && alive && !priv.ready && !watchingOther && !hasPersonalChoice;
+  const editable = !emergency && phase === PHASE.PREP && !!priv && alive && !priv.ready && !watchingOther && !hasPersonalChoice;
   const showShop = !!priv && alive && (phase === PHASE.PREP || phase === PHASE.SP_DRAFT || phase === PHASE.ROUND_START) && !watchingOther;
   const layersDisabled = phase === PHASE.UNITE || isBossPhase(phase);
   const sp = phase === PHASE.SP_DRAFT ? normalizeSp(pub?.sp, players, myId, pub?.poolGroups) : null;
@@ -243,7 +244,7 @@ function MatchScreen() {
   const pauseSeenRef = useRef(null);
   if (!paused) pauseSeenRef.current = null;
   else if (pauseSeenRef.current == null) pauseSeenRef.current = serverNow();
-  const frozenAt = paused ? frozenNow(pub, serverNow(), pauseSeenRef.current) : null;
+  const frozenAt = emergency ? matchClockNow() : paused ? frozenNow(pub, serverNow(), pauseSeenRef.current) : null;
   // live LP (user playtest #3 item 2): the own normal battle's counted leaks — the local runner's count (authoritative
   // or display replica) and the server's m.public players[].pendingLp, whichever is further (both only grow during a
   // round; a display replica stands still while the player watches a teammate's field, the server's count then moves
@@ -739,11 +740,11 @@ function MatchScreen() {
   }, [battleState?.battleId, battleState?.loading, !!pub]);
 
   // timer ticks (≤ 10 s) while the player still has something to do
-  const cd = countdownState(clockPub?.deadline, serverNow(), total);
-  useTicker(cd.remain != null && cd.remain <= 10 ? 1000 : 0);
+  const cd = countdownState(clockPub?.deadline, matchClockNow(), total);
+  useTicker(!emergency && cd.remain != null && cd.remain <= 10 ? 1000 : 0);
   const lastTick = useRef(null);
   useEffect(() => {
-    if (cd.remain == null || cd.remain > 10 || cd.remain === lastTick.current) return;
+    if (emergency || cd.remain == null || cd.remain > 10 || cd.remain === lastTick.current) return;
     lastTick.current = cd.remain;
     const busyPrep = phase === PHASE.PREP && priv && !priv.ready && alive;
     const myPick = sp && (solo || sp.turnPid === myId) && !sp.pickOf.has(myId);

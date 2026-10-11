@@ -42,6 +42,9 @@ export const HELLO_TIMEOUT_MS = 8000;
 export const PING_INTERVAL_MS = 4000;
 export const DEAD_AFTER_MS = 15000;
 export const BACKOFF = Object.freeze({ base: 500, factor: 2, max: 10000, jitter: 0.2 });
+const EMERGENCY_RETRY_MS = 120000;
+const EMERGENCY_RETRY_MIN_MS = 30000;
+const EMERGENCY_RETRY_JITTER_MS = 5000;
 
 /** Client-side error codes (in addition to shared ERR codes). */
 export const CLIENT_ERR_TEXT = Object.freeze({
@@ -161,6 +164,8 @@ export class Net {
     this._listeners = new Map();
     this._manualClose = false;
     this._quietSwap = false;   // next connect() keeps the current status (see CLOSE_HELLO_TIMEOUT)
+    this._helloEmergencyBlocked = false; // only refused visitors; match members retain normal reconnect priority
+    this._emergencyRetryAt = 0;
     this._openedAt = 0;
     this._reconnectTimer = null;
     this._pingTimer = null;
@@ -221,6 +226,7 @@ export class Net {
 
   /** Open the socket (no-op when already open/connecting). Also resumes after close()/replacement. */
   connect() {
+    if (this._helloEmergencyBlocked && this._reconnectTimer && this.now() < this.retryAt) return;
     const quiet = this._quietSwap;
     this._quietSwap = false;
     if (this.ws && (this.ws.readyState === WS_OPEN || this.ws.readyState === WS_CONNECTING)) return;
@@ -338,7 +344,11 @@ export class Net {
 
   _scheduleReconnect() {
     if (this._manualClose) return;
-    const delay = backoffDelay(this.attempt, this.random);
+    // A rejected visitor cannot bypass emergency admission throttling by refocusing the tab.
+    const remaining = this._emergencyRetryAt > this.now() ? this._emergencyRetryAt - this.now() : EMERGENCY_RETRY_MS;
+    const delay = this._helloEmergencyBlocked
+      ? Math.max(EMERGENCY_RETRY_MIN_MS, Math.min(EMERGENCY_RETRY_MS, remaining)) + Math.round(this.random() * EMERGENCY_RETRY_JITTER_MS)
+      : backoffDelay(this.attempt, this.random);
     this.attempt += 1;
     this.retryAt = this.now() + delay;
     this._clearTimer('_reconnectTimer', 'clearTimeout');
@@ -413,6 +423,8 @@ export class Net {
     this.wireVersion = !this._wireDisabled && msg.wire === WIRE_VERSION ? WIRE_VERSION : 0;
     this.attempt = 0;
     this.lastError = null;
+    this._helloEmergencyBlocked = false;
+    this._emergencyRetryAt = 0;
     if (Number.isFinite(msg.serverNow)) this._addClockSample(msg.serverNow + (this.ping ?? 0) / 2 - this.now(), Infinity);
     this._setStatus('online');
     this._flushQueue();
@@ -423,10 +435,12 @@ export class Net {
     this._clearTimer('_helloTimer', 'clearTimeout');
     this._helloRid = null;
     this.lastError = new NetError(msg.code, msg.msg, msg.detail);
+    const alreadyBlocked = this._helloEmergencyBlocked;
+    if (msg.code === 'SERVER_EMERGENCY') this._helloEmergencyBlocked = true;
     this._setStatus('connected');
     // Queued requests can't be sent without a session.
     this._failPending('OFFLINE', true);
-    this._emit('helloError', this.lastError);
+    if (msg.code !== 'SERVER_EMERGENCY' || !alreadyBlocked) this._emit('helloError', this.lastError);
   }
 
   // ---- requests --------------------------------------------------------------------------------
@@ -586,6 +600,9 @@ export class Net {
       // Do not publish or persist that stale welcome, even if the server had already accepted it.
       if (this._helloToken !== this.getToken()) { this.reconnectNow(); return; }
       this._onWelcome(msg);
+    } else if (t === 'm.emergency') {
+      this._emergencyRetryAt = msg.active
+        ? (Number.isFinite(msg.retryAt) ? msg.retryAt - this.clockOffset : this.now() + EMERGENCY_RETRY_MS) : 0;
     } else if (t === 'pong') {
       this._onPong(msg);
     } else if (isHelloError) {

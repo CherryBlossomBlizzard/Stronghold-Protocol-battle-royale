@@ -10,6 +10,31 @@ function cancelled() {
 }
 const send = (id, type, value = {}) => self.postMessage({ id, type, ...value });
 
+/** Only a bounded explicit response identifies why an online transfer was refused. */
+async function unavailableCode(response) {
+  if (!response.body) return 'ASSET_CACHE_DOWNLOAD_FAILED';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      cancelled();
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4096) return 'ASSET_CACHE_DOWNLOAD_FAILED';
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const code = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))?.error;
+    if (code === 'ASSET_CACHE_EMERGENCY' || code === 'SERVER_EMERGENCY') return 'ASSET_CACHE_EMERGENCY';
+    return code === 'ASSET_CACHE_ONLINE_DISABLED' ? code : 'ASSET_CACHE_DOWNLOAD_FAILED';
+  } catch { return 'ASSET_CACHE_DOWNLOAD_FAILED'; }
+  finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
 class LimitedWriter extends zip.Writer {
   constructor(limit) { super(); this.limit = limit; this.chunks = []; this.length = 0; }
   writeUint8Array(chunk) {
@@ -132,7 +157,7 @@ async function work(message) {
         await sleep(seconds * 1000, active.abort.signal);
       }
       if (response.status === 409) throw h.assetCacheError('ASSET_CACHE_STALE_CATALOG');
-      if (response.status === 503) throw h.assetCacheError('ASSET_CACHE_ONLINE_DISABLED');
+      if (response.status === 503) throw h.assetCacheError(await unavailableCode(response));
       if (response.status === 429) throw h.assetCacheError('ASSET_CACHE_BUSY');
       if (response.status !== 200 || Number(response.headers.get('content-length')) !== entry.bytes)
         throw h.assetCacheError('ASSET_CACHE_DOWNLOAD_FAILED');

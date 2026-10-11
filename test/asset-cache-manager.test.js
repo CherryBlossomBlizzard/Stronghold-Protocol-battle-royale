@@ -374,7 +374,7 @@ test('own or another tab playing blocks manual directory update before any downl
 });
 
 test('pause, destruction and starting play abort an in-flight directory stream without adopting partial metadata', async () => {
-  for (const action of ['pause', 'destroy', 'playing', 'other-tab']) {
+  for (const action of ['pause', 'destroy', 'playing', 'other-tab', 'emergency']) {
     const f = await outdatedFixture(); let started, cancelled = false, signal;
     const fetching = new Promise((resolve) => { started = resolve; });
     f.updateResponse((_url, options) => {
@@ -387,12 +387,40 @@ test('pause, destruction and starting play abort an in-flight directory stream w
       const pending = f.manager.updateCatalog(); await fetching;
       if (action === 'playing') await f.manager.setPlaying(true);
       else if (action === 'other-tab') f.externalPlaying(true);
+      else if (action === 'emergency') f.manager.setEmergency(true);
       else f.manager[action]();
       const result = await pending;
       assert.equal(signal.aborted, true, action); assert.equal(cancelled, true, action);
       assert.equal(result.phase, 'paused', action); assert.equal(result.error, null, action);
       assert.equal(result.version, catalog.version, action);
       assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, catalog.version, action);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('emergency blocks online requests locally and recovery never restarts a download automatically', async () => {
+  const f = await outdatedFixture();
+  try {
+    f.manager.setEmergency(true);
+    const reads = f.statusReads(), jobs = f.work.length;
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_EMERGENCY/);
+    await assert.rejects(f.manager.downloadMissing(), /ASSET_CACHE_EMERGENCY/);
+    assert.equal(f.catalogUpdates.length, 0);
+    assert.equal(f.statusReads(), reads);
+    f.manager.setEmergency(false);
+    assert.equal(f.work.length, jobs);
+    assert.equal(f.manager.getState().emergency, false);
+  } finally { f.manager.destroy(); }
+});
+
+test('an explicit emergency refusal is distinct from owner-disabled downloads and preserves the pin', async () => {
+  for (const code of ['ASSET_CACHE_EMERGENCY', 'SERVER_EMERGENCY']) {
+    const f = await outdatedFixture();
+    f.updateResponse(Response.json({ error: code }, { status: 503, headers: { 'Content-Length': '100' } }));
+    try {
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_EMERGENCY/);
+      assert.equal(f.manager.getState().version, catalog.version);
+      assert.equal(f.catalogUpdates.length, 1);
     } finally { f.manager.destroy(); }
   }
 });

@@ -332,7 +332,7 @@ function scriptResults(r, script) {
     r.net.sent.push(msg);
     const mode = script.shift() || 'ok';
     if (mode === 'ok') return Promise.resolve({ t: 'ok' });
-    const code = { lost: 'DISCONNECTED', offline: 'OFFLINE', timeout: 'TIMEOUT', refused: 'WRONG_PHASE' }[mode];
+    const code = { lost: 'DISCONNECTED', offline: 'OFFLINE', timeout: 'TIMEOUT', emergency: 'SERVER_EMERGENCY', refused: 'WRONG_PHASE' }[mode];
     return Promise.reject(Object.assign(new Error(code), { code }));
   };
 }
@@ -434,6 +434,57 @@ test('solo pause: m.public.paused freezes every local battle clock (no ticks, no
   r.advance(1000);
   assert.ok(Math.abs(e.battle.tickCount - (t1 + 60)) <= 2, `resumed on the same clock, no catch-up burst (${e.battle.tickCount})`);
   r.runner.dispose();
+});
+
+test('emergency notice freezes co-op simulation before public state and resumes without catch-up or reports while frozen', async () => {
+  const start = realStart(7316);
+  const r = rig();
+  try {
+    r.store.patch('match', { public: { phase: PHASE.COMBAT, paused: false } });
+    r.net.emit('b.start', start);
+    await r.settle();
+    r.advance(1000);
+    const e = r.runner._entries.get(start.battleId);
+    const tick = e.battle.tickCount;
+    r.store.set({ emergency: { active: true, since: Date.now() } });
+    assert.equal(r.runner.state().emergencyFrozen, true);
+    const reports = r.net.sent.length;
+    r.advance(120000);
+    assert.equal(e.battle.tickCount, tick);
+    assert.equal(r.net.sent.length, reports);
+    r.store.patch('match', { public: { phase: PHASE.COMBAT, emergencyFrozen: true } });
+    r.store.set({ emergency: null });
+    r.advance(1000);
+    assert.equal(e.battle.tickCount, tick, 'resync freeze persists until server match resume');
+    r.store.patch('match', { public: { phase: PHASE.COMBAT, emergencyFrozen: false } });
+    r.advance(1000);
+    assert.ok(Math.abs(e.battle.tickCount - tick - 60) <= 2, 'no catch-up burst after emergency recovery');
+  } finally { r.runner.dispose(); }
+});
+
+test('a result refused during emergency is retained and retried once protection ends', async () => {
+  const r = rig();
+  const start = realStart(7317);
+  scriptResults(r, ['emergency', 'ok']);
+  r.store.patch('match', { public: { phase: PHASE.COMBAT } });
+  try {
+    r.net.emit('b.start', start);
+    await r.settle();
+    r.net.emit('b.end', { battleId: start.battleId, fieldId: start.fieldId, reason: 'forced' });
+    await r.settle();
+    const e = r.runner._entries.get(start.battleId);
+    assert.equal(e.delivery, 'undelivered');
+    r.store.set({ emergency: { active: true, since: Date.now() } });
+    r.net.emit('status', { status: 'online' });
+    await r.settle();
+    assert.equal(r.net.sent.filter((m) => m.t === 'b.result').length, 1, 'no retries while protected');
+    r.store.set({ emergency: null });
+    await r.settle();
+    assert.equal(e.delivery, 'delivered');
+    const sent = r.net.sent.filter((m) => m.t === 'b.result');
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent[0].result, sent[1].result);
+  } finally { r.runner.dispose(); }
 });
 
 /** realStart() with an empty board: every enemy of the wave walks into the blue gate. */

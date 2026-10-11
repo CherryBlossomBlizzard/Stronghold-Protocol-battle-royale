@@ -50,6 +50,7 @@ export function cacheErrorText(code) {
     case 'ASSET_CACHE_ZIP_TOO_LARGE':
     case 'ASSET_CACHE_FILE_TOO_LARGE': return t('无法读取素材包，请选择本站提供的 ZIP 素材包。');
     case 'ASSET_CACHE_ONLINE_DISABLED': return t('服主已关闭在线补齐，请使用本地素材包导入。');
+    case 'ASSET_CACHE_EMERGENCY': return t('服务器带宽紧急保护中，在线补齐已停止；已完成文件保留，恢复后可手动继续。');
     case 'ASSET_CACHE_STALE_CATALOG': return t('本地目录与服务器版本不符，请导入当前完整素材包或目录 JSON；已有缓存时也可手动更新目录。');
     case 'ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE': return t('手动更新目录需要已有的本地目录和素材缓存，请先导入本地素材包。');
     case 'ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED': return t('目录更新请求过于频繁，请等待冷却结束后再试。');
@@ -154,7 +155,7 @@ export function AssetCacheHost() {
           : t('尚未校验')}</span>
         ${canUpdateCatalog ? html`<div class="asset-cache__catalog-update">
           <${Button} variant="secondary" size="sm" icon="download"
-              disabled=${disabled || state.policy?.enabled === false || retrySeconds > 0}
+              disabled=${disabled || state.emergency || state.policy?.enabled === false || retrySeconds > 0}
               onClick=${() => run(() => assetCache.updateCatalog())} data-testid="asset-cache-catalog-update">${t('手动更新目录（限速）')}<//>
           ${retrySeconds > 0 ? html`<span role="status">${t('请等待 {n} 秒后再试', { n: retrySeconds })}</span>` : null}
         </div>` : null}
@@ -169,6 +170,7 @@ export function AssetCacheHost() {
         })}</span>` : null}
       </div>
       ${state.playing ? html`<p class="asset-cache__warning" role="status">${t('对局期间暂停批量缓存，返回大厅后可继续。')}</p>` : null}
+      ${state.emergency ? html`<p class="asset-cache__warning" role="status">${cacheErrorText('ASSET_CACHE_EMERGENCY')}</p>` : null}
       ${state.serverMissingFiles > 0 ? html`<p class="asset-cache__warning">${t('服务器素材存在缺项，只能缓存当前可用文件，请联系服主补齐。')}</p>` : null}
       ${state.requireAssetCache ? html`<p class="asset-cache__warning" role="status">${t('服主要求完整预缓存：当前版本素材全部缓存后，才可创建、加入、最快匹配或观战。')} ${t('完整的资源包将包含目录 JSON，无需单独导入。')}</p>` : null}
       ${!state.supported ? html`<p class="asset-cache__warning">${cacheErrorText('ASSET_CACHE_UNSUPPORTED')}</p>` : null}
@@ -179,7 +181,7 @@ export function AssetCacheHost() {
         <${Button} variant="primary" icon="folder" disabled=${disabled} onClick=${chooseFile} data-testid="asset-cache-import">
           ${t('导入本地素材包')}<span class="asset-cache__recommend">${t('强烈推荐')}</span><//>
         <${Button} variant="secondary" icon="folder" disabled=${disabled} onClick=${() => catalogInput.current?.click()} data-testid="asset-cache-catalog-import">${t('导入目录 JSON')}<//>
-        <${Button} variant="secondary" icon="download" disabled=${disabled || !indexed || !state.missingFiles || state.policy?.enabled === false}
+        <${Button} variant="secondary" icon="download" disabled=${disabled || state.emergency || !indexed || !state.missingFiles || state.policy?.enabled === false}
             onClick=${() => run(() => assetCache.downloadMissing())} data-testid="asset-cache-download">${t('在线补齐缺项（限速）')}<//>
         ${busy ? html`<${Button} variant="secondary" onClick=${() => assetCache.pause()} data-testid="asset-cache-pause">${t('暂停')}<//>` : null}
       </div>

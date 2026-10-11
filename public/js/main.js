@@ -35,9 +35,10 @@ import { render } from '../vendor/preact.module.js';
 import { useErrorBoundary } from '../vendor/hooks.module.js';
 import { html, UiHosts, Button, MicroLabel, closeAllDialogs } from './ui/components.js';
 import { ConnectionBanner } from './ui/connBanner.js';
+import { EmergencyBanner } from './ui/emergencyBanner.js';
 import { ToastHost, toast, toastError, describeError } from './ui/toasts.js';
 import { net, identity, NetError } from './net.js';
-import { store, useStore, emptyMatch, selectRoute, sessionResetNotice, isSpectating } from './store.js';
+import { store, useStore, emptyMatch, selectRoute, sessionResetNotice, isSpectating, emergencyActive } from './store.js';
 import { data } from './data.js';
 import { GAME_FILES } from './ui/gameComponents.js';
 import { TitleScreen, sanitizeName } from './screens/title.js';
@@ -61,6 +62,7 @@ import { initLang, useLang, tickerText } from './ui/lang.js';
 import { t, N_, translateWire } from '../../shared/i18n.js';
 import { recordError } from './diag.js';
 import { installMatchChat } from './matchChat.js';
+import { assetCache } from './assetCache.js';
 
 const RESTORE_GRACE_MS = 1500;
 const JOIN_DELAY_MS = 350;
@@ -135,6 +137,21 @@ function maybeFinishRestore() {
   }
 }
 
+/** Narrow-band emergency recovery may delay the large match snapshot after welcome. */
+function scheduleRestoreExpiry() {
+  clearTimeout(restoreTimer);
+  if (!store.get().ui.restoring || emergencyActive()) return;
+  restoreTimer = setTimeout(() => {
+    if (emergencyActive()) return;
+    const s = store.get();
+    const patch = {};
+    if (s.room && roomStateAt < welcomeAt) patch.room = null;
+    if (s.match.public && matchAt < welcomeAt) patch.match = emptyMatch();
+    store.set(patch);
+    store.patch('ui', { restoring: false });
+  }, RESTORE_GRACE_MS);
+}
+
 /**
  * Leave whatever room / match was on screen for the lobby with nothing stale left behind: open imperative dialogs,
  * the post-resume restore timer, ticker lines and emote bubbles of the old match (the battle runner and the 暂离 flag
@@ -150,6 +167,7 @@ function backToLobby() {
 }
 
 function onWelcome(msg) {
+  onEmergency(msg.emergency);
   identity.saveToken(msg.token);
   identity.rememberMatch(null);
   const prev = store.get();
@@ -168,17 +186,20 @@ function onWelcome(msg) {
   } else if (prev.room || prev.match.public) {
     // Resumed session: the server re-pushes room/match state; drop whatever it doesn't.
     store.patch('ui', { restoring: true });
-    clearTimeout(restoreTimer);
-    restoreTimer = setTimeout(() => {
-      const s = store.get();
-      const patch = {};
-      if (s.room && roomStateAt < welcomeAt) patch.room = null;
-      if (s.match.public && matchAt < welcomeAt) patch.match = emptyMatch();
-      store.set(patch);
-      store.patch('ui', { restoring: false });
-    }, RESTORE_GRACE_MS);
+    scheduleRestoreExpiry();
   }
   schedulePendingJoin();
+}
+
+/** Tiny emergency frames are applied immediately, before any larger match push. */
+function onEmergency(msg) {
+  const wasActive = !!store.get().emergency?.active;
+  const active = msg?.active === true;
+  store.set({ emergency: active ? { active: true, reason: msg.reason || 'bandwidth',
+    since: Number.isFinite(msg.since) && msg.since > 0 ? msg.since : net.serverNow(),
+    ...(Number.isFinite(msg.retryAt) ? { retryAt: msg.retryAt } : {}) } : null });
+  assetCache.setEmergency(active);
+  if (wasActive && !active) toast(t('服务器带宽紧急保护已解除，对局继续；在线补齐需手动恢复'), 'success', { ttl: 6000 });
 }
 
 function onRoomState(msg) {
@@ -233,6 +254,7 @@ function wireNet() {
     toast(known ? t(known) : typeof msg.reason === 'string' && msg.reason.length < 60 ? t('同盟已关闭：{reason}', { reason: msg.reason }) : t('同盟已关闭'), 'warn');
   });
   net.on('m.public', (msg) => { matchAt = Date.now(); store.patch('match', { public: payload(msg) }); maybeFinishRestore(); });
+  net.on('m.emergency', onEmergency);
   net.on('m.private', (msg) => { matchAt = Date.now(); store.patch('match', { private: payload(msg) }); });
   net.on('m.field', (msg) => store.patch('match', { field: payload(msg) }));
   net.on('m.result', (msg) => {
@@ -264,6 +286,8 @@ function wireNet() {
 
   // Entering (title → lobby) while already online also needs the deep-link join.
   store.subscribe((s, prev) => {
+    // Stop cleanup immediately on either emergency signal; once both clear, give snapshots a fresh normal grace.
+    if (emergencyActive(s) !== emergencyActive(prev)) scheduleRestoreExpiry();
     if (s.session.entered && !prev.session.entered) schedulePendingJoin();
     // in a room (co-op or solo, also a resumed one) a match is near: its data starts downloading
     if (s.room && !prev.room) warmGameData();
@@ -305,6 +329,7 @@ function App() {
     <div class="app-bg" aria-hidden="true"></div>
     ${error ? html`<${ScreenCrashed} error=${error} reset=${resetError} />` : html`<${Screen} key=${route} />`}
     <${ConnectionBanner} />
+    <${EmergencyBanner} />
     <${ToastHost} />
     <${UiHosts} />
     <${GuideHost} />
