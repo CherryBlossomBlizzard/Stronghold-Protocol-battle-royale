@@ -17,7 +17,8 @@
 | 分支能力 | 优先核对的实现入口 | 保留的边界 |
 |---|---|---|
 | 房间与协议容量 | `server/lobby.js`、`shared/playerCapacity.js`、`shared/protocol.js`、房间 UI | 20 人座位、每组轮选请求及阶段标识、空位不计人数 |
-| 卡池与信标 | `server/match/pool.js`、`PlayerState.js`、`effectsMeta.js` | D010 三/四/五人固定组、三人完整原池、五人 III 阶 22、接收者组取副本、自选私有库存 |
+| 卡池与信标 | `server/match/pool.js`、`PlayerState.js`、`effectsMeta.js` | D010 固定分组、D028 新版完整联机基准；三人不缩减，五人 III 阶向下取整（v0.2.4 为 45）、其他向上取整；接收者组取副本，自选私有库存 |
+| 装备库存 | `Match.itemPoolFor`、`pool.js`、`player/acquire.js`、`match/spDraft.js`、`invariants.js` | D029 按固定组共享，三/四人原限额、五人 1.25 倍向上取整；奖励、支援、升级与重刷使用接收者组，空页只结束该组 |
 | 机变与真人优先 | `server/match/choices.js`、`match/phases.js`、`match/spDraft.js`、轮选 UI | D012 每组独立六张、组间并行、类型全房一致；D004 组内未选真人优先，保留各组时钟与只读浏览 |
 | 联防与投票 | `server/match/unite.js`、`match/unitePhase.js`、`public/js/ui/hud.js` | D013 固定组数上限至多五轮、全房原选人排序、逐轮真人多数票；本轮打完后取消后续全部，保留漏怪归属与累计收益 |
 | 领袖及两端战斗 | `gamedata.js`、`finalAssault.js`、`server/sim/`、`public/js/battle/runner.js` | 按人数共享血池、无人机 2% 机制、普通限伤保留 |
@@ -27,6 +28,7 @@
 | 开局重刷 | `match/setupVote.js`、`match/platform.js`、`ui/setupReroll.js` | D018 全体真人一致同意；重建全部固定组与自选库存，准备失败不部分替换；策略采用 50 秒，机变时长不变 |
 | 素材预缓存及安装 | `server/assetCacheCatalog.js`、`server/http/assetCache.js`、`public/js/assetCache.js`、`public/asset-cache-sw.js`、`public/js/pwa.js` | D016 按哈希补缺、单缓存 SW、对局暂停批量任务；安装按钮不能引入第二套应用缓存；大厅/房间入口保留 |
 | 大厅目录及身份恢复 | `server/lobbyDiscovery.js`、`server/lobby.js`、`public/js/ui/lobbyDiscovery.js`、`public/js/net.js`、`ui/resumeMatch.js` | D017 实际空席匹配、仅大厅订阅、断线与恢复后重订阅；恢复选择时普通自动公告延后，新增按钮不遮挡标题 |
+| 紧凑编码与模块缓存 | `shared/wireCodec.js`、`public/js/runtime.js`、渲染加载器 | D021 已发布 v1 布局不重排，新字段放扩展位；D022 重试查询参数不能丢失页面固定 rv 内容版本 |
 
 每个有实际取舍的冲突记录「上游改了什么 / 我们需要什么 / 最终怎么结合 / 如何验证」。不能只写「冲突已解决」，也不能未经核对整文件选 ours/theirs。用户决定需要改变时先提出具体选项。
 
