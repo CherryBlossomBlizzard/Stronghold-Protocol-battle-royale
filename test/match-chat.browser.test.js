@@ -38,6 +38,8 @@ class ControlledChatMatch extends StubMatch {
     view.round = this.phase === PHASE.INFO_CHECK || this.phase === PHASE.BAND_DRAFT ? 0 : 1;
     view.players = view.players.map((p) => ({ ...p, lp: 17, bandId: this.bandId,
       alive: this.players.get(p.playerId).alive !== false, autoplay: !!this.players.get(p.playerId).autoplay }));
+    const playerIds = view.players.map((p) => p.playerId);
+    view.poolGroups = [{ id: 1, playerIds: playerIds.slice(0, 4) }, { id: 2, playerIds: playerIds.slice(4) }];
     return view;
   }
   privateView(p) {
@@ -161,6 +163,12 @@ test('Edge match-only chat remains separate, readable and usable for players/spe
     await host.keyboard.press('Enter');
     for (const page of [host, guest]) await waitMessage(page, '开局确认消息😀');
     assert.equal((await chatState(host)).draft, '');
+    await host.waitForSelector('.mchat-line__avatar');
+    assert.equal(await host.$eval('.mchat-line:first-child .mchat-line__group', (el) => el.textContent), 'A');
+    assert.equal(await host.$eval('.mchat-line:first-child .mchat-line__seat', (el) => el.textContent), 'P1');
+    assert.equal(await host.$eval('.mchat-line:first-child .mchat-line__who > b', (el) => el.textContent), '聊天房主');
+    assert.ok(await host.$('.mchat-line:first-child .mchat-line__avatar .pavatar__img'));
+    assert.equal(await host.$('.mchat-panel__note'), null, '本局保留提示行已移除');
     await guest.waitForSelector('.mchat-toggle__badge');
     assert.equal(await guest.$eval('.mchat-toggle__badge', (el) => el.textContent), '1');
     await openChat(guest);
@@ -173,7 +181,7 @@ test('Edge match-only chat remains separate, readable and usable for players/spe
     await setDraft(viewer, literal); tick();
     await viewer.click(SEND);
     for (const page of [host, guest, viewer]) await waitMessage(page, literal);
-    assert.equal(await host.$eval('.mchat-panel__messages', (el) => el.querySelector('img,script') !== null), false);
+    assert.equal(await host.$eval('.mchat-panel__messages', (el) => el.querySelector('.mchat-line > p img, .mchat-line > p script') !== null), false);
     assert.equal(await host.evaluate(() => globalThis.chatInjected), undefined);
     assert.equal((await chatState(host)).messages.at(-1).spectator, true);
     assert.equal((await chatState(host)).messages.at(-1).seat, null);
@@ -253,6 +261,9 @@ test('Edge match-only chat remains separate, readable and usable for players/spe
         `${viewport.width}: full chat panel inside viewport`);
       assert.ok(opened.sendHit && opened.closeHit, `${viewport.width}: send and close can be clicked`);
       assert.ok(opened.input.top >= opened.panel.top && opened.input.bottom <= opened.panel.bottom + 1, 'editor stays within panel');
+      assert.ok(opened.panel.width >= Math.min(viewport.width - 24, 360) - 1, `${viewport.width}: chat panel keeps the wider layout`);
+      assert.ok(opened.input.height <= Math.max(40, viewport.width / 1920 * 58) + 2,
+        `${viewport.width}: input height stays compact`);
       assert.equal(overlap(opened.panel, opened.toggle), false, 'panel sits above its button');
       await host.screenshot({ path: path.join(OUT, `chat-prep-${viewport.width}.png`) });
       report.layouts.push({ ...viewport, closed, opened });

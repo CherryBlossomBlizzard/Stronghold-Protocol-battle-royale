@@ -8,6 +8,8 @@ import { t } from '../../../shared/i18n.js';
 import { CHAT_LIMITS, chatTextLength } from '../../../shared/matchChat.js';
 import { useStore } from '../store.js';
 import { chatStore, chatActions, selectChatUnread } from '../matchChat.js';
+import { PlayerAvatar } from './gameComponents.js';
+import { poolGroups } from './gameLogic/groups.js';
 
 const cx = (...parts) => parts.flat().filter(Boolean).join(' ');
 
@@ -36,7 +38,7 @@ export function MatchChatToggle({ open = false, unread = 0, onToggle, class: cls
  * Rendering strings as text vnodes prevents user messages and names from injecting markup or links.
  */
 export function MatchChatPanel({ open = false, messages = [], draft = '', unread = 0, connected = true, canSend = true,
-  maxChars = CHAT_LIMITS.text, onClose, onDraft, onSend, onRead, class: cls, style }) {
+  maxChars = CHAT_LIMITS.text, players = [], spectators = [], publicView = null, onClose, onDraft, onSend, onRead, class: cls, style }) {
   const [busy, setBusy] = useState(false);
   const sendPending = useRef(false);
   const listRef = useRef(null);
@@ -47,6 +49,14 @@ export function MatchChatPanel({ open = false, messages = [], draft = '', unread
   const live = useRef(null);
   live.current = { onClose, onRead };
   const rows = Array.isArray(messages) ? messages : [];
+  const participants = new Map();
+  for (const player of [...(Array.isArray(players) ? players : []), ...(Array.isArray(spectators) ? spectators : [])]) {
+    if (player?.playerId && !participants.has(player.playerId)) participants.set(player.playerId, player);
+  }
+  const groupByPlayer = new Map();
+  for (const group of poolGroups(publicView)) for (const playerId of group.playerIds) {
+    if (!groupByPlayer.has(playerId)) groupByPlayer.set(playerId, group);
+  }
   const lastSeq = rows.at(-1)?.seq || 0;
   const count = chatLength(draft);
   const limit = Number.isInteger(maxChars) && maxChars > 0 ? maxChars : CHAT_LIMITS.text;
@@ -107,10 +117,21 @@ export function MatchChatPanel({ open = false, messages = [], draft = '', unread
         nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
         if (nearBottom.current && lastSeq) onRead?.(lastSeq);
       }}>
-      ${rows.length ? rows.map((m) => html`<div class=${cx('mchat-line', m.spectator && 'is-spectator')} key=${m.seq}>
-        <div class="mchat-line__who"><span class="mchat-line__seat">${m.spectator ? t('观战') : Number.isInteger(m.seat) ? `P${m.seat + 1}` : ''}</span>
-          <b>${m.name || t('博士')}</b></div><p>${m.text}</p>
-      </div>`) : html`<p class="mchat-panel__empty">${t('还没有聊天消息')}</p>`}
+      ${rows.length ? rows.map((m) => {
+        const participant = participants.get(m.playerId) || m;
+        const seat = Number.isInteger(participant.seat) ? participant.seat : m.seat;
+        const group = m.spectator ? null : groupByPlayer.get(m.playerId);
+        const player = { ...participant, playerId: m.playerId, name: participant.name || m.name, seat };
+        return html`<div class=${cx('mchat-line', m.spectator && 'is-spectator')} key=${m.seq}>
+          <div class="mchat-line__who">
+            <${PlayerAvatar} player=${player} size="sm" class="mchat-line__avatar" />
+            ${group ? html`<span class="mchat-line__group" style=${`--pool-group-color:${group.color}`}
+              aria-label=${t('{group}组 · 同组共享卡池', { group: group.label })}>${group.label}</span>` : null}
+            <span class="mchat-line__seat">${m.spectator ? t('观战') : Number.isInteger(seat) ? `P${seat + 1}` : ''}</span>
+            <b>${player.name || t('博士')}</b>
+          </div><p>${m.text}</p>
+        </div>`;
+      }) : html`<p class="mchat-panel__empty">${t('还没有聊天消息')}</p>`}
     </div>
     ${unread && !nearBottom.current ? html`<button type="button" class="mchat-panel__latest" onClick=${() => {
       nearBottom.current = true;
@@ -118,7 +139,6 @@ export function MatchChatPanel({ open = false, messages = [], draft = '', unread
       if (lastSeq) onRead?.(lastSeq);
     }}>${t('{n} 条新消息，查看最新', { n: unread })}</button>` : null}
     <footer class="mchat-panel__foot">
-      <span class="mchat-panel__note">${t('聊天仅保留本局，对局结束后清除')}</span>
       <div class="mchat-panel__compose">
         <textarea ref=${inputRef} rows="2" maxlength=${CHAT_LIMITS.inputUnits} value=${draft} disabled=${!connected || !canSend} data-testid="match-chat-input"
           aria-label=${t('聊天内容')} placeholder=${connected ? t('输入消息…') : t('断线后暂时无法发送')}
@@ -147,6 +167,8 @@ export function MatchChatButton({ class: cls, onBeforeOpen }) {
 export function MatchChatHost({ phase, away = false }) {
   const state = useStore((s) => s, Object.is, chatStore);
   const connected = useStore((s) => s.connection.status === 'online');
+  const publicView = useStore((s) => s.match?.public || null);
+  const spectators = useStore((s) => s.room?.spectators || []);
   const [anchor, setAnchor] = useState(null);
   useLayoutEffect(() => {
     if (!state.open) return undefined;
@@ -167,6 +189,7 @@ export function MatchChatHost({ phase, away = false }) {
   }, [state.open, phase, away]);
   if (!state.matchId) return null;
   return html`<${MatchChatPanel} open=${state.open} messages=${state.messages} draft=${state.draft}
+    publicView=${publicView} players=${publicView?.players || []} spectators=${spectators}
     unread=${selectChatUnread(state)} connected=${connected} onClose=${() => chatActions.setOpen(false)}
     onDraft=${chatActions.setDraft} onSend=${chatActions.send} onRead=${chatActions.markRead}
     style=${anchor ? `--mchat-left:${anchor.left}px;--mchat-bottom:${anchor.bottom}px` : undefined} />`;
