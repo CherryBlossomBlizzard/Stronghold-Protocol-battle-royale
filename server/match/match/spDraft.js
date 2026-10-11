@@ -84,7 +84,7 @@ export class MatchSpDraft {
       const secs = first ? this.gd.timer('spFirst') : this.gd.timer('spTurn');
       const ms = this.scaled(secs * 1000);
       g.turnSeconds = ms / 1000;
-      g.turnDeadline = this.sched.now() + ms;
+      g.turnDeadline = this.sched.gameNow() + ms;
       g.timer = this.later(ms, () => {
         if (this.phase !== PHASE.SP_DRAFT || this.sp !== s || token !== g.token) return;
         const ps = this.players.get(g.order[g.idx]);

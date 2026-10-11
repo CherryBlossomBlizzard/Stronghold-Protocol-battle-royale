@@ -60,6 +60,7 @@ export class LobbyDiscovery {
   /** lobby.watch: only connected players outside any room receive directory updates. */
   watch(session, { on, list = false, page = 0, rid }) {
     if (!on) { this.forget(session.playerId); return OK; }
+    if (this.lobby.emergency?.active) return fail(ERR.SERVER_EMERGENCY);
     if (this.closed || !session.connected) return fail(ERR.BAD_TARGET, 'not connected');
     if (this.lobby.roomOf(session)) return fail(ERR.BAD_TARGET, 'leave your room first');
     const prev = this.watchers.get(session.playerId);
@@ -90,7 +91,7 @@ export class LobbyDiscovery {
 
   /** Schedule one shared update, irrespective of how many room/presence events occur. */
   changed() {
-    if (this.closed || !this.watchers.size || this.timer != null) return;
+    if (this.closed || this.lobby.emergency?.active || !this.watchers.size || this.timer != null) return;
     this.timer = this.timers.setTimeout(() => { this.timer = null; this.flush(); }, LOBBY_UPDATE_MS);
     this.timer?.unref?.();
   }
@@ -138,7 +139,7 @@ export class LobbyDiscovery {
   /** Only changed, bounded views are sent; unopened room lists cost no list traffic. */
   flush() {
     if (this.timer != null) { this.timers.clearTimeout(this.timer); this.timer = null; }
-    if (this.closed) return;
+    if (this.closed || this.lobby.emergency?.active) return;
     for (const [id, watcher] of this.watchers) {
       if (!watcher.session.connected || watcher.ws !== watcher.session.ws || this.lobby.roomOf(watcher.session)) this.forget(id);
     }
@@ -156,6 +157,7 @@ export class LobbyDiscovery {
 
   /** Capacity preference falls back to fastest; ties are random and the join is synchronous. */
   quickMatch(session, { capacity, assetCache } = {}) {
+    if (this.lobby.emergency?.active) return fail(ERR.SERVER_EMERGENCY);
     if (capacity != null && !ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
     const current = this.lobby.roomOf(session);
     if (current?.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');

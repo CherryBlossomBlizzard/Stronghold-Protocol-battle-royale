@@ -179,6 +179,7 @@ import { DataSource } from '../sim/simdata.js';
 import { createRng, deriveSeed } from '../sim/rng.js';
 import { GameData } from './gamedata.js';
 import { RealScheduler } from './scheduler.js';
+import { FreezeScheduler } from './freezeScheduler.js';
 import { createPoolGroups, drawDisabledBonds } from './pool.js';
 import { PlayerState } from './PlayerState.js';
 import { EffectDispatcher, getDefaultRegistry } from './effectsMeta.js';
@@ -249,7 +250,7 @@ export class Match {
     /** Co-op always keeps manual online players first (D004/D012); the upstream setting cannot disable that rule. */
     this.aiPicksLast = !this.isSolo;
     this.ownsScheduler = !opts.scheduler;
-    this.sched = opts.scheduler || new RealScheduler({ now: opts.now || Date.now, onError: (e) => this.reportError('timer', e) });
+    this.sched = new FreezeScheduler(opts.scheduler || new RealScheduler({ now: opts.now || Date.now, onError: (e) => this.reportError('timer', e) }), { ownsSource: this.ownsScheduler });
     this.registry = opts.registry || getDefaultRegistry();
     this.dispatcher = new EffectDispatcher(this, this.registry);
     this.BattleClass = typeof opts.BattleClass === 'function' ? opts.BattleClass : Battle;
@@ -273,6 +274,13 @@ export class Match {
     this._pausedAt = 0;
     /** real ms spent paused this match (diagnostics) */
     this.pausedMs = 0;
+    /** Server-controlled emergency protection is separate from the user's solo combat pause. */
+    this.emergencyFrozen = false;
+    this.emergencyFrozenAt = 0;
+    this.emergencyReason = null;
+    this.emergencyFrozenMs = 0;
+    this._emergencyLeaves = new Set();
+    this._emergencyLostAuthorities = new Set();
     /** boss rounds (client-side combat): the throttled m.public refresh (_bossPublic) */
     this._bossPubTimer = null;
     this._bossPubAt = -Infinity;

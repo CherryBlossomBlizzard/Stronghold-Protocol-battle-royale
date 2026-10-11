@@ -82,6 +82,7 @@ export class MatchPhases {
   }
 
   refreshDraftPriority(playerId = null) {
+    if (this.emergencyFrozen) return;
     const d = this.phase === PHASE.BAND_DRAFT ? this.draft : this.phase === PHASE.SP_DRAFT ? this.sp : null;
     if (!d) return;
     for (const g of d.groups) {
@@ -106,6 +107,7 @@ export class MatchPhases {
   }
 
   maybeEndInfo() {
+    if (this.emergencyFrozen) return;
     if (this.phase !== PHASE.INFO_CHECK || this.setupVote || this._infoAdvanceTimer) return;
     if (this.order.every((p) => p.isBot || p.left || p.infoReady)) {
       this.setDeadline(0);
@@ -174,7 +176,7 @@ export class MatchPhases {
     g.turnSeconds = g.untimed ? 0 : this.bandTurnMs() / 1000;
     if (!g.untimed) {
       const ms = this.bandTurnMs();
-      g.turnDeadline = this.sched.now() + ms;
+      g.turnDeadline = this.sched.gameNow() + ms;
       g.timer = this.later(ms, () => {
         if (this.phase !== PHASE.BAND_DRAFT || this.draft !== d || token !== g.token) return;
         const pid = this.draftTurn(g.playerIds[0]);

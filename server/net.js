@@ -170,11 +170,11 @@ export class SessionRegistry {
   }
 
   /** @param {unknown} token @returns {Session | null} a live (non-expired) session for this token */
-  byToken(token) {
+  byToken(token, { allowExpired = () => false } = {}) {
     if (typeof token !== 'string' || token.length === 0) return null;
     const s = this.byTokenMap.get(token);
     if (!s) return null;
-    if (this.isExpired(s, this.now())) return null;
+    if (this.isExpired(s, this.now()) && !allowExpired(s)) return null;
     return s;
   }
 
@@ -271,6 +271,9 @@ export function encode(msg) {
 const onSendDone = (err) => { void err; }; // errors surface through the socket's 'error'/'close' events
 // A transport capability belongs to the physical socket, never the room/session that survives reconnects.
 const wireVersions = new WeakMap();
+// Frozen matches retain their socket even if an old queue is already full. Do not grow that queue;
+// resync/recovery supplies state later. Ordinary operation retains the existing hard-buffer guard.
+const emergencySockets = new WeakSet();
 
 export const wireVersionOf = (ws) => ws ? wireVersions.get(ws) || 0 : 0;
 const setWireVersion = (ws, version) => wireVersions.set(ws, version);
@@ -317,7 +320,10 @@ function queueRaw(ws, data, { droppable = false } = {}) {
   if (!ws || ws.readyState !== WS_OPEN || typeof data !== 'string') return false;
   try {
     const queued = ws.bufferedAmount;
-    if (queued > NET_DEFAULTS.hardBufferBytes) { ws.terminate(); return false; }
+    if (queued > NET_DEFAULTS.hardBufferBytes) {
+      if (!emergencySockets.has(ws)) ws.terminate();
+      return false;
+    }
     if (droppable && queued > NET_DEFAULTS.snapDropBytes) return false;
     ws.send(data, onSendDone);
     return true;
@@ -520,6 +526,8 @@ class Connection {
     this.key = addr.key;
     this.openedAt = now;
     this.alive = true;
+    this.pendingPingAt = null;
+    this.pongRttMs = 0;
     /** @type {Session | null} */
     this.session = null;
     this.bucket = new TokenBucket(opts.ratePerSec, opts.rateBurst, now);
@@ -562,6 +570,7 @@ export class Network {
     /** @type {Map<string, number>} open sockets per client network key */
     this.connsPerKey = new Map();
     this.closed = false;
+    this.emergency = { active: false, reason: null, since: 0, retryAt: 0 };
     this.heartbeatTimer = setInterval(() => this.heartbeat(), this.opts.heartbeatMs);
     this.heartbeatTimer.unref?.();
     const sweepMs = Math.max(20, Math.min(15_000, Math.floor(this.opts.reconnectWindowMs / 4)));
@@ -571,6 +580,51 @@ export class Network {
 
   /** Number of open sockets. */
   get connectionCount() { return this.conns.size; }
+
+  /** A tiny non-droppable notice goes before match resyncs; never disconnect existing players. */
+  setEmergency(state) {
+    const previous = this.emergency;
+    const active = !!state.active;
+    this.emergency = { active, reason: active ? state.reason || 'bandwidth' : null,
+      since: active ? state.startedAt || state.since || this.now() : 0,
+      retryAt: active ? state.retryAt || 0 : 0 };
+    if (previous.active && !active) {
+      // The reconnect window must not expire merely because the server froze the match.
+      const now = this.now();
+      for (const session of this.registry.all()) {
+        if (!session.connected && session.disconnectedAt != null && this.handler.allowEmergencyResume?.(session)) {
+          session.disconnectedAt += Math.max(0, now - Math.max(previous.since, session.disconnectedAt));
+        }
+      }
+    }
+    const frame = prepareMessage({ t: 'm.emergency', ...this.emergency });
+    for (const [ws, conn] of this.conns) {
+      if (active && conn.session && this.handler.allowEmergencyResume?.(conn.session)) emergencySockets.add(ws);
+      else emergencySockets.delete(ws);
+      if (!conn.closing) sendPrepared(ws, frame);
+    }
+  }
+
+  /** Only gameplay connections corroborate a slow downloader; a slow visitor cannot freeze other matches. */
+  congestion() {
+    let congestedConnections = 0; let maxBufferedBytes = 0; let delayedHeartbeats = 0;
+    let activeConnections = 0;
+    const activeNetworks = new Set(); const congestedNetworks = new Set(); const delayedNetworks = new Set();
+    const now = this.now();
+    for (const [ws, conn] of this.conns) {
+      if (conn.closing || !conn.session || !this.handler.roomOf?.(conn.session)?.match) continue;
+      activeConnections++;
+      const key = conn.key || conn.session.playerId;
+      activeNetworks.add(key);
+      const bytes = Number(ws.bufferedAmount) || 0;
+      maxBufferedBytes = Math.max(maxBufferedBytes, bytes);
+      if (bytes >= 64 * 1024) { congestedConnections++; congestedNetworks.add(key); }
+      if (conn.pendingPingAt != null && now - conn.pendingPingAt > 3000) { delayedHeartbeats++; delayedNetworks.add(key); }
+    }
+    return { activeConnections, activeNetworks: activeNetworks.size, congestedConnections,
+      congestedNetworks: congestedNetworks.size, delayedHeartbeats, delayedNetworks: delayedNetworks.size,
+      impairedNetworks: new Set([...congestedNetworks, ...delayedNetworks]).size, maxBufferedBytes };
+  }
 
   /**
    * Upgrade-time admission check (server/http/websocket.js): null to accept, otherwise the reason to refuse.
@@ -599,7 +653,13 @@ export class Network {
     ws.on('message', (data, isBinary) => {
       try { this.onFrame(conn, data, isBinary); } catch (e) { this.log.error('[net] frame handler crashed', e); }
     });
-    ws.on('pong', () => { conn.alive = true; if (conn.session && conn.session.ws === ws) conn.session.lastSeen = this.now(); });
+    ws.on('pong', () => {
+      const now = this.now();
+      conn.alive = true;
+      if (conn.pendingPingAt != null) conn.pongRttMs = Math.max(0, now - conn.pendingPingAt);
+      conn.pendingPingAt = null;
+      if (conn.session && conn.session.ws === ws) conn.session.lastSeen = now;
+    });
     ws.on('error', (e) => { this.log.debug?.('[net] socket error', e?.code || e?.message); });
     ws.on('close', () => { try { this.onClose(conn); } catch (e) { this.log.error('[net] close handler crashed', e); } });
   }
@@ -692,7 +752,16 @@ export class Network {
     let resumed = false;
     const repeat = !!session;
     if (!session) {
-      session = msg.token ? this.registry.byToken(msg.token) : null;
+      session = msg.token ? this.registry.byToken(msg.token, { allowExpired: (s) =>
+        this.emergency.active && !!this.handler.allowEmergencyResume?.(s) }) : null;
+      // Upgrade cannot identify a resume token. Reject before allocating/replacing any identity,
+      // while preserving running matches' original members' authenticated reconnects.
+      if (this.emergency.active && (!session || !this.handler.allowEmergencyResume?.(session))) {
+        this.reply(conn, { t: 'm.emergency', ...this.emergency });
+        this.reply(conn, errorMsg(ERR.SERVER_EMERGENCY, rid));
+        conn.close(CLOSE.POLICY, 'bandwidth emergency');
+        return;
+      }
       if (session) {
         if (session.connected && session.ws && session.ws !== conn.ws
           && (msg.noReplace || (Number.isFinite(msg.claimAt) && session.claimAt != null && msg.claimAt > session.claimAt))) {
@@ -715,10 +784,12 @@ export class Network {
     session.lastSeen = now;
     session.addr = conn.ip;
     session.limitKey = conn.key;
+    if (this.emergency.active && this.handler.allowEmergencyResume?.(session)) emergencySockets.add(conn.ws);
 
     let extra = null;
     try { extra = this.handler.welcomeInfo?.() ?? null; } catch (e) { this.log.error('[net] welcomeInfo crashed', e); }
-    const welcome = { ...(extra && typeof extra === 'object' ? extra : null), t: 'welcome', playerId: session.playerId, token: session.token, name: session.name, serverNow: now, version: PROTOCOL_VERSION, resumed };
+    const welcome = { ...(extra && typeof extra === 'object' ? extra : null), t: 'welcome', playerId: session.playerId, token: session.token, name: session.name, serverNow: now, version: PROTOCOL_VERSION, resumed,
+      emergency: this.emergency };
     const wire = this.opts.compactWire && msg.wire === WIRE_VERSION ? WIRE_VERSION : 0;
     if (wire) welcome.wire = wire;
     if (validRid(rid)) welcome.rid = rid;
@@ -775,8 +846,13 @@ export class Network {
           conn.close(CLOSE.HELLO_TIMEOUT, 'hello timeout');
           continue;
         }
-        if (!conn.alive) { conn.ws.terminate(); continue; }
+        if (!conn.alive && !(this.emergency.active && conn.session && this.handler.allowEmergencyResume?.(conn.session))) {
+          conn.ws.terminate(); continue;
+        }
         conn.alive = false;
+        // Keep the oldest unanswered heartbeat: repeated pings during protection must not
+        // give a persistently unreachable player a fresh apparently healthy recovery window.
+        conn.pendingPingAt ??= now;
         conn.ws.ping();
       } catch (e) {
         this.log.debug?.('[net] heartbeat error', e?.message);
@@ -787,7 +863,12 @@ export class Network {
   /** Purge expired sessions and tell the handler. */
   sweep() {
     let expired;
-    try { expired = this.registry.sweep(this.now()); } catch (e) { this.log.error('[net] sweep crashed', e); return; }
+    try {
+      // Do not remove a frozen match's original seats while the server is refusing newcomers.
+      expired = [...this.registry.all()].filter((session) => this.registry.isExpired(session, this.now())
+        && !(this.emergency.active && this.handler.allowEmergencyResume?.(session)));
+      for (const session of expired) this.registry.remove(session);
+    } catch (e) { this.log.error('[net] sweep crashed', e); return; }
     for (const s of expired) {
       try { this.handler.onExpire?.(s); } catch (e) { this.log.error('[net] onExpire crashed', e); }
     }

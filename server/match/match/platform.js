@@ -12,6 +12,7 @@ import { FLOW_TICKER_PRIORITY, OK, fail } from './common.js';
 import { msg } from '../../../shared/i18n.js';
 
 const GAME_TYPES = new Set(Object.keys(C2S).filter((t) => Object.hasOwn(C2S, t) && (t.startsWith('g.') || t.startsWith('b.'))));
+const EMERGENCY_SAFE_TYPES = new Set(['g.watch', 'g.leave']);
 
 export class MatchPlatform {
   start() {
@@ -45,6 +46,7 @@ export class MatchPlatform {
       return this.clientCombat && msg && (msg.t === 'b.progress' || msg.t === 'b.result' || msg.t === 'b.yield') ? OK : fail(ERR.WRONG_PHASE);
     }
     if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string' || !GAME_TYPES.has(msg.t)) return fail(ERR.BAD_MSG);
+    if (this.emergencyFrozen && !EMERGENCY_SAFE_TYPES.has(msg.t)) return fail(ERR.SERVER_EMERGENCY);
     let res;
     try {
       res = this._handle(ps, msg);
@@ -67,6 +69,7 @@ export class MatchPlatform {
    * @returns {{ ok: true } | { error: string, detail?: string }}
    */
   setLoadout(playerId, loadout, ops = undefined) {
+    if (this.emergencyFrozen) return fail(ERR.SERVER_EMERGENCY);
     const ps = this.players.get(playerId);
     if (!ps || ps.isBot || ps.left) return fail(ERR.NOT_IN_ROOM);
     if (this.disposed || this.ended || this.phase !== PHASE.INFO_CHECK) return fail(ERR.WRONG_PHASE, 'loadout locked for this match');
@@ -89,7 +92,8 @@ export class MatchPlatform {
       this.cancelSetupVote();
       // a paused solo battle resumes (the server takes the field over; nobody is left to resume it)
       this._resume();
-      if (this.clientCombat) this._authorityLost(ps, 'disconnect');
+      if (this.emergencyFrozen) this._emergencyLostAuthorities.add(playerId);
+      else if (this.clientCombat) this._authorityLost(ps, 'disconnect');
       this.markPublic();
     });
   }
@@ -144,12 +148,14 @@ export class MatchPlatform {
       this.watchers.delete(playerId);
       if (this.ended) return;
       this._resume();
-      if (this.clientCombat) this._authorityLost(ps, 'left');
+      if (this.emergencyFrozen) this._emergencyLostAuthorities.add(playerId);
+      else if (this.clientCombat) this._authorityLost(ps, 'left');
       this.markPublic();
       if (!this.order.some((p) => !p.isBot && !p.left)) {
         this.finish({ victory: false, reason: 'abandoned' });
         return;
       }
+      if (this.emergencyFrozen) { this._emergencyLeaves.add(playerId); return; }
       this._quit(ps);
     });
   }
@@ -218,11 +224,13 @@ export class MatchPlatform {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this._emergencyLeaves.clear();
+    this._emergencyLostAuthorities.clear();
     if (this.runner) { try { this.runner.stop(); } catch { /* ignore */ } }
     this._stopClientCombat();
     for (const h of this._timers) { try { this.sched.clearTimeout(h); } catch { /* ignore */ } }
     this._timers.clear();
     if (this._pubTimer) { try { this.sched.clearTimeout(this._pubTimer); } catch { /* ignore */ } this._pubTimer = null; }
-    if (this.ownsScheduler) this.sched.dispose();
+    this.sched.dispose();
   }
 }

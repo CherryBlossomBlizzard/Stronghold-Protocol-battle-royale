@@ -90,6 +90,12 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
   let rawCatalogBody = null;
   let gzipCatalogBody = null;
   const updateClients = new Map();
+  function emergencyFailure(req, res) {
+    if (!limiter.policy().emergency) return false;
+    res.setHeader('Retry-After', '120');
+    failure(req, res, 503, 'ASSET_CACHE_EMERGENCY');
+    return true;
+  }
   // One immutable catalog per server lifetime, shared by the tiny summary and filling allowlist.
   // Failure is retryable (e.g. setup still copying files); a successful snapshot changes only after restart.
   async function snapshot() {
@@ -114,6 +120,7 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
   }
 
   async function serveCatalogUpdate(req, res, query) {
+    if (emergencyFailure(req, res)) return;
     if (req.method !== 'GET') {
       res.setHeader('Allow', 'GET'); failure(req, res, 405, 'ASSET_CACHE_CATALOG_UPDATE_GET_ONLY'); return;
     }
@@ -131,7 +138,8 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     }
     if (res.destroyed) return;
     if (request.to !== current.version) { failure(req, res, 409, 'ASSET_CACHE_CATALOG_VERSION_MISMATCH'); return; }
-    const key = clientAddress(req, proxy).ip;
+    const address = clientAddress(req, proxy);
+    const key = address.ip;
     const now = updateNow();
     for (const [client, until] of updateClients) if (until <= now) updateClients.delete(client);
     const until = updateClients.get(key);
@@ -143,7 +151,8 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     if (updateClients.size >= MAX_UPDATE_CLIENTS) {
       res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return;
     }
-    const lease = limiter.acquire(key);
+    if (emergencyFailure(req, res)) return;
+    const lease = limiter.acquire(key, res, address.key || address.ip);
     if (!lease) { res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return; }
     updateClients.set(key, now + UPDATE_COOLDOWN_MS);
     const cancel = () => lease.release();
@@ -165,6 +174,7 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
   }
 
   async function serve(req, res, rawPath, query) {
+    if (rawPath !== `${ASSET_CACHE_PREFIX}status` && emergencyFailure(req, res)) return;
     // Legacy and cold routes remain closed. Only the distinct explicit stale-directory update
     // route can transfer a full directory; opening/checking the panel never calls it.
     if (rawPath === `${ASSET_CACHE_PREFIX}catalog`) {
@@ -200,9 +210,11 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
       'X-Accel-Buffering': 'no', 'Accept-Ranges': 'none' };
     // Metadata-only requests cannot consume a streaming slot or bypass the online-disable switch.
     if (req.method === 'HEAD') { res.writeHead(200, headers); res.end(); return; }
+    if (emergencyFailure(req, res)) return;
     if (!limiter.policy().enabled) { failure(req, res, 503, 'ASSET_CACHE_ONLINE_DISABLED'); return; }
-    const key = clientAddress(req, proxy).ip;
-    const lease = limiter.acquire(key);
+    const address = clientAddress(req, proxy);
+    const key = address.ip;
+    const lease = limiter.acquire(key, res, address.key || address.ip);
     if (!lease) {
       res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return;
     }
@@ -229,5 +241,6 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
   }
 
   return { serve, close: () => { limiter.close(); updateClients.clear(); }, policy: () => limiter.policy(),
+    trip: (reason) => limiter.trip(reason), resume: () => limiter.resume(), metrics: () => limiter.metrics(),
     summary: async () => { await snapshot(); return current; }, currentSummary: () => current };
 }

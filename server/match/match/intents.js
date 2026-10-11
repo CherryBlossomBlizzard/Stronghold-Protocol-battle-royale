@@ -78,6 +78,7 @@ export class MatchIntents {
 
   /** Let the bot act for a (newly) bot-controlled seat in the current phase. */
   kickBot(ps) {
+    if (this.emergencyFrozen) return;
     if (!ps.botControlled || this.ended) return;
     if (this.phase === PHASE.INFO_CHECK && !ps.infoReady) { ps.infoReady = true; this.markPublic(); this.maybeEndInfo(); }
     else if (this.phase === PHASE.BAND_DRAFT && this.draftTurn(ps.playerId) === ps.playerId) this.scheduleBandBot(this.draftGroup(ps.playerId));

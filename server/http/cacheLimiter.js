@@ -39,17 +39,48 @@ export class CacheDownloadLimiter {
     this.timer = null;
     this.pumping = false;
     this.closed = false;
+    this.tripped = false;
+    this.tripReason = '';
+    this.tripSince = 0;
+    this.bytesWritten = 0;
+    this.backpressureEvents = 0;
   }
 
   policy() {
-    return { enabled: !this.closed && this.opts.totalBps > 0, totalBps: this.opts.totalBps,
+    return { enabled: !this.closed && !this.tripped && this.opts.totalBps > 0, totalBps: this.opts.totalBps,
       clientBps: this.opts.clientBps, maxDownloads: this.opts.maxDownloads,
-      maxDownloadsPerClient: this.opts.maxDownloadsPerClient, activeDownloads: this.active };
+      maxDownloadsPerClient: this.opts.maxDownloadsPerClient, activeDownloads: this.active,
+      emergency: this.tripped, emergencyReason: this.tripReason, emergencySince: this.tripSince };
+  }
+
+  /** Per-IP demand sets the existing cap; distinct network keys provide separate congestion evidence. */
+  metrics() {
+    let activeClients = 0, demandClients = 0, streamingDownloads = 0, preparingDownloads = 0;
+    let remainingBytes = 0, blockedDownloads = 0;
+    const demandNetworks = new Set();
+    for (const client of this.clients.values()) {
+      if (!client.jobs.size) continue;
+      activeClients++;
+      let demand = false;
+      for (const job of client.jobs) {
+        if (!job.started) { preparingDownloads++; continue; }
+        streamingDownloads++;
+        const remaining = Math.max(0, job.size - job.position);
+        remainingBytes += remaining;
+        if (remaining > 0) { demand = true; demandNetworks.add(job.networkKey); }
+        if (job.blocked) blockedDownloads++;
+      }
+      if (demand) demandClients++;
+    }
+    return { ...this.policy(), activeClients, demandClients, demandNetworks: demandNetworks.size, streamingDownloads, preparingDownloads,
+      remainingBytes, blockedDownloads, bytesWritten: this.bytesWritten,
+      backpressureEvents: this.backpressureEvents,
+      expectedBps: this.policy().enabled ? Math.min(this.opts.totalBps, this.opts.clientBps * demandClients) : 0 };
   }
 
   /** Reserve before opening/hash-checking a file, bounding disk work as well as sockets. */
-  acquire(key) {
-    if (this.closed || this.opts.totalBps === 0 || this.active >= this.opts.maxDownloads) return null;
+  acquire(key, response = null, networkKey = key) {
+    if (this.closed || this.tripped || this.opts.totalBps === 0 || this.active >= this.opts.maxDownloads) return null;
     const now = performance.now();
     this.prune(now);
     let client = this.clients.get(key);
@@ -60,20 +91,30 @@ export class CacheDownloadLimiter {
     }
     let resolve;
     const done = new Promise((r) => { resolve = r; });
-    const job = { client, handle: null, buffer: null, res: null, size: 0, position: 0, blocked: false, released: false,
+    const job = { client, networkKey, handle: null, buffer: null, res: null, size: 0, position: 0, blocked: false, released: false,
+      started: false, ending: false, aborted: false,
       cleanup: null, resolve, done };
     client.jobs.add(job);
     this.active++;
     const release = () => this.release(job);
-    const start = (handle, buffer, res, size) => {
-      if (job.released) return done;
-      if (job.res) throw new Error('asset cache lease already streaming');
-      job.handle = handle; job.buffer = buffer; job.res = res; job.size = size;
+    const attach = (res) => {
+      job.res = res;
       const onClose = () => release();
       const onError = () => release();
       const onDrain = () => { job.blocked = false; this.schedule(); };
-      res.once('close', onClose); res.once('error', onError); res.on('drain', onDrain);
-      job.cleanup = () => { res.off('close', onClose); res.off('error', onError); res.off('drain', onDrain); };
+      res.once('close', onClose); res.once('finish', onClose); res.once('error', onError); res.on('drain', onDrain);
+      job.cleanup = () => { res.off('close', onClose); res.off('finish', onClose); res.off('error', onError); res.off('drain', onDrain); };
+      if (res.destroyed || res.writableFinished) release();
+    };
+    if (response) attach(response);
+    const start = (handle, buffer, res, size) => {
+      // A file can finish preparing after an emergency abort, including after a subsequent resume.
+      // Its old lease must never start sending again.
+      if (job.released) { if (job.aborted && !res.destroyed) res.destroy(); return done; }
+      if (job.started) throw new Error('asset cache lease already streaming');
+      if (job.res && job.res !== res) throw new Error('asset cache lease response changed');
+      job.handle = handle; job.buffer = buffer; job.size = size; job.started = true;
+      if (!job.res) attach(res);
       if (res.destroyed || res.writableEnded) release();
       else this.schedule();
       return done;
@@ -109,13 +150,13 @@ export class CacheDownloadLimiter {
   }
 
   schedule() {
-    if (this.closed || this.timer || this.pumping || !this.active) return;
+    if (this.closed || this.tripped || this.timer || this.pumping || !this.active) return;
     this.timer = setTimeout(() => { this.timer = null; this.pump(); }, TICK_MS);
     this.timer.unref?.();
   }
 
   async pump() {
-    if (this.closed || this.pumping) return;
+    if (this.closed || this.tripped || this.pumping) return;
     this.pumping = true;
     try {
       const now = performance.now();
@@ -128,18 +169,18 @@ export class CacheDownloadLimiter {
       }
       let misses = 0;
       // No busy-spin when every client is capped/backpressured/preparing its file.
-      while (!this.closed && this.tokens >= 1 && clients.length && misses < clients.length) {
+      while (!this.closed && !this.tripped && this.tokens >= 1 && clients.length && misses < clients.length) {
         const client = clients[this.cursor++ % clients.length];
         const jobs = [...client.jobs];
         let job = null;
         for (let i = 0; i < jobs.length; i++) {
           const candidate = jobs[client.cursor++ % jobs.length];
-          if (!candidate.released && (candidate.handle || candidate.buffer) && !candidate.blocked) { job = candidate; break; }
+          if (!candidate.released && !candidate.ending && (candidate.handle || candidate.buffer) && !candidate.blocked) { job = candidate; break; }
         }
         if (!job || client.tokens < 1) { misses++; continue; }
         const length = Math.floor(Math.min(QUANTUM, this.tokens, client.tokens, job.size - job.position));
         if (length <= 0) {
-          if (job.position >= job.size) { job.res.end(); this.release(job); }
+          if (job.position >= job.size) { job.ending = true; job.res.end(); }
           else misses++;
           continue;
         }
@@ -151,9 +192,12 @@ export class CacheDownloadLimiter {
           if (job.released) continue;
           if (bytesRead !== length) throw new Error('asset cache file changed during transfer');
           this.tokens -= bytesRead; client.tokens -= bytesRead;
-          job.position += bytesRead;
           job.blocked = !job.res.write(buffer.subarray(0, bytesRead));
-          if (job.position === job.size) { job.res.end(); this.release(job); }
+          if (job.blocked) this.backpressureEvents++;
+          job.position += bytesRead;
+          this.bytesWritten += bytesRead;
+          // Retain the response until finish/close so emergency abort also cancels its final buffered quantum.
+          if (job.position === job.size) { job.ending = true; job.res.end(); }
         } catch {
           job.res.destroy(); this.release(job);
         }
@@ -161,13 +205,41 @@ export class CacheDownloadLimiter {
     } finally { this.pumping = false; this.schedule(); }
   }
 
-  close() {
-    this.closed = true;
+  abortAll() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     for (const client of this.clients.values()) for (const job of [...client.jobs]) {
+      job.aborted = true;
       job.res?.destroy(); this.release(job);
     }
     this.clients.clear();
+    this.tokens = 0;
+    this.updatedAt = performance.now();
+  }
+
+  /** Recoverable emergency gate; unlike close(), resume() may admit entirely new leases afterwards. */
+  trip(reason = 'bandwidth-congestion') {
+    if (this.closed || this.tripped) return false;
+    this.tripped = true;
+    this.tripReason = String(reason);
+    this.tripSince = Date.now();
+    this.abortAll();
+    return true;
+  }
+
+  resume() {
+    if (this.closed || !this.tripped) return false;
+    this.tripped = false;
+    this.tripReason = '';
+    this.tripSince = 0;
+    this.tokens = 0;
+    this.updatedAt = performance.now();
+    return true;
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.abortAll();
   }
 }

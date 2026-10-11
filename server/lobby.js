@@ -274,6 +274,7 @@ export class Lobby {
     /** @type {number | null} Owner-controlled AI ceiling, independent from the distributed bundle defaults. */
     this.maxAiPerRoom = null;
     this.requireAssetCache = false;
+    this.emergency = { active: false };
     this.getAssetCacheSummary = () => null;
     /** @type {Map<string, Room>} */
     this.rooms = new Map();
@@ -319,6 +320,18 @@ export class Lobby {
     return fail(ERR.ASSET_CACHE_REQUIRED, !expected ? 'server-assets-pending'
       : !expected.complete || expected.missingFiles ? 'server-assets-incomplete' : 'precache-missing');
   }
+
+  /** Runtime bandwidth protection is independent from persistent owner settings. */
+  setEmergency(state) {
+    this.emergency = { active: !!state.active, reason: state.reason || 'bandwidth',
+      since: state.startedAt || state.since || this.now(), retryAt: state.retryAt || 0 };
+    for (const room of this.rooms.values()) if (room.match) {
+      this.callMatch(room, 'setEmergencyFreeze', this.emergency.active, this.emergency);
+    }
+    this.discovery.changed();
+  }
+
+  allowEmergencyResume(session) { return !!this.roomOf(session)?.match; }
 
   /** Preserve the earliest AI seats and every human; remove only surplus trailing AI seats. */
   trimBots(room) {
@@ -391,6 +404,9 @@ export class Lobby {
    * @returns {{ ok: true } | { error: string, detail?: string }}
    */
   onMessage(session, msg) {
+    if (this.emergency.active && (['lobby.quickMatch', 'room.create', 'room.start', 'room.rerollSetup',
+      'room.cancelReroll', 'room.loadout', 'room.ownership', 'room.diy', 'room.chat'].includes(msg.t)
+      || (msg.t === 'lobby.watch' && msg.on))) return fail(ERR.SERVER_EMERGENCY);
     switch (msg.t) {
       case 'lobby.watch': return this.discovery.watch(session, msg);
       case 'lobby.quickMatch': return this.discovery.quickMatch(session, msg);
@@ -467,6 +483,7 @@ export class Lobby {
   // ---------------------------------------------------------------------------------------------------
 
   create(session, { mode, difficulty, capacity = DEFAULT_SEATS, assetCache }) {
+    if (this.emergency.active) return fail(ERR.SERVER_EMERGENCY);
     if (!ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
     const cur = this.roomOf(session);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
@@ -507,6 +524,7 @@ export class Lobby {
     const cur = this.roomOf(session);
     // idempotent for members; a spectator of this room goes on below: it may take a free player seat (header)
     if (cur === room && !room.spectatorOf(session.playerId)) { this.discovery.forget(session.playerId); this.sendState(room, session); return OK; }
+    if (this.emergency.active) return fail(ERR.SERVER_EMERGENCY);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     if (room.match) return fail(ERR.ROOM_STARTED);
     const admission = this.assetCacheAdmission(assetCache);
@@ -547,6 +565,7 @@ export class Lobby {
       this.sendState(room, session);
       return OK;
     }
+    if (this.emergency.active) return fail(ERR.SERVER_EMERGENCY);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     const admission = this.assetCacheAdmission(assetCache);
     if (admission) return admission;
@@ -721,6 +740,7 @@ export class Lobby {
   }
 
   start(session) {
+    if (this.emergency.active) return fail(ERR.SERVER_EMERGENCY);
     const room = this.roomOf(session);
     if (!room) return fail(ERR.NOT_IN_ROOM);
     if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
@@ -826,7 +846,7 @@ export class Lobby {
 
   /** Extra welcome fields: supported 自选 operators and the current owner-controlled precache policy. */
   welcomeInfo() {
-    return { diyKitted: KITTED_CHARS, requireAssetCache: this.requireAssetCache };
+    return { diyKitted: KITTED_CHARS, requireAssetCache: this.requireAssetCache, emergency: this.emergency };
   }
 
   // ---------------------------------------------------------------------------------------------------

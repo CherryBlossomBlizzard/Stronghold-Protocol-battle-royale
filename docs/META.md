@@ -207,6 +207,10 @@ always. While paused (`m.public.paused`) the field clocks, the authority deadlin
 fields' `startAt` / `lastProgressAt` and the boss start by the paused time and re-arms the timers. A disconnect or
 `onLeave` resumes; the battle phase ending clears it (`pausedMs` totals the paused time).
 
+### 1.3b Bandwidth emergency protection (fork)
+
+`Match.setEmergencyFreeze` is separate from solo `g.pause`: `FreezeScheduler` holds all phase timers and AI intervals, and `m.public.emergencyFrozen` marks a held match. Clients stop local battles and countdowns; advancing intents and battle reports temporarily return `SERVER_EMERGENCY`. Recovery preserves remaining delays and shifts deadlines / field clocks without replaying missed ticks. Disconnect and leave update seat connectivity immediately but defer gameplay consequences; original members can reconnect during protection. The last human explicitly abandoning a match still ends it. Automatic retry defaults to 120 seconds and waits longer while known gameplay connections remain congested or a match has no connected humans. Detection, admission, notification limits and configuration are documented in [ASSET_CACHE.md](ASSET_CACHE.md#带宽紧急保护).
+
 ### 1.4 Watching fields
 Client-side combat (the default, DESIGN §14 Spectating; `Match._watchClient`): `g.watch` answers with the field's
 `b.start` (a display replica fast-forwarded to the field clock); an alive player may not watch another normal field

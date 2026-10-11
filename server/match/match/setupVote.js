@@ -10,6 +10,7 @@ import { OK, fail } from './common.js';
 
 export class MatchSetupVote {
   requestSetupReroll(playerId, revision) {
+    if (this.emergencyFrozen) return fail(ERR.SERVER_EMERGENCY);
     if (this.disposed || this.ended || this.phase !== PHASE.INFO_CHECK) return fail(ERR.WRONG_PHASE);
     const ps = this.players.get(playerId);
     if (!ps || ps.isBot || ps.left || !ps.connected) return fail(ERR.NOT_IN_ROOM);
@@ -50,6 +51,7 @@ export class MatchSetupVote {
   }
 
   cancelSetupReroll(playerId, voteId) {
+    if (this.emergencyFrozen) return fail(ERR.SERVER_EMERGENCY);
     if (this.disposed || this.ended || this.phase !== PHASE.INFO_CHECK || !this.setupVote) return fail(ERR.WRONG_PHASE);
     if (this.setupVote.id !== voteId) return fail(ERR.BAD_TARGET, 'setup vote changed');
     const ps = this.players.get(playerId);
@@ -64,7 +66,7 @@ export class MatchSetupVote {
     this.setupVote = null;
     if (this.phase === PHASE.INFO_CHECK && !this.disposed && !this.ended) {
       if (vote.remainingMs > 0) {
-        this.deadline = this.sched.now() + vote.remainingMs;
+        this.deadline = this.sched.gameNow() + vote.remainingMs;
         this._phaseTimer = this.later(vote.remainingMs, () => {
           this._phaseTimer = null;
           this.enterBandDraft();

@@ -26,6 +26,7 @@ export class MatchUnite {
   }
 
   refreshUniteSkipVote() {
+    if (this.emergencyFrozen) return;
     const vote = this.uniteSkipVoteView();
     if (!vote) return;
     const plan = this.unitePlan;

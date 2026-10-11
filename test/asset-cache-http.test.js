@@ -62,6 +62,37 @@ const updateURL = (catalog, values = {}) => '/api/asset-cache/catalog-update?' +
 });
 const manualHeaders = { 'X-Asset-Cache-Update': 'manual' };
 
+test('runtime emergency rejects filling before catalog work and resumes without overriding owner disable', async () => {
+  await fixture(async ({ assetCache, server, files, catalog, builds }) => {
+    assetCache.trip('test-congestion');
+    for (const options of [{}, { method: 'HEAD' }]) {
+      const response = await request(server, downloadURL(files[0]), options);
+      assert.equal(response.status, 503);
+      assert.equal(response.headers['retry-after'], '120');
+      if (!options.method) assert.equal(errorOf(response), 'ASSET_CACHE_EMERGENCY');
+    }
+    const update = await request(server, updateURL(catalog), { headers: manualHeaders });
+    assert.equal(errorOf(update), 'ASSET_CACHE_EMERGENCY');
+    assert.equal(builds(), 0, 'rejected requests cannot hash or build the full directory');
+    assert.equal(assetCache.policy().emergency, true);
+    assetCache.resume();
+    assert.equal((await request(server, downloadURL(files[0]))).status, 200);
+  });
+});
+
+test('runtime emergency aborts an active HTTP fill and accepts only a fresh transfer after resume', async () => {
+  await fixture(async ({ assetCache, server, files }) => {
+    await assert.rejects(request(server, downloadURL(files[0]), {
+      onChunk: () => assetCache.trip('test-active-abort'),
+    }));
+    assert.equal(assetCache.policy().activeDownloads, 0);
+    assert.equal(errorOf(await request(server, downloadURL(files[0]))), 'ASSET_CACHE_EMERGENCY');
+    assetCache.resume();
+    const fresh = await request(server, downloadURL(files[0]));
+    assert.equal(fresh.body.length, files[0].bytes);
+  }, { sizes: [256000], limits: { totalBps: 1_000_000, clientBps: 1_000_000 } });
+});
+
 test('pre-cache status exposes only a tiny summary and shares the immutable snapshot with admission', async () => {
   await fixture(async ({ server, catalog, builds, assetCache }) => {
     assert.equal(assetCache.currentSummary(), null);
