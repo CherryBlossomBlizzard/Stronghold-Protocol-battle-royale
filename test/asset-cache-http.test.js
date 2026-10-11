@@ -103,14 +103,14 @@ test('pre-cache status exposes only a tiny summary and shares the immutable snap
     assert.equal(report.policy.activeDownloads, 0); assert.equal(builds(), 1);
     assert.equal(status.headers['cache-control'], 'no-store');
     assert.equal(report.version, catalog.version); assert.equal(report.complete, true);
-    assert.equal(report.requireAssetCache, false); assert.equal(report.catalogSource, 'local-import');
+    assert.equal(report.requireAssetCache, false); assert.equal(report.catalogSource, 'server');
     for (const key of ['files', 'aliases', 'missing', 'warnings']) assert.equal(report[key], undefined);
     assert.ok(status.body.length < 1024, 'summary size stays independent of full file/alias count');
     assert.equal(expected, assetCache.currentSummary());
     const head = await request(server, '/api/asset-cache/status', { method: 'HEAD' });
     assert.equal(head.body.length, 0); assert.equal(head.headers['content-length'], status.headers['content-length']);
     assert.equal(builds(), 1);
-  });
+  }, { limits: { totalBps: 1_000_000, clientBps: 500_000 } });
 });
 
 test('summary reports server completeness independently of the reusable file-content version', async () => {
@@ -131,20 +131,19 @@ test('summary reports server completeness independently of the reusable file-con
   });
 });
 
-test('cold and legacy directory requests always receive a tiny refusal without constructing the catalog', async () => {
-  await fixture(async ({ server, builds }) => {
-    const responses = await Promise.all(Array.from({ length: 50 }, (_, i) => request(server, '/api/asset-cache/catalog?legacy=1', {
-      headers: { 'Accept-Encoding': i % 2 ? 'br, gzip' : 'gzip', 'If-None-Match': '"old-catalog"' },
-    })));
-    for (const response of responses) {
-      assert.equal(response.status, 403); assert.equal(errorOf(response), 'ASSET_CACHE_CATALOG_LOCAL_ONLY');
-      assert.equal(response.headers['content-encoding'], undefined);
-      assert.ok(response.body.length < 128); assert.equal(response.headers['cache-control'], 'no-store');
-    }
-    assert.ok(responses.reduce((bytes, response) => bytes + response.body.length, 0) < 6400);
+test('an explicit cold directory request streams the current catalog through the shared limiter', async () => {
+  await fixture(async ({ server, catalog, builds }) => {
+    const response = await request(server, '/api/asset-cache/catalog', {
+      headers: { 'Accept-Encoding': 'gzip', 'If-None-Match': '"old-catalog"' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['content-encoding'], 'gzip');
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.equal(response.headers['x-asset-cache-catalog'], 'online');
+    assert.deepEqual(JSON.parse(gunzipSync(response.body)), catalog);
+    assert.equal(builds(), 1, 'the first explicit directory request builds one reusable snapshot');
     const head = await request(server, '/api/asset-cache/catalog', { method: 'HEAD' });
-    assert.equal(head.status, 403); assert.equal(head.body.length, 0);
-    assert.equal(builds(), 0, 'directory spam cannot trigger a disk/hash scan or compression work');
+    assert.equal(head.status, 405); assert.equal(head.body.length, 0); assert.equal(head.headers.allow, 'GET');
   });
 });
 

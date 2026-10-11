@@ -1375,6 +1375,8 @@
   "请等待 {n} 秒后再试": "Wait {n} seconds before retrying",
   "完整的资源包将包含目录 JSON，无需单独导入。": "A full asset package includes the catalog JSON; no separate import is needed.",
   "在线补齐缺项（限速）": "Fill missing files online (rate limited)",
+  "在线获取完整目录（限速）": "Get the complete catalog online (rate limited)",
+  "可在线获取目录并限速补齐全部资源；更快的方式仍是导入公告中的完整素材包。": "You can get the catalog online and fill all assets at a limited rate; importing the full package from the announcement is faster.",
   "对局聊天，{n} 条未读": "Match chat, {n} unread messages",
   "对局聊天": "Match chat",
   "聊天": "Text chat",

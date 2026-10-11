@@ -122,7 +122,7 @@ export class Net {
    * @param {any} [opts.WebSocket] WebSocket constructor (default: globalThis.WebSocket)
    * @param {() => (string|null)} [opts.getToken] reconnect-token provider for `hello`
    * @param {() => ({ noReplace: boolean, claimAt?: number })} [opts.getTokenClaim] local ownership for this hello
-   * @param {() => (object|null|Promise<object|null>)} [opts.getAssetCacheReadiness] local entry scan (never used for hello/resume)
+   * @param {(type?: string) => (object|null|Promise<object|null>)} [opts.getAssetCacheReadiness] local entry scan (never used for hello/resume)
    * @param {() => number} [opts.now]
    * @param {() => number} [opts.random]
    * @param {{setTimeout: Function, clearTimeout: Function, setInterval: Function, clearInterval: Function}} [opts.timers]
@@ -466,7 +466,7 @@ export class Net {
       && (this.status === 'online' || establishing) && !validateC2S({ ...body, t })) {
       const send = (report) => this._request(t, report ? { ...body, assetCache: report } : body, opts);
       let pending;
-      try { pending = this.getAssetCacheReadiness(); }
+      try { pending = this.getAssetCacheReadiness(t); }
       catch { return send(null); }
       // Optional mode stays usable with unsupported/failed local storage; strict mode is checked on the server.
       if (pending && typeof pending.then === 'function') return Promise.resolve(pending).catch(() => null).then(send);
@@ -1022,6 +1022,10 @@ export const identity = createIdentity({ onYield: () => net.reconnectNow(net.hel
 
 /** Browser connection singleton (created lazily-safe: nothing touches the network until connect()). */
 export const net = new Net({ getToken: () => identity.getToken(), getTokenClaim: () => identity.getTokenClaim(),
-  getAssetCacheReadiness: () => assetCache.getState().supported ? assetCache.admission() : null });
+  // Optional rooms must stay instant: only the owner's strict admission policy needs a local cache scan.
+  getAssetCacheReadiness: (type) => {
+    const state = assetCache.getState();
+    return state.supported && state.requireAssetCache ? assetCache.admission({ fast: type === 'room.create' }) : null;
+  } });
 net.on('welcome', (message) => assetCache.setRequirement(message.requireAssetCache));
 net.on('lobby.state', (message) => assetCache.setRequirement(message.requireAssetCache));

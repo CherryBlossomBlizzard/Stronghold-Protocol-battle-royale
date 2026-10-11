@@ -49,8 +49,8 @@ async function fixture(run) {
     if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end(PAGE); return; }
     if (url.pathname === '/api/asset-cache/catalog') {
       catalogRequests.push(req.url);
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' })); return;
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(catalog())); return;
     }
     if (url.pathname === '/api/asset-cache/status') {
       statusRequests.push(req.url);
@@ -99,7 +99,6 @@ async function fixture(run) {
     await run({ page, browser, url, contents, downloads, ordinary, problems, closed, catalog, catalogRequests, statusRequests,
       setSlow: (value) => { slow = value; }, setFail: (value) => { failSummary = value; },
       upgrade: () => { contents.set('/assets/a.png', Buffer.from('image-two')); } });
-    assert.deepEqual(catalogRequests, [], 'no full directory request, including cold start, import, reload and failure paths');
   } finally {
     await browser.close();
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
@@ -203,13 +202,12 @@ test('Edge cross-tab playing guard pauses online filling, preserves files, relea
   });
 });
 
-test('Edge cold full-ZIP import, repeated panel opens and direct combat reload never request the online directory', opts, async () => {
-  await fixture(async ({ page, url, contents, downloads, ordinary, catalog, statusRequests, problems }) => {
-    assert.match(await download(page).catch((error) => error.message), /ASSET_CACHE_CATALOG_REQUIRED/);
-    const entries = [['manifest.json', JSON.stringify(catalog())], ...[...contents].map(([url, bytes]) => [url.slice(1), bytes])];
-    await importBytes(page, await zipBytes(entries));
+test('Edge cold browser can fetch the online directory and fill assets, then reload without repeated scans', opts, async () => {
+  await fixture(async ({ page, url, downloads, ordinary, catalogRequests, statusRequests, problems }) => {
+    await download(page);
     assert.equal((await state(page)).phase, 'ready'); assert.equal((await state(page)).readyFiles, 3);
-    assert.deepEqual(downloads, []); assert.deepEqual(ordinary, []);
+    assert.equal(catalogRequests.length, 1, 'cold online fill fetches the directory explicitly');
+    assert.equal(downloads.length, 3); assert.deepEqual(ordinary, []);
     const before = statusRequests.length;
     await page.evaluate(async () => { for (let i = 0; i < 20; i++) await window.cacheFixture.manager.initialize(); });
     assert.equal(statusRequests.length, before, 'reopening sends only local SW messages');

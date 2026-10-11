@@ -18,7 +18,7 @@ const initialState = (env) => {
 
 export function createAssetCacheManager({ environment = globalThis, doFetch, workerURL = '/js/asset-cache-worker.js',
   swURL = '/asset-cache-sw.js', statusURL = '/api/asset-cache/status',
-  catalogUpdateURL = '/api/asset-cache/catalog-update' } = {}) {
+  catalogURL = '/api/asset-cache/catalog', catalogUpdateURL = '/api/asset-cache/catalog-update' } = {}) {
   const env = environment;
   const state = initialState(env);
   const listeners = new Set();
@@ -36,6 +36,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   let checkingStorage = null;
   let summary = null;
   let checkingSummary = null;
+  let admissionRefresh = null;
   let summaryAt = 0;
   let persistenceRequest = null;
   const getState = () => ({ ...state, storage: { ...state.storage }, importStats: state.importStats && { ...state.importStats },
@@ -205,6 +206,16 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     }, 1000);
   }
 
+  // A room create should not wait for a second full Cache Storage walk when the last local
+  // scan already proved the current catalog complete. Recheck in the background so later
+  // admissions still observe evictions without putting the initial click on the critical path.
+  function refreshAdmissionInBackground() {
+    if (admissionRefresh || operation || !initialized) return;
+    admissionRefresh = Promise.resolve().then(() => scan({ refresh: true })).catch(() => {}).finally(() => {
+      admissionRefresh = null;
+    });
+  }
+
   function onSWMessage({ data }) {
     if (data?.type === 'ASSET_CACHE_PLAYING_CHANGED') {
       patch({ playing: ownPlaying || !!data.playing });
@@ -263,19 +274,19 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     if (!initialized) throw assetCacheError(state.error || 'ASSET_CACHE_UNSUPPORTED');
   }
 
-  // This is deliberately called only by the explicit updateCatalog action. Checking, admission,
-  // initialization and imports must never turn a small status check into a directory download.
-  async function fetchCatalogUpdate(job) {
+  // Only an explicit owner action may transfer the full directory. Checking, admission and
+  // initialization continue to use the small status summary.
+  async function fetchCatalogUpdate(job, { full = false } = {}) {
     if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
     const abort = new env.AbortController();
     job.abort = abort;
     const timer = env.setTimeout(() => abort.abort(), 120000);
     patch({ catalogUpdateRetryAt: Date.now() + 30000 });
     try {
-      const params = new URLSearchParams({ from: catalog.version, to: summary.version,
+      const params = new URLSearchParams({ from: catalog?.version || '', to: summary.version,
         readyFiles: String(state.readyFiles), readyBytes: String(state.readyBytes) });
-      const response = await fetcher(`${catalogUpdateURL}?${params}`, { cache: 'no-store', signal: abort.signal,
-        headers: { 'X-Asset-Cache-Update': 'manual' } });
+      const response = await fetcher(full ? catalogURL : `${catalogUpdateURL}?${params}`, { cache: 'no-store', signal: abort.signal,
+        headers: full ? {} : { 'X-Asset-Cache-Update': 'manual' } });
       if (!response.ok) {
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
@@ -284,7 +295,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           if (Number.isFinite(delay) && delay > 0) patch({ catalogUpdateRetryAt: Math.max(state.catalogUpdateRetryAt, Date.now() + delay) });
           throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
         }
-        if (response.status === 409) {
+        if (!full && response.status === 409) {
           await refreshSummary({ force: true });
           throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
         }
@@ -386,15 +397,16 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           await assertMutable();
           if (action !== 'clear') await refreshSummary({ force: true });
           if (action === 'catalog-update') {
-            if (!catalog) throw assetCacheError('ASSET_CACHE_CATALOG_REQUIRED');
-            if (state.catalogCurrent) return;
+            if (catalog && state.catalogCurrent) return;
             if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
-            await runWorker('scan');
-            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-            if (!state.readyFiles || !state.readyBytes) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE');
+            if (catalog) {
+              await runWorker('scan');
+              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+              if (!state.readyFiles || !state.readyBytes) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE');
+            }
             await assertMutable();
             if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-            const next = await fetchCatalogUpdate(job);
+            const next = await fetchCatalogUpdate(job, { full: !catalog });
             if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
             // A deploy may have happened during the throttled transfer. Recheck the small summary
             // and the cross-tab playing guard before writing metadata. Failure preserves the old pin.
@@ -410,6 +422,19 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
             await adoptCatalog(result.catalog);
           } else if (action !== 'clear') {
             await adoptMatchingLocalCatalog();
+            // A cold browser has no local directory to index. The explicit online fill action
+            // may fetch the current directory first, then continue through the normal worker
+            // download path. This keeps ordinary checks/status requests small while making the
+            // user initiated "download missing" action self contained.
+            if (action === 'download' && !catalog) {
+              const next = await fetchCatalogUpdate(job, { full: true });
+              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+              await refreshSummary({ force: true });
+              if (!catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+              await assertMutable();
+              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+              await adoptCatalog(next);
+            }
             if (action === 'import' && !state.catalogCurrent) {
               const result = await runWorker('read-catalog', { file, format: 'zip' });
               if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
@@ -464,6 +489,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   const manager = {
     getState, state: getState, initialize, scan,
     updateCatalog: () => perform('catalog-update'),
+    downloadCatalog: () => perform('catalog-update'),
     setEmergency(value) {
       const emergency = !!value;
       if (state.emergency === emergency) return;
@@ -481,10 +507,25 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
       if (!(file instanceof env.Blob)) return Promise.reject(assetCacheError('ASSET_CACHE_BAD_CATALOG'));
       return perform('catalog', { file });
     },
-    async admission() {
+    async admission({ fast = false } = {}) {
       // Fail open locally: optional mode remains usable when browser storage is unavailable.
       // Required mode is enforced by the server and refuses an absent/partial report.
-      if (!state.supported || operation) return null;
+      if (!state.supported) return null;
+      if (fast && catalog && state.catalogCurrent && state.catalogComplete
+        && state.missingFiles === 0 && state.readyFiles === state.totalFiles && state.readyBytes === state.totalBytes) {
+        const report = { schema: catalog.schema, version: catalog.version,
+          readyFiles: state.readyFiles, readyBytes: state.readyBytes };
+        refreshAdmissionInBackground();
+        return report;
+      }
+      if (fast) {
+        // A cold or partial cache must be rejected by the server in strict mode, but the
+        // create click itself must still reach the server immediately. Keep the expensive
+        // recount off the request path so an optional room is never held behind storage I/O.
+        refreshAdmissionInBackground();
+        return null;
+      }
+      if (operation) return null;
       try {
         await scan({ refresh: true });
         if (!catalog || !state.catalogCurrent || !state.catalogComplete || operation) return null;

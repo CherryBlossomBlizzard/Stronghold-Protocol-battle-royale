@@ -173,12 +173,43 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     } finally { res.off('close', cancel); lease.release(); }
   }
 
+  async function serveCatalog(req, res) {
+    if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); failure(req, res, 405, 'ASSET_CACHE_CATALOG_GET_ONLY'); return; }
+    if (req.headers.range) {
+      failure(req, res, 400, 'ASSET_CACHE_RANGE_UNSUPPORTED'); return;
+    }
+    if (!limiter.policy().enabled) { failure(req, res, 503, 'ASSET_CACHE_ONLINE_DISABLED'); return; }
+    let state;
+    try { state = await snapshot(); } catch (error) {
+      log?.warn?.('[asset-cache] catalog unavailable', error.message);
+      res.setHeader('Retry-After', '5'); failure(req, res, 503, 'ASSET_CACHE_CATALOG_UNAVAILABLE'); return;
+    }
+    if (res.destroyed) return;
+    const address = clientAddress(req, proxy);
+    const lease = limiter.acquire(address.ip, res, address.key || address.ip);
+    if (!lease) { res.setHeader('Retry-After', '3'); failure(req, res, 429, 'ASSET_CACHE_BUSY'); return; }
+    const cancel = () => lease.release();
+    res.once('close', cancel);
+    try {
+      const compressed = acceptsGzip(req.headers['accept-encoding']);
+      const body = await catalogBody(state.catalog, compressed);
+      if (lease.released || res.destroyed) return;
+      const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length,
+        'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Vary: 'Accept-Encoding',
+        'X-Asset-Cache-Catalog': 'online', ...(compressed ? { 'Content-Encoding': 'gzip' } : {}) };
+      res.writeHead(200, headers);
+      await lease.streamBuffer(body, res);
+    } catch (error) {
+      if (!res.destroyed && !res.headersSent) failure(req, res, 503, 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+      else if (!res.destroyed) res.destroy();
+      log?.warn?.('[asset-cache] catalog unavailable', error.message);
+    } finally { res.off('close', cancel); lease.release(); }
+  }
+
   async function serve(req, res, rawPath, query) {
     if (rawPath !== `${ASSET_CACHE_PREFIX}status` && emergencyFailure(req, res)) return;
-    // Legacy and cold routes remain closed. Only the distinct explicit stale-directory update
-    // route can transfer a full directory; opening/checking the panel never calls it.
     if (rawPath === `${ASSET_CACHE_PREFIX}catalog`) {
-      failure(req, res, 403, 'ASSET_CACHE_CATALOG_LOCAL_ONLY'); return;
+      await serveCatalog(req, res); return;
     }
     if (rawPath === `${ASSET_CACHE_PREFIX}catalog-update`) { await serveCatalogUpdate(req, res, query); return; }
     if (rawPath !== `${ASSET_CACHE_PREFIX}status` && rawPath !== `${ASSET_CACHE_PREFIX}catalog` && rawPath !== `${ASSET_CACHE_PREFIX}file`) {
@@ -192,7 +223,7 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
     }
     if (res.destroyed) return;
     if (rawPath === `${ASSET_CACHE_PREFIX}status`) {
-      sendJson(req, res, 200, { ...current, catalogSource: 'local-import',
+      sendJson(req, res, 200, { ...current, catalogSource: 'server',
         requireAssetCache: !!requireAssetCache(), policy: limiter.policy() }); return;
     }
     const params = new URLSearchParams(query);
@@ -241,6 +272,7 @@ export function createAssetCacheHandler({ publicDir, dataDir, log, limits, trust
   }
 
   return { serve, close: () => { limiter.close(); updateClients.clear(); }, policy: () => limiter.policy(),
+    setLimits: (limits) => limiter.setLimits(limits),
     trip: (reason) => limiter.trip(reason), resume: () => limiter.resume(), metrics: () => limiter.metrics(),
     summary: async () => { await snapshot(); return current; }, currentSummary: () => current };
 }

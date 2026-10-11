@@ -8,10 +8,11 @@ const catalog = { schema: 1, files: [{ url: '/assets/a.png', bytes: 3,
   sha256: 'b'.repeat(64), type: 'image/png', aliases: [] }], totalFiles: 1, totalBytes: 3, complete: true, missing: [] };
 catalog.version = createHash('sha256').update(JSON.stringify({ schema: 1, files: catalog.files })).digest('hex');
 
-function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpdateTimeout = false } = {}) {
+function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpdateTimeout = false, online = false } = {}) {
   const messages = [], work = [], listeners = new Map(), catalogUpdates = [];
   let catalogReads = 0, statusReads = 0, broken = false, playing = false, ready = 0;
   let updateResponse = () => Response.json({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' }, { status: 403 });
+  let catalogResponse = () => Response.json({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' }, { status: 403 });
   let serverSummary = assetCacheSummary(catalog);
   const origin = 'https://game.test';
   const metadata = new Map();
@@ -64,12 +65,13 @@ function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpd
     if (url.includes('catalog-update')) {
       catalogUpdates.push({ url, options }); return updateResponse(url, options);
     }
-    if (url.includes('catalog')) { catalogReads++; return Response.json({ error: 'ASSET_CACHE_CATALOG_LOCAL_ONLY' }, { status: 403 }); }
+    if (url.includes('catalog')) { catalogReads++; return catalogResponse(url, options); }
     statusReads++;
-    return Response.json(broken ? {} : { ...serverSummary, policy: { enabled: false } });
+    return Response.json(broken ? {} : { ...serverSummary, policy: { enabled: online } });
   } });
   return { manager, messages, work, metadata, catalogUpdates, catalogReads: () => catalogReads, statusReads: () => statusReads,
     updateResponse: (value) => { updateResponse = typeof value === 'function' ? value : () => value; },
+    catalogResponse: (value) => { catalogResponse = typeof value === 'function' ? value : () => value; },
     externalPlaying(value) {
       playing = value; listeners.get('message')?.({ data: { type: 'ASSET_CACHE_PLAYING_CHANGED', playing: value } });
     },
@@ -121,18 +123,16 @@ test('passive asset progress notifications inspect local keys without repeatedly
   } finally { f.manager.destroy(); }
 });
 
-test('a cold browser stays catalog-required; standalone import enables missing-only filling without online directory fallback', async () => {
-  const f = fixture({ persistedCatalog: false });
+test('a cold browser can explicitly download the directory and then fill missing files online', async () => {
+  const f = fixture({ persistedCatalog: false, online: true });
   try {
     assert.equal((await f.manager.initialize()).phase, 'catalog-required');
     assert.equal(f.manager.getState().hasCatalog, false);
-    await assert.rejects(f.manager.downloadMissing(), /ASSET_CACHE_CATALOG_REQUIRED/);
-    await f.manager.importCatalog(new Blob([JSON.stringify(catalog)]));
-    assert.equal(f.manager.getState().catalogCurrent, true);
-    assert.equal(f.manager.getState().readyFiles, 0, 'importing a directory does not claim its files are cached');
+    f.catalogResponse(Response.json(catalog));
     await f.manager.downloadMissing();
     assert.equal(f.manager.getState().phase, 'ready');
-    assert.equal(f.catalogReads(), 0);
+    assert.equal(f.catalogReads(), 1);
+    assert.equal(f.manager.getState().catalogCurrent, true);
   } finally { f.manager.destroy(); }
 });
 
@@ -167,6 +167,37 @@ test('tampered/stale directories cannot replace a valid pin, and admission recou
   } finally { f.manager.destroy(); }
 });
 
+test('fast admission returns a complete local report before its background eviction check', async () => {
+  const f = fixture();
+  try {
+    f.ready(1);
+    await f.manager.initialize();
+    const scansBefore = f.work.filter((job) => job.action === 'scan').length;
+    const report = await f.manager.admission({ fast: true });
+    assert.deepEqual(report, { schema: 1, version: catalog.version, readyFiles: 1, readyBytes: 3 });
+    assert.equal(f.work.filter((job) => job.action === 'scan').length, scansBefore,
+      'the room-create path does not wait for a second local scan');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(f.work.filter((job) => job.action === 'scan').length, scansBefore + 1,
+      'the complete report is rechecked in the background');
+  } finally { f.manager.destroy(); }
+});
+
+test('fast admission sends an incomplete create to the server without waiting for a recount', async () => {
+  const f = fixture();
+  try {
+    await f.manager.initialize();
+    const scansBefore = f.work.filter((job) => job.action === 'scan').length;
+    const started = Date.now();
+    assert.equal(await f.manager.admission({ fast: true }), null);
+    assert.ok(Date.now() - started < 100, 'an incomplete create does not wait for storage');
+    assert.equal(f.work.filter((job) => job.action === 'scan').length, scansBefore,
+      'the background recount is scheduled after the request path returns');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(f.work.filter((job) => job.action === 'scan').length, scansBefore + 1);
+  } finally { f.manager.destroy(); }
+});
+
 function upgradedCatalog() {
   const next = structuredClone(catalog);
   next.files.push({ url: '/assets/new.png', bytes: 5, sha256: 'c'.repeat(64), type: 'image/png', aliases: [] });
@@ -182,7 +213,7 @@ async function outdatedFixture(options) {
   return { ...f, next };
 }
 
-test('explicit directory update requires an old local directory and actual cached files; a current directory is a no-op', async () => {
+test('explicit directory update can fetch a cold directory online; partial caches still require local files and current directories are a no-op', async () => {
   for (const kind of ['cold', 'empty', 'cleared', 'current']) {
     const f = fixture({ persistedCatalog: kind !== 'cold' });
     try {
@@ -191,10 +222,13 @@ test('explicit directory update requires an old local directory and actual cache
       if (kind === 'cleared') await f.manager.clear();
       if (kind !== 'current') f.summary(assetCacheSummary(upgradedCatalog()));
       if (kind === 'current') await f.manager.updateCatalog();
-      else await assert.rejects(f.manager.updateCatalog(), new RegExp(kind === 'cold'
-        ? 'ASSET_CACHE_CATALOG_REQUIRED' : 'ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE'));
+      else if (kind === 'cold') {
+        await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UNAVAILABLE/);
+      } else {
+        await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE/);
+      }
       assert.equal(f.catalogUpdates.length, 0, kind);
-      assert.equal(f.catalogReads(), 0, kind);
+      assert.equal(f.catalogReads(), kind === 'cold' ? 1 : 0, kind);
     } finally { f.manager.destroy(); }
   }
 });
