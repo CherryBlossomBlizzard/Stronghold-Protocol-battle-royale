@@ -590,7 +590,7 @@ export class Lobby {
     return OK;
   }
 
-  /** Resize only empty trailing seats; never move or eject a player, including an offline human or an AI. */
+  /** Resize only empty trailing seats; retain readiness and never move or eject a human or an AI. */
   setCapacity(session, { capacity }) {
     const room = this.roomOf(session);
     if (!room) return fail(ERR.NOT_IN_ROOM);
@@ -603,7 +603,6 @@ export class Lobby {
     if (capacity > room.capacity) room.seats.push(...new Array(capacity - room.capacity).fill(null));
     else room.seats.length = capacity;
     room.capacity = capacity;
-    for (const s of room.seats) if (s && !s.isBot && s.playerId !== room.hostId) s.ready = false;
     this.broadcastState(room);
     return OK;
   }
