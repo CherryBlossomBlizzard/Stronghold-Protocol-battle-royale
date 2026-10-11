@@ -100,7 +100,7 @@
 //     a player seat (the seat is kept and given back on resume).
 
 import { randomBytes, randomInt } from 'node:crypto';
-import { ERR, DEFAULT_SEATS, ROOM_CAPACITIES, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
+import { ERR, PHASE, DEFAULT_SEATS, ROOM_CAPACITIES, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks } from '../shared/protocol.js';
 import { encode, prepareMessage, sendPrepared, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
 import { getData as defaultGetData, lookup } from './data.js';
@@ -108,6 +108,7 @@ import { Match as DefaultMatch } from './match/Match.js';
 import { KITTED_CHARS } from './sim/content/kits/index.js';
 import { LobbyDiscovery } from './lobbyDiscovery.js';
 import { assetCacheReadinessMatches } from '../shared/assetCache.js';
+import { MatchChat } from './matchChat.js';
 
 /** Room code alphabet: uppercase letters without I and O (and no digits, so no 0/1). */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -193,7 +194,7 @@ export class Room {
     this.spectators = [];
     /** @type {any} running Match instance */
     this.match = null;
-    /** @type {{ live: boolean, ended: boolean, disposed: boolean, match: any } | null} */
+    /** @type {{ live: boolean, ended: boolean, disposed: boolean, match: any, chat: MatchChat } | null} */
     this.matchCtx = null;
     this.matchCount = 0;
     /** @type {any} summary passed to onEnd by the last match */
@@ -238,6 +239,9 @@ export class Room {
       capacity: this.capacity,
       aiPicksLast: this.aiPicksLast,
       inMatch: !!this.match,
+      // v1 extension metadata only: message bodies never ride room/public snapshots or result replay.
+      chatMatchId: this.match && this.matchCtx?.live && !this.matchCtx.ended && !this.matchCtx.chat.closed
+        ? this.matchCtx.chat.matchId : null,
       seats: this.seats.map((s) => (s
         ? { seat: s.seat, playerId: s.playerId, name: s.name, isBot: s.isBot, ready: s.ready, connected: s.connected && !s.left }
         : null)),
@@ -409,6 +413,7 @@ export class Lobby {
       case 'room.diy': return this.diy(session, msg);
       case 'room.spectate': return this.spectate(session, msg);
       case 'room.removeSpectator': return this.removeSpectator(session, msg);
+      case 'room.chat': return this.chat(session, msg);
       default:
         if (typeof msg.t === 'string' && msg.t.startsWith('g.')) return this.routeGame(session, msg);
         return fail(ERR.BAD_MSG, `unhandled type ${String(msg.t).slice(0, 32)}`);
@@ -554,7 +559,10 @@ export class Lobby {
     session.notice = null;
     session.pendingResult = null;
     this.broadcastState(room);
-    if (room.match) this.callMatch(room, 'addSpectator', session.playerId);
+    if (room.match) {
+      this.callMatch(room, 'addSpectator', session.playerId);
+      this.sendChatState(room, session.playerId);
+    }
     return OK;
   }
 
@@ -840,7 +848,8 @@ export class Lobby {
       diy: s.isBot ? null : s.diy || null,
     }));
     // lastPublic / results: the latest m.public broadcast and the m.result frames (encoded), kept for the replay.
-    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null, results: new Map() };
+    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null,
+      results: new Map(), chat: new MatchChat({ now: this.now }) };
     let seed = 0;
     try { seed = this.seedFn() >>> 0; } catch { seed = randomInt(2 ** 32); }
     try {
@@ -873,6 +882,7 @@ export class Lobby {
       this.log.info(`[lobby] ${room.code} match #${room.matchCount} starting (${room.mode}/${room.difficulty}, ${seats.length} seats, seed ${seed})`);
       this.broadcastState(room);
       match.start();
+      if (room.matchCtx === ctx && !ctx.chat.closed) this.broadcastRoom(room, ctx.chat.snapshot());
     } catch (e) {
       this.log.error(`[lobby] ${room.code} match failed to start`, e);
       if (room.matchCtx === ctx) { room.match = null; room.matchCtx = null; room.matchKey = null; }
@@ -887,6 +897,7 @@ export class Lobby {
   onMatchEnd(room, ctx, summary) {
     if (ctx.ended || !ctx.live || room.matchCtx !== ctx || room.disposed) return;
     ctx.ended = true;
+    ctx.chat.clear();
     room.lastSummary = summary ?? null;
     room.match = null;
     room.matchCtx = null;
@@ -913,6 +924,7 @@ export class Lobby {
   /** Match unicast; m.result frames are also kept for the replay. */
   matchSend(room, ctx, playerId, msg) {
     if (msg && msg.t === 'm.result') {
+      ctx.chat.clear();
       const data = encode(msg);
       if (data != null) ctx.results.set(playerId, data);
     }
@@ -921,6 +933,7 @@ export class Lobby {
 
   /** Match broadcast; the latest m.public and a broadcast m.result are also kept for the replay. */
   matchBroadcast(room, ctx, msg) {
+    if (msg?.t === 'm.result' || (msg?.t === 'm.public' && msg.phase === PHASE.RESULT)) ctx.chat.clear();
     const data = this.broadcastRoom(room, msg);
     if (data == null) return;
     if (msg.t === 'm.public') ctx.lastPublic = data;
@@ -989,6 +1002,7 @@ export class Lobby {
     session.resyncAt = this.now();
     if (room.match) {
       this.callMatch(room, room.spectatorOf(session.playerId) ? 'addSpectator' : 'onReconnect', session.playerId);
+      this.sendChatState(room, session.playerId);
       return;
     }
     const frames = this.replayFor(room, session.playerId);
@@ -1047,6 +1061,34 @@ export class Lobby {
     return OK;
   }
 
+  /** Match chat belongs to connected room humans, including eliminated/autoplay players and spectators. */
+  chat(session, { matchId, text }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    const ctx = room.matchCtx;
+    if (!room.match || !ctx?.live || ctx.ended || ctx.chat.closed || room.match.phase === PHASE.RESULT) {
+      return fail(ERR.WRONG_PHASE, 'no running chat match');
+    }
+    if (matchId !== ctx.chat.matchId) return fail(ERR.BAD_TARGET, 'stale chat match');
+    const member = room.seatOf(session.playerId) || room.spectatorOf(session.playerId);
+    if (!session.connected || this.registry.byId(session.playerId) !== session || !member || member.isBot || member.left || !member.connected) {
+      return fail(ERR.NOT_IN_ROOM);
+    }
+    const spectator = !!room.spectatorOf(session.playerId);
+    const res = ctx.chat.append({ playerId: member.playerId, name: member.name, seat: spectator ? null : member.seat,
+      spectator }, text);
+    if (res.error) return fail(res.error, res.detail);
+    this.broadcastRoom(room, res.message);
+    return OK;
+  }
+
+  /** Single bounded history on start/join/resume, under the existing heavy resync policy. */
+  sendChatState(room, playerId) {
+    const ctx = room.matchCtx;
+    if (!room.match || !ctx?.live || ctx.ended || ctx.chat.closed || room.match.phase === PHASE.RESULT) return;
+    this.sendToPlayer(room, playerId, ctx.chat.snapshot());
+  }
+
   /** Call an optional match hook without letting it throw. onLeave falls back to onDisconnect. */
   callMatch(room, method, ...args) {
     const m = room.match;
@@ -1066,6 +1108,7 @@ export class Lobby {
     if (ctx.disposed) return;
     ctx.disposed = true;
     ctx.live = false;
+    ctx.chat.clear();
     try { ctx.match?.dispose?.(); } catch (e) { this.log.error('[lobby] match.dispose threw', e); }
   }
 
@@ -1120,6 +1163,7 @@ export class Lobby {
     if (this.freeSpectatorSeat(room, playerId)) return;
     const seat = room.seatOf(playerId);
     if (!seat || seat.isBot || seat.left || room.disposed) return;
+    room.matchCtx?.chat.forgetPlayer(playerId);
     if (room.match) {
       seat.left = true;
       seat.connected = false;
@@ -1142,6 +1186,7 @@ export class Lobby {
     const i = room.spectators.findIndex((s) => s.playerId === playerId);
     if (i < 0) return false;
     room.spectators.splice(i, 1);
+    room.matchCtx?.chat.forgetPlayer(playerId);
     if (room.disposed) return true;
     this.callMatch(room, 'removeSpectator', playerId);
     this.broadcastState(room);

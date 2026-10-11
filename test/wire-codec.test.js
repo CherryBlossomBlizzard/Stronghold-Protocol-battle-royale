@@ -20,6 +20,8 @@ const V1_EXTENSIONS = Object.freeze({
   'room.create': ['assetCache'], 'room.join': ['assetCache'],
   'lobby.quickMatch': ['assetCache'], 'room.spectate': ['assetCache'],
 });
+// Published v1 has no new numeric IDs: these post-v1 business types deliberately use its JSON fallback.
+const V1_JSON_FALLBACK = Object.freeze({ c2s: ['room.chat'], s2c: ['m.chat', 'm.chatState'] });
 
 test('v1 complete catalog fingerprint prevents accidental published field or enum renumbering', () => {
   const canonical = (v) => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
@@ -32,8 +34,16 @@ test('v1 complete catalog fingerprint prevents accidental published field or enu
 
 test('wire ids cover every business message and C2S field or declared v1 extension; registries are immutable', () => {
   const messages = wireCatalog().messages;
-  assert.deepEqual(messages.filter((m) => m.direction === 's2c').map((m) => m.type).sort(), [...S2C].sort());
-  assert.deepEqual(messages.filter((m) => m.direction === 'c2s').map((m) => m.type).sort(), Object.keys(C2S).sort());
+  assert.deepEqual([...messages.filter((m) => m.direction === 's2c').map((m) => m.type), ...V1_JSON_FALLBACK.s2c].sort(), [...S2C].sort());
+  assert.deepEqual([...messages.filter((m) => m.direction === 'c2s').map((m) => m.type), ...V1_JSON_FALLBACK.c2s].sort(), Object.keys(C2S).sort());
+  for (const [direction, types] of Object.entries(V1_JSON_FALLBACK)) {
+    for (const type of types) {
+      assert.equal(messages.some((m) => m.type === type), false);
+      const frame = { t: type, matchId: 'chat_scope', text: '中文😀', seq: 2, messages: [] };
+      assert.deepEqual(encodeWire(frame, direction), frame);
+      assert.deepEqual(roundTrip(frame, direction), frame);
+    }
+  }
   assert.equal(new Set(messages.map((m) => m.id)).size, messages.length);
   for (const m of messages.filter((m) => m.direction === 'c2s')) {
     for (const key of Object.keys(C2S[m.type]).filter((key) => key !== '$optional')) {
