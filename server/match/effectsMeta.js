@@ -565,9 +565,13 @@ export function makeCtx(m, ps, source, hook, ev = null) {
     },
     grantItem: (itemId, opts = {}) => {
       if (!ps.alive || !gd.item(itemId)) return null;
+      // The marker is an identity-scoped exemption for SERVER_GAIN_EQUIP targets; ordinary effects cannot opt out
+      // of the shared equipment stock by merely passing noPool.
+      const noPool = opts.noPool === true && gd.isTraitFixedItem(itemId);
       const p = ps.acquireItem(itemId, {
         source: opts.source || source.key || 'effect',
         toTemp: !!opts.toTemp,
+        noPool,
         deferMerge: ps._deferItemMerge > 0,
       });
       return p ? view(p) : null;

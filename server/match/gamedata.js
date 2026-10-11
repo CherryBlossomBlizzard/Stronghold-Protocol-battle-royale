@@ -313,6 +313,21 @@ export class GameData {
     return Number.isInteger(count) && count >= 0 ? count : null;
   }
 
+  /** Whether this is one of the fixed equipment items granted by SERVER_GAIN_EQUIP traits. */
+  isTraitFixedItem(id) {
+    if (!this._traitFixed) {
+      this._traitFixed = new Set();
+      for (const g of Object.values(this.raw.garrisons || {})) {
+        if (g?.effectKey !== 'SERVER_GAIN_EQUIP' || !this.item(g.bbStr?.chess)) continue;
+        const itemId = g.bbStr.chess;
+        const rec = this.item(itemId);
+        this._traitFixed.add(itemId);
+        if (rec.goldenId) this._traitFixed.add(rec.goldenId);
+      }
+    }
+    return this._traitFixed.has(id) || this._traitFixed.has(this.baseIdOf(id));
+  }
+
   /** Copies needed to merge (0 = never merges: golden chess). */
   mergeCount(id) {
     const c = this.chess(id);

@@ -217,6 +217,7 @@ export class SharedItemPool {
     return cap == null ? null : Math.ceil(cap * this.scale);
   }
   need(id) { return this.gd.isGolden(id) ? 2 : 1; }
+  // All owned equipment counts, including a noPool-marked trait grant. noPool only affects the acquisition gate.
   held(id) {
     const base = this.gd.baseIdOf(id);
     let count = 0;
