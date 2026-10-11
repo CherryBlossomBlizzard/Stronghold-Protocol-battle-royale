@@ -27,6 +27,7 @@ import { MatchInfoDialog, matchInfoModel } from '../ui/matchInfo.js';
 import { actions, act, draftRequestScope } from '../ui/gameActions.js';
 import { normalizeDraft, sortedPlayers } from '../ui/gameLogic.js';
 import { useStore } from '../store.js';
+import { MatchChatButton } from '../ui/matchChat.js';
 import { data } from '../data.js';
 import { audio } from '../audio.js';
 import { modeOffBonds, bandOffBonds, bandOffLine } from '../ui/gameLogic.js';
@@ -316,6 +317,7 @@ export function BandDraftScreen() {
         <${Button} variant="secondary" icon="search" block=${true} class="draft-order__info" data-testid="match-info-open"
           aria-haspopup="dialog" onClick=${() => setInfoOpen(true)}>${t('查看禁用盟约与干员')}<//>
         ${!solo ? html`<p class="draft-order__tip" data-testid="draft-tip">${draftTip({ timed, turnSeconds: turnLen, autoName: myPick ? null : autoName, selected: autoId === sel })}</p>` : null}
+        <${MatchChatButton} class="mchat-draft-entry" onBeforeOpen=${() => setInfoOpen(false)} />
       </aside>
 
       <section class=${cx('draft-grid', grouped && 'draft-grid--grouped')} role="listbox" aria-label=${t('策略')}>

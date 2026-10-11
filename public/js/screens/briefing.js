@@ -12,6 +12,7 @@ import { StepHeader, ExitModal } from '../ui/matchChrome.js';
 import { MatchInfo, matchInfoModel } from '../ui/matchInfo.js';
 import { LoadoutButton } from './loadout.js';
 import { SetupReroll } from '../ui/setupReroll.js';
+import { MatchChatButton } from '../ui/matchChat.js';
 import { actions } from '../ui/gameActions.js';
 import { factionTypes, sortedPlayers, phaseTotalSeconds } from '../ui/gameLogic.js';
 import { enemyIconUrl, factionIconUrl } from '../ui/assetUrls.js';
@@ -94,6 +95,7 @@ export function BriefingScreen() {
     </main>
     <${SetupReroll} pub=${pub} />
     <footer class="brief__foot">
+      <${MatchChatButton} class="mchat-brief-entry" />
       <${LoadoutButton} from="briefing" size="lg" class="brief-loadout" />
       <div class="brief-ready">
         <span class="brief-ready__txt">${t('已就绪')} <b class="num">${readyN}</b><span class="num">/${players.length}</span></span>

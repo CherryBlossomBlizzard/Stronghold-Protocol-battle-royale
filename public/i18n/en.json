@@ -1374,5 +1374,19 @@
   "手动更新目录（限速）": "Update catalog manually (rate limited)",
   "请等待 {n} 秒后再试": "Wait {n} seconds before retrying",
   "完整的资源包将包含目录 JSON，无需单独导入。": "A full asset package includes the catalog JSON; no separate import is needed.",
-  "在线补齐缺项（限速）": "Fill missing files online (rate limited)"
+  "在线补齐缺项（限速）": "Fill missing files online (rate limited)",
+  "对局聊天，{n} 条未读": "Match chat, {n} unread messages",
+  "对局聊天": "Match chat",
+  "聊天": "Text chat",
+  "关闭聊天": "Close chat",
+  "聊天记录": "Chat history",
+  "还没有聊天消息": "No chat messages yet",
+  "{n} 条新消息，查看最新": "{n} new messages, view latest",
+  "聊天仅保留本局，对局结束后清除": "Chat is kept for this match and cleared when it ends",
+  "聊天内容": "Chat message",
+  "输入消息…": "Type a message…",
+  "断线后暂时无法发送": "Messages cannot be sent while disconnected",
+  "发送中…": "Sending…",
+  "发送": "Send",
+  "Enter 发送 · Shift+Enter 换行": "Enter to send · Shift+Enter for a new line"
 }

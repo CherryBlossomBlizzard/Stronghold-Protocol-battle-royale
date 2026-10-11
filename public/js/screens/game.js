@@ -79,6 +79,8 @@ import { ChoiceOverlay } from '../ui/choiceOverlay.js';
 import { EnemyDrawer } from '../ui/enemyDrawer.js';
 import { Ticker } from '../ui/ticker.js';
 import { EmoteWheel } from '../ui/emotes.js';
+import { MatchChatButton, MatchChatHost } from '../ui/matchChat.js';
+import { chatStore, chatActions } from '../matchChat.js';
 import { EffectsList } from '../ui/effectsList.js';
 import { CombatHud } from '../ui/combatHud.js';
 import { SettingsModal, settingsStore } from '../ui/settings.js';
@@ -142,7 +144,9 @@ export function GameScreen() {
   else body = html`<${MatchScreen} />`;
   return html`${body}
     ${(away || autoplay) && !hasResult && mode !== 'result' && !ended ? html`<${AwayOverlay} />` : null}
-    ${ended && !hasResult && mode !== 'result' ? html`<${MatchEnded} />` : null}`;
+    ${(away || autoplay) && !hasResult && mode !== 'result' && !ended ? html`<${MatchChatButton} class="mchat-away-entry" />` : null}
+    ${ended && !hasResult && mode !== 'result' ? html`<${MatchEnded} />` : null}
+    ${!hasResult && mode !== 'result' && !ended ? html`<${MatchChatHost} phase=${pub.phase} away=${away || autoplay} />` : null}`;
 }
 
 // ---- match screen ----------------------------------------------------------------------------------------
@@ -158,6 +162,8 @@ function MatchScreen() {
   const myId = useStore((s) => s.me.playerId);
   const conn = useStore((s) => s.connection, shallowEqual);
   const emotes = useStore((s) => s.emotes);
+  const chatOpen = useStore((s) => s.open, Object.is, chatStore);
+  const hasChat = useStore((s) => !!s.matchId, Object.is, chatStore);
   const roomSolo = useStore((s) => s.room?.mode === 'solo');
   const spectator = useStore((s) => isSpectating(s.room, s.me.playerId));
   // the room's spectator seats for the top bar's 观战席 capsule (ui/hud.js SpectatorPill; GitHub #120): room.state keeps coming
@@ -185,6 +191,9 @@ function MatchScreen() {
   const [collapsed, setCollapsed] = useState(false);
   const [rewardMin, setRewardMin] = useState(false);
   const [emoteOpen, setEmoteOpen] = useState(false);
+  useEffect(() => {
+    if (chatOpen) { setEmoteOpen(false); setDetail(null); setBondOpen(null); setDrawer(null); }
+  }, [chatOpen]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
   const [drag, setDrag] = useState(null);                // { uid, kind, id } while dragging a piece
@@ -1393,7 +1402,7 @@ function MatchScreen() {
   // bonds this mode never activates (标准: 10 of 23, 奥术 among them) — shown 本局禁用 on cards, chips and the popup
   const offBonds = modeOffBonds(getMode(pub?.modeId));
 
-  return html`<div class=${cx('screen', 'gm', `gm--${mode}`, drag && 'is-dragging', collapsed && 'is-collapsed', (sp || hasPersonalChoice) && 'has-sp', pen && 'is-pen', readyWhy && 'has-readywhy')}
+  return html`<div class=${cx('screen', 'gm', `gm--${mode}`, hasChat && 'has-chat', spectator && 'is-spectator', drag && 'is-dragging', collapsed && 'is-collapsed', (sp || hasPersonalChoice) && 'has-sp', pen && 'is-pen', readyWhy && 'has-readywhy')}
       data-camera=${pen ? 'pen' : camKind}>
     <div class="gm__field" ref=${hostRef} onContextMenu=${(e) => e.preventDefault()}></div>
     ${viewKind === 'loading' ? html`<div class="gm__loading"><${Spinner} label="LOADING FIELD" /></div>` : null}
@@ -1464,7 +1473,8 @@ function MatchScreen() {
       <${Ticker} />
 
       <div class="gm__corner">
-        ${spectator ? null : html`<${EmoteWheel} open=${emoteOpen} onToggle=${setEmoteOpen} onSend=${(id) => actions.emote(id)} disabled=${conn.status !== 'online'} />`}
+        <${MatchChatButton} class="gm__chat" onBeforeOpen=${() => { setEmoteOpen(false); setDetail(null); setBondOpen(null); setDrawer(null); }} />
+        ${spectator ? null : html`<${EmoteWheel} open=${emoteOpen} onToggle=${(on) => { if (on) chatActions.setOpen(false); setEmoteOpen(on); }} onSend=${(id) => actions.emote(id)} disabled=${conn.status !== 'online'} />`}
         <button type="button" class="gm__gear" aria-label=${t('设置')} title=${t('设置')} onClick=${() => setSettingsOpen(true)}><${GIcon} name="gear" /></button>
         <button type="button" class="gm__gear gm__guide" aria-label=${t('玩法说明')} title=${t('玩法说明')} onClick=${() => openGuide(0)}><${Icon} name="book" /></button>
         <${FullscreenButton} class="gm__gear gm__fs" />

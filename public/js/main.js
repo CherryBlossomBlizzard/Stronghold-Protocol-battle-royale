@@ -60,6 +60,7 @@ import { MAX_SEATS } from '../../shared/constants.js';
 import { initLang, useLang, tickerText } from './ui/lang.js';
 import { t, N_, translateWire } from '../../shared/i18n.js';
 import { recordError } from './diag.js';
+import { installMatchChat } from './matchChat.js';
 
 const RESTORE_GRACE_MS = 1500;
 const JOIN_DELAY_MS = 350;
@@ -366,6 +367,7 @@ async function boot() {
   }));
 
   wireNet();
+  installMatchChat({ net, appStore: store });
   installAnnouncements({ appStore: store, selectRoute, net, restoreGraceMs: RESTORE_GRACE_MS });
   installUrgentAnnouncements({ net });
   installAssetCache();
