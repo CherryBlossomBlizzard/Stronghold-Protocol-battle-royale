@@ -34,7 +34,7 @@
 
 - 每个编码表示有独立 ETag，`Vary: Accept-Encoding`，HEAD 与 GET 的表示长度一致；304 不发正文。Range 使用原文与现有 206 / 416 / If-Range 规则。
 - HTTP 压缩最多同时执行两项，重复请求共享同一计算；gzip / Brotli 结果按字节做 LRU，静态文件缓存上限 96 MiB。普通磁盘文件超过 8 MiB 时压缩为流；内容版本需要先校验字节，验证缓冲 LRU 上限 32 MiB、单文件上限 16 MiB。
-- 完整素材目录的线上出口已关闭：`/api/asset-cache/catalog` 在构建 / 压缩目录之前返回小型 403。目录从本地 ZIP / JSON 导入，`/api/asset-cache/status` 只发送小摘要；详见 [ASSET_CACHE](ASSET_CACHE.md) 与 [DEV-20261010-12](development/records/2026-10-10-12-offline-catalog-admission.md)。8 Mbps 文件补齐限制独立保留。
+- 完整素材目录的线上出口仅在用户明确操作时开放：`/api/asset-cache/catalog` 受素材限速器和紧急保护约束；初始化、检查和准入仍只发送 `/api/asset-cache/status` 小摘要。目录和文件补齐共用服主可调预算，详见 [ASSET_CACHE](ASSET_CACHE.md) 与本次记录。
 
 应急开关（启动前的环境变量）：`SP_HTTP_RUNTIME_CACHE=0` 关闭首页版本目录，`SP_HTTP_BROTLI=0` 回退为 gzip / 原文。两者独立；修改后重启并刷新页面。Windows PowerShell 示例：
 
