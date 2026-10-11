@@ -29,7 +29,7 @@
 | 项目 | 已核实状态 |
 |---|---|
 | 分支 | 当前核心 `feat/IncreasePlayerCapacity` 已通过独立 `--no-ff` 合并提交接纳带宽优化；保留测试分支 `perf/compact-wire-bandwidth`，仍指向 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466` |
-| 最近本地开发 | [DEV-20261011-02](records/2026-10-11-02-manual-catalog-update.md)：已有旧目录与缓存者可显式限速更新，默认共用总 8 / IP 4 Mbps 及30秒IP冷却；正式增量CLI内置最新完整目录，界面提示及Node / Edge短流程通过。打包 `cc25a76`，目录更新与最终记录同一功能提交，未推送或部署；常驻版本显示为 [DEV-20261011-01](records/2026-10-11-01-catalog-status-ui.md) / `42481ec` |
+| 最近本地开发 | [DEV-20261011-03](records/2026-10-11-03-remove-cache-intro.md)：删除预缓存标题下的说明段落；Edge 手动更新短流程及两种尺寸通过，按钮仍仅在旧目录与已有缓存时显示。本次代码与记录同一提交，未推送或部署；前次手动更新为 [DEV-20261011-02](records/2026-10-11-02-manual-catalog-update.md) / `cedb4ef`，增量打包 `cc25a76` |
 | 当前 Windows 便携包 | `../releases/v0.2.3-20p.4/Stronghold-Protocol-v0.2.3-20p.4-Windows-x64.zip`，548.35 MiB；内含官方 Node v22.23.3、生产依赖和完整素材；SHA-256 与验证结果见 [DEV-20261010-11](records/2026-10-10-11-windows-portable-v023-20p4.md)，包未进入 Git |
 | 最近本地分支合并 | 核心合并前 `cf30fb2980fe27363dcafdfb677317f80c503b49`，来源 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466`；与 [DEV-20261010-10](records/2026-10-10-10-merge-compact-wire.md) 同一合并提交，按记录路径查询 |
 | 最近上游合并前的 HEAD | `a1565bc56eda6a5cc27c007b93af2eb071c6610b`；既有 `v0.2.1-20p.2` 仍指向 `b4c6ebe`，不移动旧标签 |

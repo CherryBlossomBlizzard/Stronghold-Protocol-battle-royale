@@ -1,5 +1,4 @@
 .asset-cache { display: flex; flex-direction: column; gap: .18rem; font-size: calc(.18 * var(--t)); }
-.asset-cache__intro { margin: 0; color: var(--text-md); line-height: 1.6; }
 .asset-cache__summary { display: flex; flex-direction: column; gap: .08rem; padding: .2rem; background: rgba(78,216,175,.04); border: 1px solid var(--line); }
 .asset-cache__summary strong { font-size: calc(.25 * var(--t)); color: var(--mint-500); }
 .asset-cache__summary .num { font-size: calc(.28 * var(--t)); }

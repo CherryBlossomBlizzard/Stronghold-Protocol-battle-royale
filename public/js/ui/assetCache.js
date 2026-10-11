@@ -141,7 +141,6 @@ export function AssetCacheHost() {
       width="min(7.8rem, 94vw)" onClose=${() => show(false)}
       actions=${html`<${Button} variant="secondary" onClick=${() => show(false)}>${t('关闭')}<//>`}>
     <div class="asset-cache">
-      <p class="asset-cache__intro">${t('完整素材包自带目录，只在本机解压和保存。也可单独导入目录 JSON；已有缓存且目录版本落后时，可手动限速更新目录。')}</p>
       <div class="asset-cache__summary" aria-live="polite">
         <strong>${phaseText(state.phase)}</strong>
         <span class="num">${t('已缓存 {ready} / {total} 个文件', { ready, total })}</span>
