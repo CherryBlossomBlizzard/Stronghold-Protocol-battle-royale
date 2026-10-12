@@ -115,3 +115,54 @@
   .urgent-announcement > .modal__head .micro { display: none; }
   .urgent-announcement > .modal__actions { padding-top: .09rem; padding-bottom: .09rem; }
 }
+
+/* Landscape touch devices may lose much of their height to browser toolbars before fullscreen.
+   --sp-vh tracks visualViewport in device.js. Position only these boxes within the existing backdrop;
+   neither its desktop geometry nor other modals need a new viewport rule (or CSS :has support). */
+@media (max-height: 600px) {
+  .sp-coarse .modal__box:is(.announcements, .urgent-announcement) {
+    position: absolute;
+    top: calc(12px + var(--sa-t, 0px));
+    right: calc(12px + var(--sa-r, 0px));
+    bottom: auto;
+    left: calc(12px + var(--sa-l, 0px));
+    width: min(16rem, calc(100% - 24px - var(--sa-l, 0px) - var(--sa-r, 0px)));
+    height: calc(100 * var(--sp-vh, 1vh) - 24px - var(--sa-t, 0px) - var(--sa-b, 0px));
+    max-height: calc(100 * var(--sp-vh, 1vh) - 24px - var(--sa-t, 0px) - var(--sa-b, 0px));
+    margin: 0 auto;
+  }
+  .sp-coarse :is(.announcements, .urgent-announcement) > .modal__head { padding: 6px 12px; }
+  .sp-coarse :is(.announcements, .urgent-announcement) > .modal__head .micro { display: none; }
+  .sp-coarse :is(.announcements, .urgent-announcement) > .modal__actions {
+    padding: 6px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sp-coarse :is(.announcements, .urgent-announcement) > .modal__actions .btn {
+    min-width: var(--tap-min, 44px);
+    min-height: var(--tap-min, 44px);
+    font-size: max(calc(.16 * var(--t)), 12px);
+  }
+  .sp-coarse :is(.announcements, .urgent-announcement) > .modal__actions .btn::before {
+    inset: 0;
+    width: auto;
+    height: auto;
+    transform: none;
+  }
+  .sp-coarse .announcements__suppress { min-height: var(--tap-min, 44px); }
+  .sp-coarse .announcements__footer-buttons { margin-left: auto; gap: 8px; }
+  .sp-coarse .announcements__layout { display: flex; flex-direction: column; }
+  .sp-coarse .announcements__history, .sp-coarse .announcements__detail { flex: 1; }
+  .sp-coarse .announcements__history { border-right: 0; }
+  .sp-coarse .announcements__layout.is-detail .announcements__history { display: none; }
+  .sp-coarse .announcements__layout.is-list .announcements__detail { display: none; }
+  .sp-coarse .announcements__mobile-toggle { display: inline-flex; align-self: flex-start; }
+  /* A legal long title at the largest text scale must leave room for the scrollable article too. */
+  .sp-coarse :is(.announcements__article-head, .urgent-announcement__article-head) {
+    max-height: 45%;
+    min-height: 0;
+    overflow: auto;
+    padding: 6px 12px;
+    overscroll-behavior: contain;
+  }
+}

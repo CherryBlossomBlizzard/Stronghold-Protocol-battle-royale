@@ -29,7 +29,7 @@
 | 项目 | 已核实状态 |
 |---|---|
 | 分支 | 当前核心 `feat/IncreasePlayerCapacity` 已接纳 v0.2.4；带宽优化来源分支 `perf/compact-wire-bandwidth` 保留，仍指向 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466` |
-| 最近本地开发 | [DEV-20261012-02](records/2026-10-12-02-lobby-access-spectate.md)：大厅游玩人数、房主公开匹配开关与目录观战；后端 `38845bdf`，界面及最终记录同一提交。定向验证结果及限制见任务记录，未推送或部署。上游 v0.2.4 合并见 [DEV-20261011-06](records/2026-10-11-06-upstream-v0.2.4.md) |
+| 最近本地开发 | [DEV-20261012-04](records/2026-10-12-04-announcement-mobile.md)：手机横屏非全屏公告按实际可见高度适配，底部可勾选/关闭、适度收窄，电脑普通鼠标布局不变；代码与记录同一提交。前次带宽监测开关见 [DEV-20261012-03](records/2026-10-12-03-bandwidth-emergency-toggle.md)，大厅功能见 [DEV-20261012-02](records/2026-10-12-02-lobby-access-spectate.md)。各任务本地操作与验证以其记录为准，本次未推送或部署 |
 | 当前 Windows 便携包 | `../releases/v0.2.3-20p.4/Stronghold-Protocol-v0.2.3-20p.4-Windows-x64.zip`，548.35 MiB；内含官方 Node v22.23.3、生产依赖和完整素材；SHA-256 与验证结果见 [DEV-20261010-11](records/2026-10-10-11-windows-portable-v023-20p4.md)，包未进入 Git |
 | 最近本地分支合并 | 核心合并前 `cf30fb2980fe27363dcafdfb677317f80c503b49`，来源 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466`；与 [DEV-20261010-10](records/2026-10-10-10-merge-compact-wire.md) 同一合并提交，按记录路径查询 |
 | 最近上游合并前的 HEAD | `9815b3afaddb0c03c67cc2240988fbeb0786ba81`；既有 `v0.2.1-20p.2` 仍指向 `b4c6ebe`，不移动旧标签 |
