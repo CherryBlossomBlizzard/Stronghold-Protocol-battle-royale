@@ -166,13 +166,13 @@ Linux 服务默认每秒读取 `/proc/net/dev` 的实际出口，自动从 `/pro
 - 所有 Match 阶段 timer/interval、AI 服务端模拟、领袖与联防时钟冻结。推进意图和战斗报告暂时拒绝；断线/离开的玩法后果延迟到恢复，用户主动放弃最后一个真人席位仍会结束对局。恢复按剩余时间重建 timer，平移 deadline 和战场时钟，不补跑冻结时间。
 - 已打开的新客户端收到小型 `m.emergency` 后显示持久提示，停止本地模拟/报告和倒计时，取消补齐。welcome 与 `m.public` 重复携带状态。恢复后结果重发，补齐必须玩家手动继续，避免所有下载一起自动重开。
 
-按用户确认，每 **120 秒尝试恢复**。如果当时仍有对局队列/心跳拥堵，或任一正在进行的对局没有真人在线，则保持冻结并再等 120 秒；具备条件后开放网站并继续对局。恢复是试恢复，不是测得云容量正常；继续异常会再次触发。仅看空闲网卡无法确认带宽已经恢复。
+按用户确认，每 **60 秒尝试恢复**。如果当时仍有对局队列/心跳拥堵，或任一正在进行的对局没有真人在线，则保持冻结并再等 60 秒；具备条件后开放网站并继续对局。恢复是试恢复，不是测得云容量正常；继续异常会再次触发。仅看空闲网卡无法确认带宽已经恢复。
 
-以下为启动配置，修改后重启服务；默认不需要设置：
+以下为启动配置，修改后重启服务；自动检测默认关闭，不设置即可保持关闭：
 
 | 环境变量 | 默认 | 含义 |
 |---|---|---|
-| `SP_BANDWIDTH_EMERGENCY_ENABLED` | `1` | `0` 关闭自动检测 |
+| `SP_BANDWIDTH_EMERGENCY_ENABLED` | `0` | `1` 开启自动检测；关闭时不读取网卡、缓存需求或对局拥堵，也不建立检测定时器 |
 | `SP_BANDWIDTH_INTERFACE` | 空 | 自动选择默认 IPv4 出口；显式设置时直接读取该网卡 |
 | `SP_BANDWIDTH_POLL_MS` | `1000` | 采样间隔；`0` 仅供程序化手动采样，不自动定时 |
 | `SP_BANDWIDTH_WINDOW_MS` | `5000` | 出口速率平均窗口 |
@@ -181,11 +181,15 @@ Linux 服务默认每秒读取 `/proc/net/dev` 的实际出口，自动从 `/pro
 | `SP_BANDWIDTH_MIN_CLIENTS` | `2` | 下载多网络佐证下限，最少 2 |
 | `SP_BANDWIDTH_MIN_PENDING_BYTES` | `65536` | 下载需求的待发送字节门槛 |
 | `SP_BANDWIDTH_GAME_BPS` | `500000` | 无下载时的通信拥堵判定基准，B/s；不限制游戏发送速度 |
-| `SP_BANDWIDTH_AUTO_RESUME_MS` | `120000` | 尝试恢复间隔；`0` 不自动恢复，仅供程序化管理 |
+| `SP_BANDWIDTH_AUTO_RESUME_MS` | `60000` | 尝试恢复间隔；`0` 不自动恢复，仅供程序化管理 |
 
 ```bash
-# 可选：明确使用观察流量时的 eth0 网卡
-SP_BANDWIDTH_INTERFACE=eth0 npm start
+# 服主命令开关（写入 runtime/server-settings.json，运行中约 1 秒生效）
+node tools/server-settings.mjs bandwidth-emergency on
+node tools/server-settings.mjs bandwidth-emergency off
+
+# 可选：启动时开启，并明确使用观察流量时的 eth0 网卡
+SP_BANDWIDTH_EMERGENCY_ENABLED=1 SP_BANDWIDTH_INTERFACE=eth0 npm start
 
 # 当前状态、真实网卡采样和触发依据
 curl -s http://127.0.0.1:3000/healthz
@@ -193,9 +197,11 @@ curl -s http://127.0.0.1:3000/healthz
 
 `/healthz.bandwidthEmergency` 包含 `active`、`retryAt`、配置、下载需求、实际 `detection.txBps`（B/s）、网卡、背压与触发规则。`lastTrigger` 保留最近触发时的速度、期望预算、异常时长、下载与对局拥堵计数，恢复后仍保留至下次触发；不含 IP 或玩家身份。Windows、读不到 `/proc` 或无默认网卡时自动检测不可用，不从应用写入字节伪造网卡速度；状态会显示 `supported` / `available`，IPv6-only 路由需显式指定网卡。检测配置非法会拒绝启动。
 
+服主 CLI 的 `bandwidth-emergency off` 会停止采样、需求/拥堵读取和检测定时器，并释放当前保护状态；再次执行 `on` 才恢复检测。默认关闭可避免普通服务器因为低流量、错误网卡或共享出口而误触发；开启后仍应以 `lastTrigger` 的联合证据校准，不把它当作阿里云容量的直接证明。
+
 服务器应用无法撤回已经发出到链路或反代缓冲里的字节，也无法熔断由 Nginx/其他进程直接提供而未经过 Node 的静态下载。Node 普通响应携带 `X-Accel-Buffering: no`；反代须尊重该头并将游戏资源经 Node 转发。小通知共用原 WebSocket 出口，完全堵塞时无法保证即时到达；服务端冻结不依赖通知成功。保护中的原对局 socket 已超过硬队列上限时停止追加消息，保留连接等待排空及重同步。旧客户端需在新对局前刷新才能识别提示/冻结字段。
 
-实现及验证边界见 [DEV-20261011-07](development/records/2026-10-11-07-bandwidth-emergency.md) 与 [D030](development/DECISIONS.md#d030)。本地测试不等于阿里云实际雪崩验证，部署后应观察触发证据和误报情况。
+实现及验证边界见 [DEV-20261011-07](development/records/2026-10-11-07-bandwidth-emergency.md)、[DEV-20261012-03](development/records/2026-10-12-03-bandwidth-emergency-toggle.md) 与 [D030](development/DECISIONS.md#d030)。本地测试不等于阿里云实际雪崩验证，部署后应观察触发证据和误报情况。
 
 ## HTTPS 与反向代理
 

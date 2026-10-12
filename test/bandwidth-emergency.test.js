@@ -9,7 +9,7 @@ function fixture(opts = {}) {
     blockedDownloads: 2, expectedBps: 1_000_000 };
   let congestion = false;
   const changes = [];
-  const controller = createBandwidthEmergencyController({ env: {}, pollMs: 0, windowMs: 1_000, triggerMs: 3_000,
+  const controller = createBandwidthEmergencyController({ env: {}, enabled: true, pollMs: 0, windowMs: 1_000, triggerMs: 3_000,
     now: () => time, getMetrics: () => metrics, getCongestion: () => congestion,
     sampleEgress: async () => ({ txBytes, interfaceName: 'eth0' }), onChange: (state) => changes.push(state), ...opts });
   return { controller, changes,
@@ -36,7 +36,7 @@ test('sustained low egress with independent blocked downloads trips after the fu
     assert.equal(f.changes[0].detection.txBps, 250_000);
     assert.equal(f.changes[0].detection.badForMs, 3_000);
     assert.equal(f.changes[0].metrics.remainingBytes, 100_000_000);
-    assert.equal(state.retryAt, 124_000);
+    assert.equal(state.retryAt, 64_000);
   } finally { f.controller.close(); }
 });
 
@@ -200,12 +200,12 @@ test('a delayed game heartbeat can corroborate one client without cache response
   } finally { f.controller.close(); }
 });
 
-test('automatic retry is an attempt at 120 seconds, and continued congestion can trip again', async () => {
+test('automatic retry is an attempt at 60 seconds, and continued congestion can trip again', async () => {
   const f = fixture();
   try {
     assert.equal(f.controller.trip('owner-freeze'), true);
     assert.equal(f.controller.trip('ignored'), false);
-    await f.tick(0, 119_000);
+    await f.tick(0, 59_000);
     assert.equal(f.controller.status().active, true);
     await f.tick(0, 1_000);
     assert.equal(f.controller.status().active, false);
@@ -215,7 +215,7 @@ test('automatic retry is an attempt at 120 seconds, and continued congestion can
     assert.equal(f.changes[1].retryAt, 0);
     for (let i = 0; i < 4; i++) await f.tick();
     assert.equal(f.controller.status().active, true);
-    assert.equal(f.controller.status().retryAt, 244_000);
+    assert.equal(f.controller.status().retryAt, 124_000);
   } finally { f.controller.close(); }
 });
 
@@ -226,11 +226,11 @@ test('known game congestion delays retry, then game-only evidence can protect ag
     f.setCongestion({ activeConnections: 8, activeNetworks: 6, congestedConnections: 3,
       congestedNetworks: 2, delayedNetworks: 2, impairedNetworks: 3 });
     f.controller.trip('previous-emergency');
-    await f.tick(0, 120_000);
+    await f.tick(0, 60_000);
     assert.equal(f.controller.status().active, true, 'known bad game sockets are not blindly thawed');
-    assert.equal(f.controller.status().retryAt, 240_000);
+    assert.equal(f.controller.status().retryAt, 120_000);
     assert.equal(f.changes.at(-1).action, 'retry-delayed');
-    f.setCongestion({}); await f.tick(0, 120_000);
+    f.setCongestion({}); await f.tick(0, 60_000);
     assert.equal(f.controller.status().active, false);
     f.setCongestion({ activeNetworks: 6, impairedNetworks: 3, congestedConnections: 3 });
     for (let i = 0; i < 4; i++) await f.tick();
@@ -245,12 +245,12 @@ test('an external automatic-resume gate keeps disconnected matches frozen but ma
   let humanConnected = false;
   const f = fixture({ canResume: () => humanConnected });
   try {
-    f.controller.trip('offline-players'); await f.tick(0, 120_000);
+    f.controller.trip('offline-players'); await f.tick(0, 60_000);
     assert.equal(f.controller.status().active, true);
-    assert.equal(f.controller.status().retryAt, 240_000);
+    assert.equal(f.controller.status().retryAt, 120_000);
     assert.equal(f.changes.at(-1).action, 'retry-delayed');
     assert.equal(f.controller.resume(), true, 'manual owner action may force resume');
-    f.controller.trip(); humanConnected = true; await f.tick(0, 120_000);
+    f.controller.trip(); humanConnected = true; await f.tick(0, 60_000);
     assert.equal(f.controller.status().active, false);
     assert.equal(f.changes.at(-1).action, 'retry');
   } finally { f.controller.close(); }
@@ -274,17 +274,27 @@ test('game-only evidence excludes one slow network or fewer than half of the act
   }
 });
 
-test('disabling automatic detection retains manual emergency and automatic retry control', async () => {
+test('disabled detection performs no reads or timers and can be enabled at runtime', async () => {
   let samples = 0;
-  const f = fixture({ enabled: false, sampleEgress: () => { samples++; return { txBytes: 0 }; } });
+  let metricsReads = 0, congestionReads = 0;
+  const f = fixture({ enabled: false, getMetrics: () => { metricsReads++; return {}; },
+    getCongestion: () => { congestionReads++; return false; }, sampleEgress: () => { samples++; return { txBytes: 0 }; } });
   try {
+    f.controller.start();
     await f.initial();
     for (let i = 0; i < 5; i++) await f.tick();
     assert.equal(f.controller.status().active, false);
+    assert.equal(f.controller.status().enabled, false);
     assert.equal(samples, 0);
-    f.controller.trip('manual'); await f.tick(0, 120_000);
-    assert.equal(f.controller.status().active, false);
-    assert.equal(f.changes.at(-1).action, 'retry');
+    assert.equal(metricsReads, 0);
+    assert.equal(congestionReads, 0);
+    assert.equal(f.controller.setEnabled(true), true);
+    await f.tick();
+    assert.equal(samples, 1);
+    assert.equal(f.controller.status().enabled, true);
+    assert.equal(f.controller.setEnabled(false), true);
+    await f.tick();
+    assert.equal(samples, 1);
   } finally { f.controller.close(); }
 });
 
@@ -305,7 +315,7 @@ test('manual hold and permanent close never automatically release an emergency',
 
 test('sampler outages, interface changes, counter reset and unobserved gaps reset the streak', async () => {
   let time = 0, bytes = 0, name = 'eth0', fail = false;
-  const controller = createBandwidthEmergencyController({ env: {}, pollMs: 0, windowMs: 1_000, triggerMs: 3_000,
+  const controller = createBandwidthEmergencyController({ env: {}, enabled: true, pollMs: 0, windowMs: 1_000, triggerMs: 3_000,
     now: () => time, getMetrics: () => ({ activeDownloads: 2, demandClients: 2, remainingBytes: 100_000_000,
       expectedBps: 1_000_000, blockedDownloads: 2 }), sampleEgress: async () => {
       if (fail) throw new Error('proc unavailable'); return { txBytes: bytes, interfaceName: name };
@@ -359,7 +369,7 @@ test('Windows and missing default route do not invent an egress measurement; man
   assert.equal(reads, 0);
   assert.equal(await createProcEgressSampler({ platform: 'linux', read })(), null);
   assert.equal(reads, 1);
-  const controller = createBandwidthEmergencyController({ env: {}, platform: 'win32', pollMs: 0 });
+  const controller = createBandwidthEmergencyController({ env: {}, enabled: true, platform: 'win32', pollMs: 0 });
   try {
     controller.start(); await controller.poll();
     assert.equal(controller.status().detection.supported, false);
@@ -373,7 +383,7 @@ test('close during pending sample prevents late automatic state transitions', as
   let finish;
   const sample = new Promise((resolve) => { finish = resolve; });
   const changes = [];
-  const controller = createBandwidthEmergencyController({ env: {}, pollMs: 0, sampleEgress: () => sample,
+  const controller = createBandwidthEmergencyController({ env: {}, enabled: true, pollMs: 0, sampleEgress: () => sample,
     onChange: (next) => changes.push(next) });
   const polling = controller.poll();
   controller.close(); finish({ txBytes: 1000 }); await polling;

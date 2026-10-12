@@ -3,8 +3,8 @@
 import { readFile } from 'node:fs/promises';
 
 export const BANDWIDTH_EMERGENCY_DEFAULTS = Object.freeze({
-  enabled: true, pollMs: 1_000, windowMs: 5_000, triggerMs: 15_000, ratio: 0.6,
-  minClients: 2, interfaceName: '', autoResumeMs: 120_000, gameBudgetBps: 500_000, minPendingBytes: 64 * 1024,
+  enabled: false, pollMs: 1_000, windowMs: 5_000, triggerMs: 15_000, ratio: 0.6,
+  minClients: 2, interfaceName: '', autoResumeMs: 60_000, gameBudgetBps: 500_000, minPendingBytes: 64 * 1024,
 });
 
 function integer(value, fallback, minimum, name) {
@@ -100,6 +100,7 @@ export function createBandwidthEmergencyController(options = {}) {
   const sampleEgress = options.sampleEgress || createProcEgressSampler({ interfaceName: opts.interfaceName, platform });
   const supported = !!options.sampleEgress || platform === 'linux';
   let started = false, closed = false, polling = false, timer = null;
+  let enabled = opts.enabled;
   let active = false, reason = '', startedAt = 0, retryAt = 0, source = '', action = '';
   let badSince = null, txBps = null, sampledAt = 0, available = false, sampleError = '';
   let interfaceName = opts.interfaceName, cacheMetrics = {}, congestion = false, congestionMetrics = {};
@@ -125,7 +126,7 @@ export function createBandwidthEmergencyController(options = {}) {
   function status() {
     return { active, reason, startedAt, retryAt, source, action, started, closed,
       lastTrigger: lastTrigger ? { ...lastTrigger, metrics: { ...lastTrigger.metrics }, congestion: { ...lastTrigger.congestion } } : null,
-      config: { ...opts }, metrics: { ...cacheMetrics }, detection: {
+      enabled, config: { ...opts, enabled }, metrics: { ...cacheMetrics }, detection: {
         supported, available, interfaceName, sampledAt, txBps, sampleError, gameCongested: congestion,
         congestion: { ...congestionMetrics }, rule, expectedBps: detectionExpectedBps,
         badForMs: badSince == null ? 0 : Math.max(0, now() - badSince),
@@ -162,7 +163,7 @@ export function createBandwidthEmergencyController(options = {}) {
   }
 
   async function poll() {
-    if (closed || polling) return status();
+    if (closed || polling || !enabled) return status();
     polling = true;
     try {
       const time = now();
@@ -181,11 +182,11 @@ export function createBandwidthEmergencyController(options = {}) {
           catch (error) { sampleError = `demand: ${error.message}`; resetEvidence(); return status(); }
         }
       }
-      if (!opts.enabled || !supported || active) return status();
+      if (!supported || active) return status();
       let sample;
       try { sample = await sampleEgress(); }
       catch (error) { sampleError = String(error.message || error); sample = null; }
-      if (closed) return status();
+      if (closed || !enabled) return status();
       if (!sample || !Number.isSafeInteger(sample.txBytes) || sample.txBytes < 0) {
         available = false; resetEvidence(); return status();
       }
@@ -233,9 +234,25 @@ export function createBandwidthEmergencyController(options = {}) {
 
   const controller = {
     trip, resume, status, poll,
+    setEnabled(next) {
+      if (closed) return false;
+      if (typeof next !== 'boolean') throw new TypeError('bandwidth emergency enabled must be boolean');
+      if (enabled === next) return false;
+      enabled = next;
+      resetEvidence();
+      clearInterval(timer); timer = null;
+      // An explicit operator disable means the protection is no longer wanted. Release an
+      // existing emergency before stopping all detector work; no automatic sample/retry runs while off.
+      if (!enabled && active) resume({ source: 'operator-disable' });
+      if (enabled && started && opts.pollMs > 0) {
+        timer = setInterval(() => { void poll(); }, opts.pollMs); timer.unref?.();
+      }
+      return true;
+    },
     start() {
       if (started || closed) return controller;
       started = true;
+      if (!enabled) return controller;
       void poll();
       if (opts.pollMs > 0) { timer = setInterval(() => { void poll(); }, opts.pollMs); timer.unref?.(); }
       return controller;

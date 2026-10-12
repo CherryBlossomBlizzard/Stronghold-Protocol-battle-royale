@@ -98,10 +98,14 @@ export async function startServer(opts = {}) {
       .finally(() => { warmingAssetSummary = null; });
     return warmingAssetSummary;
   }
+  let bandwidthEmergency = null;
   function applySettings(next) {
     lobby.setAiLimit(next.maxAiPerRoom);
     lobby.setAssetCachePolicy({ required: next.requireAssetCache, getSummary: assetCache.currentSummary });
     assetCache.setLimits(next.assetCacheLimits ?? fallbackAssetCacheLimits);
+    // A persisted owner setting overrides the startup/env fallback and is applied by the
+    // existing private settings poll; an absent field keeps the normal emergency option.
+    bandwidthEmergency?.setEnabled(next.bandwidthEmergencyEnabled ?? emergencyOptions.enabled);
     // Runtime enabling fails closed until a summary is ready; ordinary optional startup stays lazy.
     if (next.requireAssetCache && !assetCache.currentSummary()) void warmAssetSummary();
   }
@@ -113,8 +117,9 @@ export async function startServer(opts = {}) {
   buildTag();
 
   let requestHandler;
-  const bandwidthEmergency = createBandwidthEmergencyController({
-    ...(opts.bandwidthEmergency || {}), ...emergencyOptions,
+  const bandwidthEmergencyEnabled = serverSettings.get().bandwidthEmergencyEnabled ?? emergencyOptions.enabled;
+  bandwidthEmergency = createBandwidthEmergencyController({
+    ...(opts.bandwidthEmergency || {}), ...emergencyOptions, enabled: bandwidthEmergencyEnabled,
     getMetrics: () => assetCache.metrics(), getCongestion: () => network.congestion(),
     canResume: () => [...lobby.rooms.values()].every((room) => !room.match || room.activeHumans().some((seat) => seat.connected)),
     log,

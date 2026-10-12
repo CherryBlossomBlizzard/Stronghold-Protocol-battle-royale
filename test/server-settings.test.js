@@ -281,6 +281,27 @@ test('owner CLI toggles strict admission without erasing the AI ceiling and vali
   assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: 0, requireAssetCache: false, assetCacheLimits: null });
 });
 
+test('owner CLI toggles bandwidth emergency detection and the running controller follows it', async (t) => {
+  const { dir, run } = fixture(t);
+  for (const args of [['bandwidth-emergency'], ['bandwidth-emergency', 'yes'], ['bandwidth-emergency', 'on', '--json']]) {
+    assert.equal(run(...args).status, 2, args.join(' '));
+  }
+  assert.equal(run('bandwidth-emergency', 'on').status, 0);
+  assert.deepEqual(JSON.parse(run('show', '--json').stdout), { maxAiPerRoom: null, requireAssetCache: false,
+    assetCacheLimits: null, bandwidthEmergencyEnabled: true });
+  const server = await startServer({ port: 0, host: '127.0.0.1', quiet: true, serverSettingsDir: dir,
+    bandwidthEmergency: { pollMs: 0, sampleEgress: async () => ({ txBytes: 0, interfaceName: 'test0' }) } });
+  t.after(() => server.close());
+  assert.equal(server.bandwidthEmergency.status().enabled, true);
+  assert.equal(run('bandwidth-emergency', 'off').status, 0);
+  assert.equal(server.serverSettings.poll(), true);
+  assert.equal(server.bandwidthEmergency.status().enabled, false);
+  assert.equal(run('bandwidth-emergency', 'on').status, 0);
+  assert.equal(server.serverSettings.poll(), true);
+  assert.equal(server.bandwidthEmergency.status().enabled, true);
+  await server.close();
+});
+
 test('server startup applies private policy, CLI updates reach live waiting rooms, and closing stops reads', async (t) => {
   const { dir, run } = fixture(t);
   writeServerSettings(dir, 2);

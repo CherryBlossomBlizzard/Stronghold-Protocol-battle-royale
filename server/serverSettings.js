@@ -86,13 +86,15 @@ function verifyDirectory(dir) {
 
 function checkedSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== 1
-    || Object.keys(raw).some((key) => !['version', 'maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits'].includes(key))
+    || Object.keys(raw).some((key) => !['version', 'maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits', 'bandwidthEmergencyEnabled'].includes(key))
     || !validAiLimit(raw.maxAiPerRoom)
     || raw.requireAssetCache !== undefined && typeof raw.requireAssetCache !== 'boolean'
-    || raw.assetCacheLimits !== undefined && !validAssetCacheLimits(raw.assetCacheLimits)) throw new Error('服务器配置格式无效');
+    || raw.assetCacheLimits !== undefined && !validAssetCacheLimits(raw.assetCacheLimits)
+    || raw.bandwidthEmergencyEnabled !== undefined && typeof raw.bandwidthEmergencyEnabled !== 'boolean') throw new Error('服务器配置格式无效');
   // Existing version-1 AI-only files keep their former permissive admission policy.
   return Object.freeze({ maxAiPerRoom: raw.maxAiPerRoom, requireAssetCache: raw.requireAssetCache ?? false,
-    assetCacheLimits: raw.assetCacheLimits ?? null });
+    assetCacheLimits: raw.assetCacheLimits ?? null,
+    ...(raw.bandwidthEmergencyEnabled === undefined ? {} : { bandwidthEmergencyEnabled: raw.bandwidthEmergencyEnabled }) });
 }
 
 /** Read-only startup and show operations never create a directory. null means no persistent override. */
@@ -121,8 +123,12 @@ export function writeServerSettings(dir, value) {
   if (Object.hasOwn(patch, 'assetCacheLimits') && !validAssetCacheLimits(patch.assetCacheLimits)) {
     throw new RangeError('素材在线限速配置无效');
   }
-  if (!Object.keys(patch).length || Object.keys(patch).some((key) => !['maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits'].includes(key))
-    || Object.hasOwn(patch, 'requireAssetCache') && typeof patch.requireAssetCache !== 'boolean') throw new Error('服务器配置字段无效');
+  if (Object.hasOwn(patch, 'bandwidthEmergencyEnabled') && typeof patch.bandwidthEmergencyEnabled !== 'boolean') {
+    throw new RangeError('带宽紧急保护开关必须为 on / off');
+  }
+  if (!Object.keys(patch).length || Object.keys(patch).some((key) => !['maxAiPerRoom', 'requireAssetCache', 'assetCacheLimits', 'bandwidthEmergencyEnabled'].includes(key))
+    || Object.hasOwn(patch, 'requireAssetCache') && typeof patch.requireAssetCache !== 'boolean'
+    || Object.hasOwn(patch, 'bandwidthEmergencyEnabled') && typeof patch.bandwidthEmergencyEnabled !== 'boolean') throw new Error('服务器配置字段无效');
   fs.mkdirSync(dir, { recursive: true });
   verifyDirectory(dir);
   const file = path.join(dir, SERVER_SETTINGS_FILE);
@@ -158,7 +164,7 @@ export function writeServerSettings(dir, value) {
  * policy, so a partial manual edit cannot silently disable a restriction. Removing the file explicitly restores
  * the startup fallback. onChange is not invoked while constructing the controller.
  * @param {{ dir?: string, root?: string, env?: object, log?: {warn?: Function}, pollMs?: number,
- *   onChange?: (next: {maxAiPerRoom:number|null, requireAssetCache:boolean, assetCacheLimits:object|null}, previous: object) => void }} [options]
+ *   onChange?: (next: {maxAiPerRoom:number|null, requireAssetCache:boolean, assetCacheLimits:object|null, bandwidthEmergencyEnabled?:boolean}, previous: object) => void }} [options]
  */
 export function createServerSettings(options = {}) {
   const { env = process.env, log = console, pollMs = SERVER_SETTINGS_POLL_MS, onChange } = options;
@@ -183,7 +189,8 @@ export function createServerSettings(options = {}) {
       return false;
     }
     if (next.maxAiPerRoom === state.maxAiPerRoom && next.requireAssetCache === state.requireAssetCache
-      && JSON.stringify(next.assetCacheLimits) === JSON.stringify(state.assetCacheLimits)) return false;
+      && JSON.stringify(next.assetCacheLimits) === JSON.stringify(state.assetCacheLimits)
+      && next.bandwidthEmergencyEnabled === state.bandwidthEmergencyEnabled) return false;
     const previous = state;
     state = next;
     if (notify) onChange?.(state, previous);
