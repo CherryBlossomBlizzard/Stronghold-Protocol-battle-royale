@@ -22,7 +22,10 @@ const V1_EXTENSIONS = Object.freeze({
   'lobby.quickMatch': ['assetCache'], 'room.spectate': ['assetCache'],
 });
 // Published v1 has no new numeric IDs: these post-v1 business types deliberately use its JSON fallback.
-const V1_JSON_FALLBACK = Object.freeze({ c2s: ['room.chat'], s2c: ['m.chat', 'm.chatState', 'm.emergency'] });
+const V1_JSON_FALLBACK = Object.freeze({
+  c2s: ['room.chat', 'room.setMatchmaking', 'lobby.join', 'lobby.spectate'],
+  s2c: ['m.chat', 'm.chatState', 'm.emergency'],
+});
 
 test('v1 complete catalog fingerprint prevents accidental published field or enum renumbering', () => {
   const canonical = (v) => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
@@ -87,6 +90,28 @@ test('unknown types, enum spellings, raw arrays and extension fields survive wit
   }
   const nestedT = { t: 'm.public', bossHp: { hp: 1, max: 2, t: 'future' } };
   assert.deepEqual(roundTrip(nestedT), nestedT);
+});
+
+test('lobby access metadata uses v1 extensions and preserves hidden room codes', () => {
+  const roomId = '93b479b7-ff62-4f3b-a06a-5f0ac230dc9e';
+  const state = {
+    t: 'lobby.state', online: 5, roomCount: 1, matchCount: 1, playingCount: 3, joinableCount: 0,
+    rooms: [{ roomId, code: null, mode: 'coop', difficulty: 'NORMAL', capacity: 20,
+      playerCount: 20, humanCount: 3, botCount: 17, inMatch: true, joinable: false,
+      allowMatchmaking: false, spectatorCount: 1, spectatable: true,
+      hostOnline: true, disconnectedRetained: false, createdAt: 100 }],
+  };
+  assert.deepEqual(roundTrip(state, 's2c'), state);
+  assert.deepEqual(roundTrip({ t: 'room.state', code: 'ABCD', allowMatchmaking: false }, 's2c'),
+    { t: 'room.state', code: 'ABCD', allowMatchmaking: false });
+  for (const message of [
+    { t: 'room.setMatchmaking', allowed: false },
+    { t: 'lobby.join', roomId, assetCache: { schema: 1, version: 'a'.repeat(64), readyFiles: 1, readyBytes: 7 } },
+    { t: 'lobby.spectate', roomId },
+  ]) {
+    assert.deepEqual(encodeWire(message, 'c2s'), message, 'new types deliberately retain JSON fallback');
+    assert.deepEqual(roundTrip(message, 'c2s'), message);
+  }
 });
 
 test('map keys and extensions cannot mutate prototypes', () => {

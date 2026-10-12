@@ -21,7 +21,8 @@ const catalog = { schema: 1, version: hash(JSON.stringify({ schema: 1, files }))
   totalFiles: 1, totalBytes: 7, complete: true, missing: [] };
 const report = { schema: 1, version: catalog.version, readyFiles: 1, readyBytes: 7 };
 const create = { t: 'room.create', mode: 'coop', difficulty: 'NORMAL', capacity: 20 };
-const intents = (code) => [create, { t: 'room.join', code }, { t: 'lobby.quickMatch', capacity: 20 }, { t: 'room.spectate', code }];
+const intents = (code, roomId) => [create, { t: 'room.join', code }, { t: 'lobby.quickMatch', capacity: 20 },
+  { t: 'room.spectate', code }, ...(roomId ? [{ t: 'lobby.join', roomId }, { t: 'lobby.spectate', roomId }] : [])];
 
 async function fixture(t, { required = false, buildCatalog = async () => catalog, MatchClass = StubMatch } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-admission-'));
@@ -66,14 +67,14 @@ async function fixture(t, { required = false, buildCatalog = async () => catalog
   return { server, connect, policy, browserNet };
 }
 
-test('optional admission allows all four entry routes and never builds the full directory for these requests', async (t) => {
+test('optional admission allows all six entry routes and never builds the full directory for these requests', async (t) => {
   let builds = 0;
   const { server, connect } = await fixture(t, { buildCatalog: async () => { builds++; return catalog; } });
   const host = await connect('Host');
   assert.equal(host.welcome.requireAssetCache, false);
   assert.equal((await host.request(create)).t, 'ok');
   const room = await host.waitFor('room.state');
-  for (const [index, intent] of intents(room.code).entries()) {
+  for (const [index, intent] of intents(room.code, server.lobby.getRoom(room.code).directoryId).entries()) {
     const guest = await connect(`Guest ${index}`, index % 2 === 0);
     assert.equal((await guest.request(intent)).t, 'ok', intent.t);
   }
@@ -82,14 +83,14 @@ test('optional admission allows all four entry routes and never builds the full 
 });
 
 for (const wire of [false, true]) {
-  test(`strict admission validates all four routes on ${wire ? 'compact v1' : 'legacy JSON'} sockets`, async (t) => {
+  test(`strict admission validates all six routes on ${wire ? 'compact v1' : 'legacy JSON'} sockets`, async (t) => {
     const { server, connect } = await fixture(t, { required: true });
     const host = await connect('Host', wire);
     assert.equal(host.welcome.requireAssetCache, true);
     assert.equal((await host.request({ ...create, assetCache: report })).t, 'ok');
     const room = await host.waitFor('room.state');
     const guest = await connect('Guest', wire);
-    for (const intent of intents(room.code)) {
+    for (const intent of intents(room.code, server.lobby.getRoom(room.code).directoryId)) {
       for (const invalid of [undefined, { ...report, readyFiles: 0 }, { ...report, readyBytes: 6 },
         { ...report, version: 'f'.repeat(64) }]) {
         const reply = await guest.request({ ...intent, ...(invalid ? { assetCache: invalid } : {}) });
@@ -112,7 +113,7 @@ test('denied switching preserves the original room, seat, host and spectators', 
   for (const client of [guest, host]) assert.equal((await client.request({ ...create, assetCache: report })).t, 'ok');
   const old = server.lobby.getRoom(server.registry.byId(guest.welcome.playerId).roomCode);
   const target = server.lobby.getRoom(server.registry.byId(host.welcome.playerId).roomCode);
-  for (const intent of intents(target.code)) {
+  for (const intent of intents(target.code, target.directoryId)) {
     assert.equal((await guest.request(intent)).code, 'ASSET_CACHE_REQUIRED');
     assert.equal(server.registry.byId(guest.welcome.playerId).roomCode, old.code);
     assert.equal(old.hostId, guest.welcome.playerId);
@@ -190,14 +191,14 @@ test('enabling strict mode preserves an ongoing match and reconnects without any
 });
 
 test('readiness and policy extensions preserve compact-v1 layouts and restore standard JSON', () => {
-  for (const intent of intents('ABCD')) {
+  for (const intent of intents('ABCD', '93b479b7-ff62-4f3b-a06a-5f0ac230dc9e')) {
     const message = { ...intent, assetCache: report, rid: 3 };
     assert.equal(validateC2S(message), null);
     assert.deepEqual(decodeWire(encodeWire(message, 'c2s'), 'c2s'), message);
   }
   for (const message of [
     { t: 'welcome', playerId: 'p_1', token: 't', name: 'Guest', serverNow: 1, requireAssetCache: true },
-    { t: 'lobby.state', online: 3, roomCount: 1, matchCount: 0, joinableCount: 1, requireAssetCache: true },
+    { t: 'lobby.state', online: 3, roomCount: 1, matchCount: 0, playingCount: 0, joinableCount: 1, requireAssetCache: true },
     { t: 'error', code: 'ASSET_CACHE_REQUIRED', msg: 'precache required', detail: 'precache-missing', rid: 3 },
   ]) assert.deepEqual(decodeWire(encodeWire(message, 's2c'), 's2c'), message);
 });
@@ -211,15 +212,15 @@ test('browser Net obtains readiness only for new membership and sends it through
   const net = await browserNet(async () => { scans++; return report; });
   assert.equal(scans, 0, 'hello and resume must not wait for storage');
   assert.equal(net.wireVersion, 1);
-  for (const intent of intents(room.code)) {
+  for (const intent of intents(room.code, server.lobby.getRoom(room.code).directoryId)) {
     const { t: type, ...fields } = intent;
     assert.equal((await net.request(type, fields)).t, 'ok');
     assert.equal((await net.request('room.leave')).t, 'ok');
   }
-  assert.equal(scans, 4);
+  assert.equal(scans, 6);
   assert.equal(server.lobby.rooms.size, 1);
   await assert.rejects(net.request('room.create', { mode: 'invalid', difficulty: 'NORMAL' }), (error) => error.code === 'BAD_MSG');
-  assert.equal(scans, 4, 'local validation occurs before a disk scan');
+  assert.equal(scans, 6, 'local validation occurs before a disk scan');
 });
 
 test('browser Net waits for local readiness before sending, and an unavailable cache stays usable only in optional mode', async (t) => {

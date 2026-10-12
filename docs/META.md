@@ -212,6 +212,14 @@ fields' `startAt` / `lastProgressAt` and the boss start by the paused time and r
 `Match.setEmergencyFreeze` is separate from solo `g.pause`: `FreezeScheduler` holds all phase timers and AI intervals, and `m.public.emergencyFrozen` marks a held match. Clients stop local battles and countdowns; advancing intents and battle reports temporarily return `SERVER_EMERGENCY`. Recovery preserves remaining delays and shifts deadlines / field clocks without replaying missed ticks. Disconnect and leave update seat connectivity immediately but defer gameplay consequences; original members can reconnect during protection. The last human explicitly abandoning a match still ends it. Automatic retry defaults to 120 seconds and waits longer while known gameplay connections remain congested or a match has no connected humans. Detection, admission, notification limits and configuration are documented in [ASSET_CACHE.md](ASSET_CACHE.md#带宽紧急保护).
 
 ### 1.4 Watching fields
+The multiplayer fork's lobby directory offers observation by an opaque room identity (`lobby.spectate`), in both
+waiting and running co-op rooms, reusing the same two reserved spectator seats and `Match.addSpectator` path below.
+Disabling public matchmaking hides the directory invitation code and prevents public player admission; it does not
+disable observation or known-code invitations. `lobby.state.playingCount` counts connected non-left human player
+seats in current matches, including eliminated/autoplay humans and solo runs, but excluding AI and spectators.
+Room-host control, latest-state admission and compact-wire compatibility are specified in
+[DESIGN §8.1](design/network.md#81-session--lobby) and [D032](development/DECISIONS.md#d032).
+
 Client-side combat (the default, DESIGN §14 Spectating; `Match._watchClient`): `g.watch` answers with the field's
 `b.start` (a display replica fast-forwarded to the field clock); an alive player may not watch another normal field
 while its own normal battle runs (`WRONG_PHASE 'own battle running'`) nor the other pair's boss field (`BAD_TARGET 'other

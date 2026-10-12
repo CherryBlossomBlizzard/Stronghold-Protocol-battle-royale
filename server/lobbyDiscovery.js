@@ -2,7 +2,7 @@
 // Never broadcasts a complete room.state or match state to directory viewers.
 
 import { randomInt } from 'node:crypto';
-import { ERR, ROOM_CAPACITIES } from '../shared/constants.js';
+import { ERR, ROOM_CAPACITIES, MAX_SPECTATORS } from '../shared/constants.js';
 import { LOBBY_PAGE_SIZE, LOBBY_UPDATE_MS } from '../shared/lobbyDiscovery.js';
 import { encode, sendRaw } from './net.js';
 
@@ -24,7 +24,9 @@ export function roomSummary(room) {
   }
   const host = room.seatOf(room.hostId);
   return {
-    code: room.code,
+    code: room.allowMatchmaking === false ? null : room.code,
+    roomId: room.directoryId,
+    allowMatchmaking: room.allowMatchmaking !== false,
     mode: room.mode,
     difficulty: room.difficulty,
     capacity: room.capacity,
@@ -32,7 +34,9 @@ export function roomSummary(room) {
     humanCount,
     botCount,
     inMatch: !!room.match,
-    joinable: room.mode === 'coop' && !room.match && room.freeSeat() >= 0,
+    joinable: room.allowMatchmaking !== false && room.mode === 'coop' && !room.match && room.freeSeat() >= 0,
+    spectatorCount: room.spectators.length,
+    spectatable: room.mode === 'coop' && room.spectators.length < MAX_SPECTATORS,
     hostOnline: !!host && !host.left && host.connected,
     disconnectedRetained: humanCount > 0 && connectedHumanCount === 0,
     createdAt: room.createdAt,
@@ -43,7 +47,8 @@ export function roomSummary(room) {
 export function compareRoomSummaries(a, b) {
   const group = (room) => (room.inMatch ? 2 : room.joinable ? 0 : 1);
   return Number(!!a.disconnectedRetained) - Number(!!b.disconnectedRetained)
-    || group(a) - group(b) || a.createdAt - b.createdAt || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0);
+    || group(a) - group(b) || a.createdAt - b.createdAt
+    || ((a.roomId || a.code) < (b.roomId || b.code) ? -1 : (a.roomId || a.code) > (b.roomId || b.code) ? 1 : 0);
 }
 
 export class LobbyDiscovery {
@@ -100,21 +105,26 @@ export class LobbyDiscovery {
     let online = 0;
     for (const session of this.lobby.registry.all()) if (session.connected) online++;
     let matchCount = 0;
+    let playingCount = 0;
     let joinableCount = 0;
     const rooms = [];
     for (const room of this.lobby.rooms.values()) {
-      if (room.match) matchCount++;
-      if (room.mode === 'coop' && !room.match && room.freeSeat() >= 0) joinableCount++;
+      if (room.match) {
+        matchCount++;
+        // Connected present humans include eliminated and autoplay seats; AI and spectators never count.
+        playingCount += room.seats.filter((seat) => seat && !seat.isBot && !seat.left && seat.connected).length;
+      }
+      if (room.allowMatchmaking !== false && room.mode === 'coop' && !room.match && room.freeSeat() >= 0) joinableCount++;
       if (withRooms) rooms.push(roomSummary(room));
     }
     if (withRooms) rooms.sort(compareRoomSummaries);
-    return { online, roomCount: this.lobby.rooms.size, matchCount, joinableCount, rooms };
+    return { online, roomCount: this.lobby.rooms.size, matchCount, playingCount, joinableCount, rooms };
   }
 
   snapshot(watcher, view = this.projection(watcher.list)) {
     const { list, page } = watcher;
-    const { online, roomCount, matchCount, joinableCount } = view;
-    const state = { t: 'lobby.state', online, roomCount, matchCount, joinableCount,
+    const { online, roomCount, matchCount, playingCount, joinableCount } = view;
+    const state = { t: 'lobby.state', online, roomCount, matchCount, playingCount, joinableCount,
       requireAssetCache: this.lobby.requireAssetCache };
     if (list) {
       const totalPages = Math.max(1, Math.ceil(view.rooms.length / LOBBY_PAGE_SIZE));
@@ -164,7 +174,7 @@ export class LobbyDiscovery {
     const admission = this.lobby.assetCacheAdmission(assetCache);
     if (admission) return admission;
     let candidates = [...this.lobby.rooms.values()].filter((room) => room !== current
-      && room.mode === 'coop' && !room.match && room.freeSeat() >= 0);
+      && room.allowMatchmaking !== false && room.mode === 'coop' && !room.match && room.freeSeat() >= 0);
     if (capacity != null) {
       const preferred = candidates.filter((room) => room.capacity === capacity);
       if (preferred.length) candidates = preferred;
@@ -175,6 +185,16 @@ export class LobbyDiscovery {
     const best = candidates.filter((room) => vacancies(room) === fewest);
     const room = best[this.chooseIndex(best.length)];
     return this.lobby.join(session, { code: room.code, assetCache });
+  }
+
+  /** Resolve a public identity at request time; stale directory views never bypass the latest admission policy. */
+  accessById(session, { roomId, assetCache }, spectate) {
+    const room = [...this.lobby.rooms.values()].find((candidate) => candidate.directoryId === roomId);
+    if (!room) return fail(ERR.ROOM_NOT_FOUND);
+    if (!spectate && room.allowMatchmaking === false) return fail(ERR.BAD_TARGET, 'matchmaking disabled');
+    // Existing handlers perform room/role/capacity and asset checks before changing any membership.
+    return spectate ? this.lobby.spectate(session, { code: room.code, assetCache })
+      : this.lobby.join(session, { code: room.code, assetCache });
   }
 
   close() {

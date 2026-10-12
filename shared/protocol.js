@@ -13,6 +13,7 @@ const isInt = (v, lo = -Infinity, hi = Infinity) => Number.isInteger(v) && v >= 
 const isStr = (v, max = 64) => typeof v === 'string' && v.length <= max;
 const isBool = (v) => typeof v === 'boolean';
 const isId = (v) => typeof v === 'string' && v.length > 0 && v.length <= 64 && /^[A-Za-z0-9_\-.:]+$/.test(v);
+const isRoomId = (v) => isStr(v, 36) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
 const isUid = (v) => isInt(v, 1, 2 ** 31);
 const isNum = (v, lo = -Infinity, hi = Infinity) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
 const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
@@ -392,6 +393,11 @@ export const C2S = {
   'lobby.watch': { on: isBool, list: isBool, page: (v) => isInt(v, 0, 1e6), $optional: ['list', 'page'] },
   // Admission metadata uses the existing wire-v1 extension slot; published position layouts stay unchanged.
   'lobby.quickMatch': { capacity: (v) => ROOM_CAPACITIES.includes(v), assetCache: isAssetCacheReadiness, $optional: ['capacity', 'assetCache'] },
+  // Post-v1 types use the readable JSON fallback; public identities never expose hidden invitation codes.
+  'lobby.join': { roomId: isRoomId,
+    assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
+  'lobby.spectate': { roomId: isRoomId,
+    assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
   'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v),
     assetCache: isAssetCacheReadiness, $optional: ['capacity', 'assetCache'] },
   'room.join': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v), assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
@@ -399,6 +405,7 @@ export const C2S = {
   'room.ready': { ready: isBool },
   'room.setDifficulty': { difficulty: (v) => DIFFICULTIES.includes(v) },
   'room.setCapacity': { capacity: (v) => ROOM_CAPACITIES.includes(v) },
+  'room.setMatchmaking': { allowed: isBool },
   // Upstream compatibility: this branch exposes the manual-human-first rule as fixed on; disabling is refused.
   'room.setAiPicksLast': { on: isBool },
   'room.addBot': {},

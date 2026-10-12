@@ -35,7 +35,7 @@ import { WIRE_VERSION, encodeWire, decodeWire } from '../../shared/wireCodec.js'
 import { N_ } from '../../shared/i18n.js';
 import { assetCache } from './assetCache.js';
 
-const ASSET_ADMISSION_TYPES = new Set(['room.create', 'room.join', 'lobby.quickMatch', 'room.spectate']);
+const ASSET_ADMISSION_TYPES = new Set(['room.create', 'room.join', 'lobby.quickMatch', 'room.spectate', 'lobby.join', 'lobby.spectate']);
 
 export const REQUEST_TIMEOUT_MS = 8000;
 export const HELLO_TIMEOUT_MS = 8000;

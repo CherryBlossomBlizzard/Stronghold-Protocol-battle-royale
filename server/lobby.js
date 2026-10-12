@@ -99,7 +99,7 @@
 //     code; a player never switches to spectating in place (ALREADY). Disconnect / grace / reconnect / expiry work as for
 //     a player seat (the seat is kept and given back on resume).
 
-import { randomBytes, randomInt } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { ERR, PHASE, DEFAULT_SEATS, ROOM_CAPACITIES, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks } from '../shared/protocol.js';
 import { encode, prepareMessage, sendPrepared, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
@@ -176,6 +176,9 @@ export class Room {
   /** @param {string} code @param {'solo'|'coop'} mode @param {string} difficulty @param {number} now */
   constructor(code, mode, difficulty, now, capacity = DEFAULT_SEATS) {
     this.code = code;
+    // Public directory identity is independent of the invitation code and lasts only for this room's lifetime.
+    this.directoryId = randomUUID();
+    this.allowMatchmaking = true;
     this.mode = mode;
     this.difficulty = difficulty;
     /**
@@ -238,6 +241,7 @@ export class Room {
       difficulty: this.difficulty,
       capacity: this.capacity,
       aiPicksLast: this.aiPicksLast,
+      allowMatchmaking: this.allowMatchmaking,
       inMatch: !!this.match,
       // v1 extension metadata only: message bodies never ride room/public snapshots or result replay.
       chatMatchId: this.match && this.matchCtx?.live && !this.matchCtx.ended && !this.matchCtx.chat.closed
@@ -410,12 +414,15 @@ export class Lobby {
     switch (msg.t) {
       case 'lobby.watch': return this.discovery.watch(session, msg);
       case 'lobby.quickMatch': return this.discovery.quickMatch(session, msg);
+      case 'lobby.join': return this.discovery.accessById(session, msg, false);
+      case 'lobby.spectate': return this.discovery.accessById(session, msg, true);
       case 'room.create': return this.create(session, msg);
       case 'room.join': return this.join(session, msg);
       case 'room.leave': return this.leave(session);
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setCapacity': return this.setCapacity(session, msg);
+      case 'room.setMatchmaking': return this.setMatchmaking(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
       case 'room.addBot': return this.addBot(session);
       case 'room.removeBot': return this.removeBot(session, msg);
@@ -630,6 +637,21 @@ export class Lobby {
     if (capacity > room.capacity) room.seats.push(...new Array(capacity - room.capacity).fill(null));
     else room.seats.length = capacity;
     room.capacity = capacity;
+    this.broadcastState(room);
+    return OK;
+  }
+
+  /** Only a co-op waiting-room host controls public admission; invitations and observation stay available. */
+  setMatchmaking(session, { allowed }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (room.mode !== 'coop') return fail(ERR.BAD_TARGET, 'solo rooms cannot be matched');
+    if (typeof allowed !== 'boolean') return fail(ERR.BAD_MSG, 'invalid matchmaking policy');
+    if (room.allowMatchmaking === allowed) return OK;
+    this.dropReplay(room, session.playerId);
+    room.allowMatchmaking = allowed;
     this.broadcastState(room);
     return OK;
   }
