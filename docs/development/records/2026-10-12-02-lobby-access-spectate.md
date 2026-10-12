@@ -5,11 +5,11 @@
 | 字段 | 内容 |
 |---|---|
 | 开始 / 最后更新 | 2026-10-12 / 2026-10-12，Asia/Shanghai |
-| 状态 | 进行中：用户三项规则已确认，后端、界面与定向验证并行推进 |
+| 状态 | 本地完成：后端、界面、定向验证与资源清理完成；未推送或部署 |
 | 类型 | 功能 |
 | 分支与开始 HEAD | `feat/IncreasePlayerCapacity`，`c106fb7c812839899a357a5c871aafd8589d27af`；开始时工作区干净 |
 | 上游基线 | 已合并 v0.2.4，`bc50cac01ff447eff3ab6c35f69d934bbc23b48f`；仅核对本地记录，本次不访问远程 |
-| 提交归属 | 后端、协议与首轮记录同一提交；界面及最终记录待后续提交。本次沿用分批本地提交授权，不推送或部署 |
+| 提交归属 | 后端、协议与首轮记录：`38845bdfe67225dcec3d5a652600e4e68522d4bf`；界面与本文最终记录同一提交，通过 `git log -- docs/development/records/2026-10-12-02-lobby-access-spectate.md` 查询。本次沿用分批本地提交授权，不推送或部署 |
 | 关联 | [D017](../DECISIONS.md#d017)、[大厅目录](2026-10-10-03-lobby-discovery.md)、[房间管理](2026-10-10-07-room-management.md) |
 
 ## 需求、范围与验收
@@ -45,18 +45,24 @@
 | `node --test test/wire-codec.test.js test/asset-cache-admission.test.js` | Node；冻结 wire-v1 指纹、扩展与真实 Net | 首轮 27/27 通过；扩充准入至六入口后仅准入 12/12 通过；新目录入口由 Net 实际自动携带 readiness，拒绝切房不改变原成员关系 |
 | `node --test test/ui/lobby-discovery-model.test.js test/ui/lobby-discovery-ui.test.js test/ui/room-management.test.js` | Node，前端状态与组件 | 29/29 通过；补充匹配开关触控类后 room-management 6/6 通过 |
 | `node --test test/docs-consistency.test.js test/docs-paths.test.js` | 本地文档与源码 | 31/31 通过 |
+| 本次 8 份文档的相对链接检查 | Node 只读扫描，排除行内代码示例 | 214 个本地链接均存在；不访问外部 URL |
 | 变更 JS / 测试的 scoped ESLint | `node node_modules/eslint/bin/eslint.js` / `npx eslint` | 0 errors；后端存在 2 条基线已有的 `no-useless-assignment` 警告，通过 `git show HEAD` 核对；本次界面、wire 及准入测试无警告 |
 | `node tools/i18n.mjs check --all --strict` | en / ja / ko / zh-TW | 未通过：四语言各 1363 used / 1362 translated / 1 missing / 0 errors。唯一缺项为基线已有的 `public/js/ui/assetCache.js:45`「请先获取或导入当前素材目录 JSON。」；本次新增 10 条全部覆盖，未混入无关修复 |
 | `node tools/check-imports.mjs` | 现有工具默认报告模式，exit 0 | 输出 `server/sim/nodeData.js` 的 3 条 Node 内置导入违规及 3 allowed notes；文件没有本次差异，不能把 exit 0 写成无违规 |
-| Edge 短流程及布局 | 正在执行，临时端口、独立用户配置与服主配置 | 待最终结果；不运行完整对局 |
+| 分别执行 `node --test test/lobby-access.browser.test.js` 与 `node --test test/lobby-discovery.browser.test.js` | `SP_E2E=1`，`Edg/155.0.4283.45`；临时端口、独立浏览器身份与服主配置，StubMatch 短流程 | 各 1/1 通过，约 32.65 / 6.62 秒；覆盖房主实际切换、等候/进行中观战、两席满员、人数断线/重连/离开变化，无 JS 错误；不运行完整对局 |
+| Edge 布局人工复查与缺陷修正 | 1920×1080、1280×720、844×390；简中/en/ja/ko/zh-TW，最大字号另测后两种尺寸 | 首轮截图人工复查发现 844×390 / en / XL 标题实际文字与统计标签相交，原断言只量容器漏检。添加装饰文字/标题/统计的实际文字 Range 断言；统计栏不收缩，≤900px 仅收紧本板块标题、装饰文字及间距，保留单行和面板高度 |
+| `node --test test/lobby-access.browser.test.js` 局部布局补验 | PowerShell 设置 `SP_E2E=1`、`SP_E2E_PANEL_ONLY=1`；Edge 155，以上 3 个常规尺寸及五语言 XL × 后两种尺寸 | 1/1 通过，约 17.08 秒；13 个面板场景的实际文字无交叠，按钮中心点击可达，JS errors 为空；最终 844×390 英文 XL 截图人工复核正常。未重跑已通过的观战和断重连段 |
+| 浏览器 / 连接 / 服务释放 | 各测试 `finally` 关闭自有资源，另查进程与监听 | 全部报告 browserClosed / browserProcessExited / clientsClosed / serverClosed / portClosed 为 true；PID 45536 / 64124 / 52288 不存在，随机端口 58575 / 59661 / 64581 无监听；未占用或关闭生产 3000 端口 |
 
 ## 结果、遗留与接手
 
-- 实现结果：进行中，统计及权限口径已确认。
-- 未确定或未完成：Edge 验证、最终资源清理和界面本地提交待执行；既存非本次翻译缺项保留。
-- 提交 / 远程 / 素材 / 线上：后端首个提交与本文首轮记录一起归属；界面待提交；未操作远程；不涉及素材更新；未部署。
+- 实现结果：大厅新增在线参战真人统计；等候房房主可控制公开匹配，公共列表隐藏邀请码并禁止加入，原邀请码加入与两席公开观战保留。紧凑界面及多语言、小屏最大字号验证完成。
+- 未确定或未完成：生产服务器人数及实际多人使用待部署后核验；既存非本次翻译缺项与 Node 导入违规保留。未执行全量 CI、golden、十四回合流程或百人实战压测，本次没有战斗规则变化。
+- 提交 / 远程 / 素材 / 线上：按功能分两次本地提交，归属见基本信息；未操作远程；不涉及素材更新；未部署。无关 `docs/SERVER_SETTINGS.md` 加粗改动保留且不提交。
 - 接手入口：`server/lobbyDiscovery.js`、`server/lobby.js`、`shared/protocol.js`、`public/js/lobbyDiscovery.js`、`public/js/ui/lobbyDiscovery.js`、`public/js/screens/lobby.js`、`public/js/screens/room.js`。
 
 ## 后续补充
 
-待本次任务证据追加。
+只读代码审查未发现新的具体缺陷；人数变化通知、房主转让后的权限、服务端最新准入重检、邀请码隐藏及 frozen compact-v1 均已核对。新客户端若连接旧服务器且没有目录 UUID，目录动作安全停用；不承诺混用新客户端与旧服务端。现有同版本 JSON/compact-v1 两种传输已验证。
+
+可丢弃的截图与机器报告保留在 Git 忽略的 `.cache/lobby-access-ui/run-1791778243362`（完整流程）、`.cache/lobby-discovery-ui/run-1791778314287`（旧目录回归）及 `.cache/lobby-access-ui/run-1791778994653`（最终布局）；关键发现、实际验证与资源释放证据已写入本文，不依赖缓存作为唯一记录。

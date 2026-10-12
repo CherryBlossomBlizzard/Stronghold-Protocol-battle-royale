@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Button } from '../../public/js/ui/components.js';
-import { roomFacts, SeatCard } from '../../public/js/screens/room.js';
+import { roomFacts, SeatCard, MatchmakingControl } from '../../public/js/screens/room.js';
 
 function* walk(node) {
   if (Array.isArray(node)) { for (const child of node) yield* walk(child); return; }
@@ -14,6 +14,47 @@ const host = { seat: 0, playerId: 'host', name: 'Host', connected: true, ready: 
 const guest = { seat: 1, playerId: 'guest', name: 'Guest', connected: true, ready: true, isBot: false };
 const bot = { seat: 2, playerId: 'bot', name: 'AI', connected: true, ready: true, isBot: true };
 const room = (changes = {}) => ({ hostId: host.playerId, mode: 'coop', capacity: 4, inMatch: false, seats: [host, guest, bot, null], ...changes });
+
+test('matchmaking defaults open in old frames and only a seated waiting co-op host can change it', () => {
+  for (const capacity of [4, 8, 20]) {
+    const source = room({ capacity });
+    assert.equal(roomFacts(source, 'host').allowMatchmaking, true);
+    assert.equal(roomFacts(source, 'host').canSetMatchmaking, true);
+    assert.equal(roomFacts({ ...source, allowMatchmaking: false }, 'host').allowMatchmaking, false);
+    for (const id of ['guest', 'bot', 'spectator', 'missing']) assert.equal(roomFacts(source, id).canSetMatchmaking, false);
+  }
+  for (const changes of [{ inMatch: true }, { mode: 'solo' }, { seats: [null, guest] }, { seats: [{ ...host, left: true }] }, { seats: [{ ...host, isBot: true }] }]) {
+    assert.equal(roomFacts(room(changes), 'host').canSetMatchmaking, false);
+  }
+});
+
+test('matchmaking switch follows server state, busy and connection state, and host-transfer permissions', () => {
+  const changed = [];
+  const facts = roomFacts(room(), 'host');
+  const props = { facts, connected: true, busy: null, onChange: (allowed) => changed.push(allowed) };
+  const control = MatchmakingControl(props);
+  assert.equal(control.type, 'button');
+  assert.equal(control.props.role, 'switch');
+  assert.equal(control.props['aria-checked'], 'true');
+  assert.equal(control.props['aria-label'], '允许匹配');
+  assert.equal(control.props.disabled, false);
+  assert.match(control.props.title, /邀请码仍可加入，观战不受影响/);
+  control.props.onClick();
+  const closed = MatchmakingControl({ ...props, facts: roomFacts(room({ allowMatchmaking: false }), 'host') });
+  assert.equal(closed.props['aria-checked'], 'false');
+  closed.props.onClick();
+  assert.deepEqual(changed, [false, true]);
+  assert.equal(MatchmakingControl({ ...props, busy: 'capacity' }).props.disabled, true);
+  assert.equal(MatchmakingControl({ ...props, connected: false }).props.disabled, true);
+  const transferred = room({ hostId: 'guest', allowMatchmaking: false, seats: [{ ...guest, seat: 0 }, { ...host, seat: 1 }, bot] });
+  const oldHost = MatchmakingControl({ ...props, facts: roomFacts(transferred, 'host') });
+  assert.equal(oldHost.type, 'span');
+  assert.equal(oldHost.props.onClick, undefined);
+  assert.equal(oldHost.props.role, 'status');
+  const newHost = MatchmakingControl({ ...props, facts: roomFacts(transferred, 'guest') });
+  assert.equal(newHost.type, 'button');
+  assert.equal(newHost.props['aria-checked'], 'false');
+});
 
 test('AI room limit counts only AI, supports zero and unrestricted old frames, and never expands capacity', () => {
   for (const capacity of [4, 8, 20]) {

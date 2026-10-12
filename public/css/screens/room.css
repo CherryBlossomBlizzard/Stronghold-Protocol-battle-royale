@@ -61,6 +61,11 @@
 .room-ai-limit .icon { width: .16rem; height: .16rem; }
 .room-ai-limit.is-full { color: var(--amber); border-color: var(--amber); }
 .room-ai-limit > span { font-size: calc(.12 * var(--t)); }
+.room-matchmaking { display: inline-flex; align-items: center; justify-content: center; gap: .05rem; min-height: .36rem; padding: 0 .1rem; border: 1px solid var(--mint-700); background: var(--mint-a10); color: var(--mint-400); font-size: calc(.14 * var(--t)); white-space: nowrap; }
+.room-matchmaking .icon { width: .15rem; height: .15rem; }
+.room-matchmaking.is-private { border-color: var(--amber); background: rgba(255, 180, 80, .08); color: var(--amber); }
+button.room-matchmaking:hover:not(:disabled) { border-color: var(--text-hi); color: var(--text-hi); }
+button.room-matchmaking:disabled { opacity: .45; cursor: default; }
 
 .seats--expanded, .seats--dense { grid-template-rows: none; align-content: stretch; overflow: auto; scrollbar-width: thin; }
 .seats--expanded { grid-auto-rows: minmax(2.7rem, 1fr); gap: .14rem; padding: .12rem .45rem; }

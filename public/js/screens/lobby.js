@@ -298,7 +298,8 @@ export function LobbyScreen() {
     if (err?.code === ERR.ROOM_NOT_FOUND) { toast(t('暂无可加入的房间，请稍后重试或创建同盟。'), 'warn'); return; }
     throw err;
   }));
-  const directoryJoin = (roomCode) => run('directoryJoin', () => net.request('room.join', { code: roomCode }));
+  const directoryJoin = (roomId) => run('directoryJoin', () => net.request('lobby.join', { roomId }));
+  const directorySpectate = (roomId) => run('directorySpectate', () => net.request('lobby.spectate', { roomId }));
   const join = (c = code) => {
     // `onClick=${join}` hands the click EVENT as the first argument, and a default parameter only applies to
     // `undefined` — codeArg keeps an event target out of the key and falls back to the input field
@@ -421,6 +422,6 @@ export function LobbyScreen() {
     </div>
     ${discoveryState.open ? html`<${LobbyRoomList} state=${discoveryState} connected=${online}
       onClose=${() => discovery.close()} onRefresh=${() => discovery.refresh()} onPage=${(page) => discovery.page(page)}
-      onJoin=${directoryJoin} busy=${!!busy} />` : null}
+      onJoin=${directoryJoin} onSpectate=${directorySpectate} busy=${!!busy} />` : null}
   </div>`;
 }

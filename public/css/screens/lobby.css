@@ -273,8 +273,8 @@
 .lobby-discovery__heading { display: flex; flex-direction: column; gap: .04rem; min-width: 0; }
 .lobby-discovery__heading strong { display: flex; align-items: center; gap: .06rem; font-size: calc(.22 * var(--t)); color: var(--text-hi); white-space: nowrap; }
 .lobby-discovery__heading strong .icon { width: .19rem; height: .19rem; color: var(--mint-400); }
-.lobby-discovery__stats { display: flex; align-items: center; gap: .18rem; }
-.lobby-discovery__stats > span { display: flex; flex-direction: column; align-items: center; min-width: .44rem; border-left: 1px solid var(--line-2); padding-left: .12rem; }
+.lobby-discovery__stats { display: flex; flex: none; align-items: center; gap: .1rem; min-width: 0; }
+.lobby-discovery__stats > span { display: flex; flex-direction: column; align-items: center; min-width: .44rem; border-left: 1px solid var(--line-2); padding-left: .09rem; }
 .lobby-discovery__stats b { color: var(--mint-400); font-size: calc(.23 * var(--t)); line-height: 1; }
 .lobby-discovery__stats small { margin-top: .04rem; color: var(--text-lo); font-size: calc(.13 * var(--t)); white-space: nowrap; }
 .lobby-discovery__actions { display: flex; align-items: center; gap: .08rem; margin-top: .12rem; }
@@ -292,19 +292,28 @@
 .lobby-directory__room-main, .lobby-directory__room-meta { display: flex; align-items: center; gap: .09rem; min-width: 0; }
 .lobby-directory__room-main { flex-wrap: wrap; }
 .lobby-directory__room-code { min-width: .62rem; color: var(--amber); font-size: calc(.19 * var(--t)); font-weight: 800; letter-spacing: .08em; }
+.lobby-directory__hidden-code { color: var(--text-dim); font-size: calc(.13 * var(--t)); }
 .lobby-directory__room-mode { color: var(--text-md); font-size: calc(.14 * var(--t)); white-space: nowrap; }
-.lobby-directory__room-meta { color: var(--text-lo); font-size: calc(.13 * var(--t)); white-space: nowrap; }
+.lobby-directory__room-meta { flex-wrap: wrap; color: var(--text-lo); font-size: calc(.13 * var(--t)); white-space: nowrap; }
 .lobby-directory__status { padding: .02rem .07rem; border: 1px solid var(--mint-700); color: var(--mint-400); font-size: calc(.12 * var(--t)); }
 .lobby-directory__status.is-match { border-color: var(--line-2); color: var(--text-dim); }
 .lobby-directory__room.is-retained { background: rgba(255, 180, 80, .025); }
 .lobby-directory__retained-note { margin: 0 0 .08rem; color: var(--text-lo); font-size: calc(.13 * var(--t)); line-height: 1.5; }
 .lobby-directory__offline { color: var(--amber); font-size: calc(.12 * var(--t)); }
-.lobby-directory__join { height: .34rem; padding: 0 .1rem; }
+.lobby-directory__private { color: var(--amber); font-size: calc(.12 * var(--t)); }
+.lobby-directory__actions { display: flex; align-items: center; justify-content: flex-end; gap: .08rem; }
+.lobby-directory__actions .btn { height: .34rem; padding: 0 .1rem; white-space: nowrap; }
+/* Adjacent join/spectate controls must not borrow each other's horizontal touch area. */
+.sp-coarse .lobby-directory .lobby-directory__actions .btn::before { width: calc(100% + .08rem); }
 .lobby-directory__empty { display: grid; place-items: center; min-height: 1.7rem; color: var(--text-lo); font-size: calc(.16 * var(--t)); text-align: center; }
 .lobby-directory__empty.is-error { color: var(--amber); }
 .lobby-directory__footer { display: flex; align-items: center; justify-content: space-between; gap: .12rem; width: 100%; }
 .lobby-directory__pager { display: flex; align-items: center; gap: .1rem; color: var(--text-lo); font-size: calc(.14 * var(--t)); }
 @media (max-width: 900px) {
+  /* Keep four translated counters beside the heading without shrinking its actual text into them. */
+  .lobby-discovery__overview { gap: .08rem; }
+  .lobby-discovery__heading .micro { font-size: calc(.1 * var(--t)); letter-spacing: .06em; }
+  .lobby-discovery__heading strong { font-size: calc(.16 * var(--t)); }
   /* Long translations keep the heading centered on its own row; tools use the remaining width. */
   .lobby-screen .topbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .16rem .24rem; }
   .lobby-screen .topbar__center { justify-self: center; max-width: 100%; }
@@ -316,7 +325,7 @@
   .lobby-online { min-width: 0; padding: 0 .06rem; }
   .lobby-directory__room { grid-template-columns: 1fr auto; }
   .lobby-directory__room-meta { grid-column: 1 / -1; }
-  .lobby-directory__join { grid-column: 2; grid-row: 1; }
+  .lobby-directory__actions { grid-column: 2; grid-row: 1; }
 }
 @media (max-width: 560px) {
   .lobby-screen .topbar { grid-template-columns: minmax(0, 1fr); }

@@ -5,9 +5,9 @@ import { createLobbyDiscovery, emptyLobbyDiscovery } from '../../public/js/lobby
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 const state = (patch = {}) => ({
-  t: 'lobby.state', online: 24, roomCount: 4, matchCount: 1, joinableCount: 2, ...patch,
+  t: 'lobby.state', online: 24, roomCount: 4, matchCount: 1, playingCount: 7, joinableCount: 2, ...patch,
 });
-const room = (code) => ({ code, mode: 'coop', capacity: 8, used: 3, status: 'waiting' });
+const room = (code) => ({ roomId: `id-${code}`, code, mode: 'coop', capacity: 8, used: 3, status: 'waiting' });
 const directory = (page, code, patch = {}) => state({ page, totalPages: 3, pageSize: 50, rooms: [room(code)], ...patch });
 
 function fakeNet(status = 'online') {
@@ -52,7 +52,7 @@ test('empty directory states have independent lists and unknown counts until a r
   const second = emptyLobbyDiscovery();
   first.rooms.push(room('ABCDEF'));
   assert.deepEqual(second.rooms, []);
-  for (const key of ['online', 'roomCount', 'matchCount', 'joinableCount']) assert.equal(second[key], null);
+  for (const key of ['online', 'roomCount', 'matchCount', 'playingCount', 'joinableCount']) assert.equal(second[key], null);
   assert.equal(second.ready, false);
   assert.equal(second.open, false);
 });
@@ -176,6 +176,7 @@ test('disconnect clears old counts and rows; reconnect restores exactly one curr
   assert.equal(f.target.get().page, 2);
   assert.equal(f.target.get().online, null);
   assert.equal(f.target.get().roomCount, null);
+  assert.equal(f.target.get().playingCount, null);
   assert.deepEqual(f.target.get().rooms, []);
   f.net.reply(1, directory(0, 'STALE1', { online: 99 }));
   f.net.emit('lobby.state', state({ online: 100 }));
@@ -189,7 +190,32 @@ test('disconnect clears old counts and rows; reconnect restores exactly one curr
   f.net.reply(3, directory(2, 'FRESH2', { online: 30 }));
   await flush();
   assert.equal(f.target.get().online, 30);
+  assert.equal(f.target.get().playingCount, 7);
   assert.deepEqual(f.target.get().rooms, [room('FRESH2')]);
+});
+
+test('playing count accepts nonnegative integers, ignores malformed updates, and survives old-page pushes', async (t) => {
+  const f = await started(t);
+  assert.equal(f.target.get().playingCount, 7);
+  for (const playingCount of [-1, 1.5, '4', null, undefined]) {
+    f.net.emit('lobby.state', state({ playingCount }));
+    assert.equal(f.target.get().playingCount, 7);
+  }
+  f.net.emit('lobby.state', state({ playingCount: 0 }));
+  assert.equal(f.target.get().playingCount, 0);
+  f.controller.show();
+  await flush();
+  f.controller.page(1);
+  await flush();
+  f.net.reply(2, directory(1, 'CURRENT', { playingCount: 20 }));
+  await flush();
+  f.net.reply(1, directory(0, 'LATE00', { playingCount: 99 }));
+  await flush();
+  assert.equal(f.target.get().playingCount, 20);
+  f.net.emit('lobby.state', directory(0, 'OLD001', { playingCount: 21 }));
+  assert.equal(f.target.get().playingCount, 21);
+  assert.equal(f.target.get().page, 1);
+  assert.deepEqual(f.target.get().rooms, [room('CURRENT')]);
 });
 
 test('offline mount waits for online status rather than requesting an unavailable directory', async (t) => {

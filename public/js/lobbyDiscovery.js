@@ -4,7 +4,7 @@ import { createStore } from './store.js';
 import { LOBBY_PAGE_SIZE } from '../../shared/lobbyDiscovery.js';
 
 export const emptyLobbyDiscovery = () => ({
-  online: null, roomCount: null, matchCount: null, joinableCount: null,
+  online: null, roomCount: null, matchCount: null, playingCount: null, joinableCount: null,
   rooms: [], page: 0, totalPages: 1, pageSize: LOBBY_PAGE_SIZE,
   open: false, loading: false, ready: false, error: false,
 });
@@ -21,7 +21,7 @@ export function createLobbyDiscovery({ net, target = createStore(emptyLobbyDisco
   function apply(message) {
     if (!active || !connected || !message || typeof message !== 'object') return;
     const counts = {};
-    for (const key of ['online', 'roomCount', 'matchCount', 'joinableCount']) {
+    for (const key of ['online', 'roomCount', 'matchCount', 'playingCount', 'joinableCount']) {
       if (Number.isInteger(message[key]) && message[key] >= 0) counts[key] = message[key];
     }
     const patch = { ...counts, ready: true, error: false };

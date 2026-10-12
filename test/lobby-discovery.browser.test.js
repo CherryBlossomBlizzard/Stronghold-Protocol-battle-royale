@@ -28,7 +28,7 @@ test('Edge lobby counts, directory join, capacity fallback and no-room feedback 
   try {
     await fs.mkdir(OUT, { recursive: true });
     server = await startServer({ port: 0, host: '127.0.0.1', quiet: true, MatchClass: DirectoryMatch,
-      announcementsDir: path.join(OUT, 'announcements') });
+      announcementsDir: path.join(OUT, 'announcements'), serverSettingsDir: path.join(OUT, 'server-settings') });
     report.port = server.port;
     const makeRoom = async (name, capacity, bots = 0, mode = 'coop') => {
       const client = await TestClient.connect(`ws://127.0.0.1:${server.port}/ws`);
@@ -48,11 +48,13 @@ test('Edge lobby counts, directory join, capacity fallback and no-room feedback 
     const puppeteer = (await import('puppeteer-core')).default;
     browser = await puppeteer.launch({ executablePath: EDGE, headless: true, args: ['--no-first-run', '--no-sandbox'] });
     report.browser = await browser.version();
+    report.browserPid = browser.process()?.pid;
     const page = await browser.newPage();
     page.setDefaultTimeout(10000);
     page.on('pageerror', (error) => errors.push(error.message));
     await page.setViewport({ width: 1920, height: 1080 });
-    await page.goto(server.url, { waitUntil: 'networkidle0' });
+    await page.goto(server.url, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.title-login input');
     await page.type('.title-login input', '联机验证博士');
     await page.click('.title-login > .btn--primary');
     await page.waitForFunction((s) => document.querySelector(s)?.textContent === '5', {}, selector('room-count'));
@@ -91,7 +93,9 @@ test('Edge lobby counts, directory join, capacity fallback and no-room feedback 
       await page.waitForSelector(`[data-room-code="${nearest.code}"]`);
       await page.waitForFunction(() => document.querySelector('.modal')?.getAnimations({ subtree: true }).every((animation) => animation.playState === 'finished'));
       assert.equal(await page.$$eval('.lobby-directory [data-room-code]', (rows) => rows.length), 5);
-      assert.equal(await page.$(`[data-room-code="${running.code}"] button`), null, 'running match has no join or spectator entry');
+      assert.equal(await page.$(`[data-room-code="${running.code}"] .lobby-directory__join`), null, 'running match has no player join entry');
+      assert.equal(await page.$eval(`[data-room-code="${running.code}"] .lobby-directory__spectate`, (el) => el.disabled), false,
+        'running co-op match offers available spectator seats');
       assert.equal(await page.$(`[data-room-code="${solo.code}"] button`), null, 'solo is read only');
       assert.equal(await page.$eval(`[data-room-code="${full.code}"] .lobby-directory__join`, (el) => el.disabled), true);
       const dialog = await page.$eval('.lobby-directory', (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, overflow: el.scrollWidth > el.clientWidth + 2 }; });
@@ -129,10 +133,19 @@ test('Edge lobby counts, directory join, capacity fallback and no-room feedback 
     assert.equal(server.lobby.discovery.watchers.has(playerId), false, 'returning to title unsubscribes');
     assert.deepEqual(errors, []);
   } finally {
-    if (browser) { await browser.close(); report.cleanup.browserClosed = true; }
+    if (browser) {
+      const browserProcess = browser.process();
+      await browser.close(); report.cleanup.browserClosed = true;
+      report.cleanup.browserProcessExited = !browserProcess || browserProcess.exitCode !== null || browserProcess.signalCode !== null;
+      assert.equal(report.cleanup.browserProcessExited, true, 'owned Edge child exited');
+    }
     await Promise.all(clients.map((client) => client.terminate()));
     report.cleanup.clientsClosed = true;
-    if (server) { await server.close(); report.cleanup.serverClosed = true; }
+    if (server) {
+      await server.close(); report.cleanup.serverClosed = true;
+      report.cleanup.portClosed = await fetch(`${server.url}/healthz`).then(() => false, () => true);
+      assert.equal(report.cleanup.portClosed, true, 'owned HTTP listener was released');
+    }
     await fs.mkdir(OUT, { recursive: true });
     await fs.writeFile(path.join(OUT, 'report.json'), JSON.stringify({ ...report, errors }, null, 2) + '\n');
   }
