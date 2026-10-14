@@ -109,7 +109,26 @@ test('manifest-only removal / alias update preserves ready cache contents and st
   const delta = await packAssetCache({ root: f.root, catalog: current, delta: true, baseCatalog: base });
   const directory = await w.readCatalog(delta.zipPath);
   const result = await w.importZIP(delta.zipPath, directory);
-  assert.equal(delta.packedFiles, 0); assert.equal(directory.files[0].aliases[0], '/assets/alias.png');
+  assert.equal(delta.packedFiles, 0); assert.ok(directory.files[0].aliases.includes('/assets/alias.png'));
   assert.equal(result.progress.readyFiles, 1); assert.equal(result.progress.missingFiles, 0);
   assert.equal(result.progress.importStats.imported, 0); assert.equal(w.network(), 0);
+});
+
+test('pre-hash schema-1 ZIP updates to exact hash aliases through a directory-only delta without downloading art', async (t) => {
+  const f = await fixture(t);
+  const current = await f.files({ '/assets/model.skel': 'unchanged model', '/assets/local/scene/test/scene.bin': 'scene binary' });
+  const previous = structuredClone(current);
+  for (const entry of previous.files) entry.aliases = [];
+  previous.version = hash(JSON.stringify({ schema: previous.schema, files: previous.files }));
+  const old = await packAssetCache({ root: f.root, catalog: previous });
+  const w = worker(); await w.importZIP(old.zipPath, await w.readCatalog(old.zipPath));
+  const delta = await packAssetCache({ root: f.root, catalog: current, delta: true, baseCatalog: previous });
+  assert.equal(delta.packedFiles, 0);
+  const directory = await w.readCatalog(delta.zipPath);
+  const imported = await w.importZIP(delta.zipPath, directory);
+  assert.equal(directory.schema, 1); assert.equal(directory.version, current.version);
+  assert.ok(directory.files.every((entry) => entry.aliases.some((alias) => alias.includes('/~'))));
+  assert.equal(imported.progress.readyFiles, 2); assert.equal(imported.progress.missingFiles, 0);
+  assert.equal(imported.progress.importStats.imported, 0); assert.equal(w.network(), 0);
+  for (const entry of directory.files) assert.equal(hash(await w.cachedBody(entry)), entry.sha256);
 });

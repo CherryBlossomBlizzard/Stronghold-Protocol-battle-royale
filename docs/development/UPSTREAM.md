@@ -17,18 +17,20 @@
 | 分支能力 | 优先核对的实现入口 | 保留的边界 |
 |---|---|---|
 | 房间与协议容量 | `server/lobby.js`、`shared/playerCapacity.js`、`shared/protocol.js`、房间 UI | 20 人座位、每组轮选请求及阶段标识、空位不计人数 |
-| 卡池与信标 | `server/match/pool.js`、`PlayerState.js`、`effectsMeta.js` | D010 固定分组、D028 新版完整联机基准；三人不缩减，五人 III 阶向下取整（v0.2.4 为 45）、其他向上取整；接收者组取副本，自选私有库存 |
-| 装备库存 | `Match.itemPoolFor`、`pool.js`、`player/acquire.js`、`match/spDraft.js`、`invariants.js` | D029 按固定组共享，三/四人原限额、五人 1.25 倍向上取整；奖励、支援、升级与重刷使用接收者组，空页只结束该组 |
+| 卡池与信标 | `server/match/pool.js`、`PlayerState.js`、`effectsMeta.js` | D010 固定分组、D028 新版完整联机基准；三人不缩减，五人 III 阶向下取整（v0.2.4 为 45）、其他向上取整；D034 已展示干员允许本组库存负债、后续抽卡仍受正库存限制；接收者组取副本，自选私有库存 |
+| 装备库存 | `Match.itemPoolFor`、`pool.js`、`player/acquire.js`、`match/spDraft.js`、`invariants.js` | D029 按固定组共享，三/四人原限额、五人 1.25 倍向上取整；固定赠品使用同一身份豁免，保留升级/合成继承；奖励、支援、升级与重刷使用接收者组，空页只结束该组 |
+| AI 阵营避让 | `server/match/bot.js` | D035 只避让同固定卡池组的存活队友；策略、核心羁绊与高阶让卡不因跨组独立卡池互相排斥 |
 | 机变与真人优先 | `server/match/choices.js`、`match/phases.js`、`match/spDraft.js`、轮选 UI | D012 每组独立六张、组间并行、类型全房一致；D004 组内未选真人优先，保留各组时钟与只读浏览 |
 | 联防与投票 | `server/match/unite.js`、`match/unitePhase.js`、`public/js/ui/hud.js` | D013 固定组数上限至多五轮、全房原选人排序、逐轮真人多数票；本轮打完后取消后续全部，保留漏怪归属与累计收益 |
-| 领袖及两端战斗 | `gamedata.js`、`finalAssault.js`、`server/sim/`、`public/js/battle/runner.js` | 按人数共享血池、无人机 2% 机制、普通限伤保留 |
+| 领袖及两端战斗 | `gamedata.js`、`finalAssault.js`、`server/sim/`、`public/js/battle/runner.js` | D009 按人数共享血池、退出按比例缩血；D036 所有参战席位种子随机搭档、准备至开战稳定、隐藏战保留完整搭档；无人机 2% 机制、普通限伤保留 |
 | 审计与界面 | `server/match/audit.js`、`tools/matchrun.mjs`、队伍栏与表情 UI | 扩容事件可以回放审计，图标和表情仍能显示 |
 | 普通公告与紧急通知 | `server/index.js`、`server/http/routes.js`、`server/announcements.js`、`server/announcementNotices.js`、`public/js/main.js` | D014 普通发布不打断对局，显式 notify 独立队列；D015 仅公告目录 assets 的只读图片，全部 host、广播与关闭清理保留 |
 | 个人选择及战绩 | `match/intents.js`、`match/spDraft.js`、`choiceOverlay.js`、`ui/stats.js` | 个人 choiceId 与公共 draftId/groupId 不串用；二十席位末席本人仍有自己的统计、导入导出和完整回看 |
 | 开局重刷 | `match/setupVote.js`、`match/platform.js`、`ui/setupReroll.js` | D018 全体真人一致同意；重建全部固定组与自选库存，准备失败不部分替换；策略采用 50 秒，机变时长不变 |
 | 素材预缓存及安装 | `server/assetCacheCatalog.js`、`server/http/assetCache.js`、`public/js/assetCache.js`、`public/asset-cache-sw.js`、`public/js/pwa.js` | D016 按哈希补缺、单缓存 SW、对局暂停批量任务；安装按钮不能引入第二套应用缓存；大厅/房间入口保留 |
 | 大厅目录及身份恢复 | `server/lobbyDiscovery.js`、`server/lobby.js`、`public/js/ui/lobbyDiscovery.js`、`public/js/net.js`、`ui/resumeMatch.js` | D017 实际空席匹配、仅大厅订阅、断线与恢复后重订阅；恢复选择时普通自动公告延后，新增按钮不遮挡标题 |
-| 紧凑编码与模块缓存 | `shared/wireCodec.js`、`public/js/runtime.js`、渲染加载器 | D021 已发布 v1 布局不重排，新字段放扩展位；D022 重试查询参数不能丢失页面固定 rv 内容版本 |
+| 紧凑编码与模块缓存 | `shared/wireCodec.js`、`server/http/websocket.js`、`server/http/runtimeCache.js`、`public/js/runtime.js`、渲染加载器 | D021 已发布 v1 布局不重排，新字段放扩展位；公共状态 8 Hz / 125 ms，32 KiB 跨消息压缩字典；D022 重试参数保留固定 rv，改写清单按实际正文冻结哈希；素材精确别名与旧 SHA 缓存兼容 |
+| 玩家打包文档 | `tools/package.mjs`、`test/package-player.test.js` | D037 本分支说明及引用的已跟踪开发 Markdown 随包离线查看；保留素材打包与服主管理 CLI，不加入私有配置或测试源码，代码示例不重写 |
 
 每个有实际取舍的冲突记录「上游改了什么 / 我们需要什么 / 最终怎么结合 / 如何验证」。不能只写「冲突已解决」，也不能未经核对整文件选 ours/theirs。用户决定需要改变时先提出具体选项。
 
@@ -61,6 +63,8 @@ python3 tools/local-extract/extract.py --webp
 Windows 上解释器名称依实际环境选择。镜像、代理、素材补齐、3D 贴图提取分别记录是否执行和结果；不要把「源码合并完成」写成「素材更新完成」。`public/assets` 的下载内容不提交到 Git，现有下载文件也不因同步自动清空。
 
 已有素材较完整时优先使用 `node tools/fetch-assets.mjs --add-only`。若新干员语音在提交清单中存在、旧下载索引却未包含，先更新对应索引，再按清单定向补缺；不要因旧索引或下载失败使用 `--allow-shrink` 删除条目。v0.2.3 的 313 个缺项与索引修复见 [本次记录](records/2026-10-10-05-upstream-v0.2.3.md)。清单引用、下载工具的完整计划、可选本地素材和统一 ZIP 分别核对，旧 ZIP 可以按 D016 复用匹配哈希，源码更新不代表 ZIP 已重建。
+
+素材地址或别名变化也要重新核对目录版本。v0.2.6 在素材字节未变时新增精确哈希别名，目录版本仍会变化；需验证服务端改写清单每个地址都能映射到预缓存目录、旧 SHA 内容复用与旧页面固定目录边界。已有玩家手动更新目录；新的分发包携带当前完整目录，不能宣称旧包目录仍匹配。官方 3D 场景和 PNG → WebP 优化分别记录可选素材是否具备及回退状态。
 
 历史上用户提供过 `.cache/proxy/` 下的下载启动脚本。缓存可能被清理，使用前核实其内容和存在性；记录采用的方法和结果，不依赖该脚本作为唯一长期说明。
 

@@ -5,6 +5,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { AUDIO_EXTS, MEDIA_PREFIX } from '../shared/media.js';
+import { hashedPath } from '../shared/assetPaths.js';
+import { rewriteManifest } from './http/assetViews.js';
 
 export const ASSET_CACHE_SCHEMA = 1;
 export const ASSET_CACHE_MIME = Object.freeze({
@@ -15,7 +17,7 @@ export const ASSET_CACHE_MIME = Object.freeze({
   '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.atlas': 'text/plain; charset=utf-8', '.obj': 'text/plain; charset=utf-8',
-  '.skel': 'application/octet-stream',
+  '.skel': 'application/octet-stream', '.bin': 'application/octet-stream',
 });
 
 /** Canonical URLs are decoded paths, never queries, external URLs or executable resources. */
@@ -237,6 +239,33 @@ export async function createAssetCacheCatalog({ publicDir, dataDir, app, concurr
   // If mp3 and ogg have the same stem, /media/x belongs to mp3; /media/x.ogg belongs to ogg.
   const audio = new Map();
   const byURL = new Map(files.map((file) => [file.url, file]));
+  // Keep schema-1's plain file URLs and complete SHA-256 keys. A served manifest's hash path is an exact
+  // alias of these bytes, not a normalization rule: an old page must never resolve a new hash via its old pin.
+  for (const file of files) file.aliases.push(hashedPath(file.url, file.sha256.slice(0, 16)));
+  const hashes = {
+    hashOf: (rel) => byURL.get(`/${rel}`)?.sha256.slice(0, 16) || null,
+    // Same ordered member hashes as assetIndex.modelHash; rewriteManifest supplies the canonical model lists.
+    modelHash(rels) {
+      const parts = rels.map((rel) => this.hashOf(rel));
+      return parts.every(Boolean) ? createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16) : null;
+    },
+  };
+  for (const [name, manifest] of [['assets.json', standard], ['local-assets.json', local]]) {
+    if (!manifest) continue;
+    const { models } = rewriteManifest(manifest, name, hashes);
+    for (const rels of models) {
+      const hash = hashes.modelHash(rels);
+      if (!hash) continue;
+      for (const rel of rels) {
+        const file = byURL.get(`/${rel}`);
+        file?.aliases.push(hashedPath(file.url, hash));
+      }
+    }
+  }
+  const addMediaAlias = (file, url) => {
+    if (!file) return;
+    file.aliases.push(url, hashedPath(url, file.sha256.slice(0, 16)));
+  };
   for (const url of wanted) {
     if (!url.startsWith('/assets/audio/')) continue;
     const ext = path.posix.extname(url).toLowerCase();
@@ -250,13 +279,13 @@ export async function createAssetCacheCatalog({ publicDir, dataDir, app, concurr
   }
   for (const [stem, extensions] of audio) {
     const primaryURL = AUDIO_EXTS.map((ext) => extensions.get(ext)).find(Boolean);
-    byURL.get(primaryURL)?.aliases.push(MEDIA_PREFIX + stem);
+    addMediaAlias(byURL.get(primaryURL), MEDIA_PREFIX + stem);
     for (const ext of AUDIO_EXTS) {
       const resolved = byURL.get(extensions.get(ext) || primaryURL);
-      resolved?.aliases.push(MEDIA_PREFIX + stem + ext);
+      addMediaAlias(resolved, MEDIA_PREFIX + stem + ext);
     }
   }
-  for (const file of files) file.aliases.sort();
+  for (const file of files) file.aliases = [...new Set(file.aliases)].sort();
   const version = createHash('sha256').update(JSON.stringify({ schema: ASSET_CACHE_SCHEMA, files })).digest('hex');
   if (app === undefined) {
     try { app = JSON.parse(await fsp.readFile(path.join(publicDir, '..', 'package.json'), 'utf8')).version; }

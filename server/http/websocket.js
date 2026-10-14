@@ -17,11 +17,35 @@ export const WS_MAX_PAYLOAD = 64 * 1024;
 
 // RFC 7692 raw DEFLATE. Retaining the outbound 32 KiB dictionary exploits repeated views; ws bounds global zlib work.
 // Incoming clients do not retain context, and maxPayload still bounds decompressed input. No custom browser inflater.
+// ws applies threshold only without context takeover; the retained outbound dictionary also compresses small messages.
 export const WS_COMPRESSION = Object.freeze({
   serverNoContextTakeover: false, clientNoContextTakeover: true,
   serverMaxWindowBits: 15, concurrencyLimit: 4, threshold: 256,
   zlibDeflateOptions: Object.freeze({ level: 6, memLevel: 7 }),
 });
+
+/** Upstream callers use this name; both exports describe the negotiated capacity-branch default. */
+export const WS_DEFLATE = WS_COMPRESSION;
+
+/**
+ * Does every offer require a server window/context policy this server cannot accept?
+ * ws otherwise rejects the whole handshake. Drop such an extension header and keep an uncompressed connection.
+ * The actual selected policy matters: the capacity branch uses a 32 KiB window, not upstream's 2 KiB window.
+ * @param {string | string[] | undefined} header
+ * @param {false | { serverMaxWindowBits?: number | boolean, serverNoContextTakeover?: boolean }} [compression]
+ */
+export function narrowDeflateOffer(header, compression = WS_COMPRESSION) {
+  if (!compression || typeof header !== 'string') return false;
+  const offers = header.split(',').map((s) => s.trim()).filter((s) => /^permessage-deflate\b/i.test(s));
+  if (!offers.length) return false;
+  return offers.every((offer) => {
+    const m = /(?:^|;)\s*server_max_window_bits\s*=\s*"?(\d+)"?/i.exec(offer);
+    const narrow = !!m && (compression.serverMaxWindowBits === false
+      || typeof compression.serverMaxWindowBits === 'number' && Number(m[1]) < compression.serverMaxWindowBits);
+    const noContext = /(?:^|;)\s*server_no_context_takeover\s*(?:;|$)/i.test(offer);
+    return narrow || noContext && compression.serverNoContextTakeover === false;
+  });
+}
 
 /**
  * The session stack of one server.
@@ -39,15 +63,37 @@ export function createSessionStack(opts, { data, log }) {
 }
 
 /**
+ * Count a socket in the traffic counters (traffic.js): its wire bytes from now until it closes, the payload of every
+ * message it sends (ws.send wrapped) and receives.
+ * @param {import('ws').WebSocket} ws
+ * @param {import('node:http').IncomingMessage} req
+ * @param {ReturnType<typeof import('./traffic.js').createTrafficCounter>} traffic
+ */
+function meterSocket(ws, req, traffic) {
+  const socket = req.socket;
+  traffic.wsOpen(socket);
+  const send = ws.send;
+  ws.send = function meteredSend(data, ...rest) {
+    traffic.wsSent(data);
+    return send.call(this, data, ...rest);
+  };
+  ws.on('message', (data) => traffic.wsReceived(data));
+  ws.once('close', () => traffic.wsClose(socket));
+}
+
+/**
  * Serve the WebSocket endpoint /ws on `server` (its 'upgrade' event).
  * @param {import('node:http').Server} server
- * @param {{ network: Network, log: object }} deps
+ * @param {{ network: Network, log: object, traffic?: ReturnType<typeof import('./traffic.js').createTrafficCounter> }} deps
  * @returns {WebSocketServer}
  */
-export function attachWebSocket(server, { network, log }) {
+export function attachWebSocket(server, { network, log, traffic = null }) {
   const compression = process.env.SP_WS_DEFLATE === '0' ? false : { ...WS_COMPRESSION };
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: compression, clientTracking: false });
-  wss.on('connection', (ws, req) => network.handleConnection(ws, req));
+  wss.on('connection', (ws, req) => {
+    if (traffic) meterSocket(ws, req, traffic);
+    network.handleConnection(ws, req);
+  });
   wss.on('error', (e) => log.error('[ws] server error', e));
 
   server.on('upgrade', (req, socket, head) => {
@@ -60,6 +106,7 @@ export function attachWebSocket(server, { network, log }) {
     const refused = network.admission(req);
     if (refused === 'per-address') { reject(429, 'Too Many Requests'); return; }
     if (refused) { reject(503, 'Service Unavailable'); return; }
+    if (narrowDeflateOffer(req.headers['sec-websocket-extensions'], compression)) delete req.headers['sec-websocket-extensions'];
     try {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } catch (e) {

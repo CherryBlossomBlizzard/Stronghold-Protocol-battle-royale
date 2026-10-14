@@ -13,9 +13,10 @@ const digest = (body) => createHash('sha256').update(body).digest('hex');
 const encodePath = (url) => url.split('/').map(encodeURIComponent).join('/');
 
 export class RuntimeCache {
-  constructor({ publicDir, dataDir, sharedDir, simDir, shimBody, enabled = process.env.SP_HTTP_RUNTIME_CACHE !== '0' }) {
+  constructor({ publicDir, dataDir, sharedDir, simDir, shimBody, manifestSource = null, enabled = process.env.SP_HTTP_RUNTIME_CACHE !== '0' }) {
     this.enabled = enabled;
     this.shimBody = shimBody;
+    this.manifestSource = manifestSource;
     this.roots = [
       ['/js/', path.join(publicDir, 'js'), new Set(['.js', '.mjs'])],
       ['/css/', path.join(publicDir, 'css'), new Set(['.css'])],
@@ -35,11 +36,22 @@ export class RuntimeCache {
   }
 
   async scan() {
+    // Fix the provider's first generation before hashing any served manifest. Otherwise a raw-file
+    // rv from the startup window could later name a different, rewritten HTTP body.
+    await this.manifestSource?.ready();
     const entries = new Map();
+    let manifestBytes = 0;
     const add = async (url, absPath) => {
       const stat = await fsp.stat(absPath);
-      const raw = await fsp.readFile(absPath);
-      entries.set(url, { url: encodePath(url), absPath, hash: digest(raw), size: stat.size, mtimeMs: stat.mtimeMs });
+      const manifest = this.manifestSource && (url === '/data/assets.json' || url === '/data/local-assets.json');
+      const view = manifest ? await this.manifestSource.get(url.slice('/data/'.length)) : null;
+      const raw = view?.body ? Buffer.from(view.body) : await fsp.readFile(absPath);
+      if (manifest) {
+        manifestBytes += raw.length;
+        if (raw.length > MAX_RAW_FILE || manifestBytes > MAX_RAW_BYTES) throw new Error('Runtime manifest snapshot exceeds byte limit');
+      }
+      entries.set(url, { url: encodePath(url), absPath, hash: digest(raw), size: stat.size, mtimeMs: stat.mtimeMs,
+        ...(manifest ? { frozenBody: raw } : {}) });
     };
     const walk = async (prefix, dir, extensions) => {
       const files = await fsp.readdir(dir, { withFileTypes: true }).catch((error) => {
@@ -77,6 +89,9 @@ export class RuntimeCache {
   /** Never serve changed bytes under an old immutable URL: hash on first read, then reuse only the verified copy. */
   async body(entry, stat) {
     if (!entry.absPath) return this.shimBody;
+    // Only these exact bytes belong to the page's rv. An asset-index rescan may replace the
+    // unversioned view, but never the immutable manifest of an already pinned page.
+    if (entry.frozenBody) return entry.frozenBody;
     if (stat.size !== entry.size || stat.mtimeMs !== entry.mtimeMs) return null;
     const hit = this.buffers.get(entry.hash);
     if (hit) { this.buffers.delete(entry.hash); this.buffers.set(entry.hash, hit); return hit; }

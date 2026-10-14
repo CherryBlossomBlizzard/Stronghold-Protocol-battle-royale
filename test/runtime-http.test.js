@@ -9,6 +9,9 @@ import { gunzipSync, brotliDecompressSync } from 'node:zlib';
 import { createStaticHandler, DATA_SHIM_JS } from '../server/http/static.js';
 import { createRequestHandler } from '../server/http/routes.js';
 import { preferredEncoding } from '../server/http/files.js';
+import { createAssetIndex } from '../server/http/assetIndex.js';
+import { createManifestViews } from '../server/http/assetViews.js';
+import { RuntimeCache } from '../server/http/runtimeCache.js';
 import { createRuntimeResolver, runtimeCacheMode } from '../public/js/runtime.js';
 
 const log = { warn() {}, error() {}, debug() {} };
@@ -32,9 +35,9 @@ const FILES = {
   'public/assets/art.svg': '<svg>asset</svg>',
 };
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, extraFiles = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-runtime-http-'));
-  for (const [file, body] of Object.entries(FILES)) {
+  for (const [file, body] of Object.entries({ ...FILES, ...extraFiles })) {
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await fs.writeFile(path.join(root, file), body);
   }
@@ -43,6 +46,7 @@ async function fixture(t, options = {}) {
   const server = http.createServer(createRequestHandler({ serveStatic: createStaticHandler(dirs), log }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
+    dirs.assetIndex?.close();
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith('sp-runtime-http-'));
@@ -140,6 +144,74 @@ test('data-only updates change HTML and only that file URL after restart; stale/
   }
   const ims = await request(server, '/', { headers: { 'If-Modified-Since': 'Fri, 01 Jan 2100 00:00:00 GMT' } });
   assert.equal(ims.status, 200, 'a generated version map is validated only by its content ETag');
+});
+
+test('rewritten manifests pin their actual served bytes; rescans keep page rv stable until a new snapshot', async (t) => {
+  const source = JSON.stringify({ chars: { test: { avatar: '/assets/art.svg' } }, note: 'manifest content\n'.repeat(100) });
+  const local = JSON.stringify({ groups: { ui: { test: { path: '/assets/art.svg' } } } });
+  const { server, root, dirs, replace } = await fixture(t, {}, { 'data/assets.json': source, 'data/local-assets.json': local });
+  const index = createAssetIndex({ publicDir: dirs.publicDir, cacheFile: null, delayMs: 0 });
+  const views = createManifestViews({ dataDir: dirs.dataDir, index, log });
+  dirs.assetIndex = index; dirs.views = views;
+  replace(); index.start();
+  const oldImports = importMap(await request(server, '/'));
+  const pinned = await request(server, oldImports['/data/assets.json']);
+  const body = JSON.parse(pinned.body);
+  assert.match(body.chars.test.avatar, /^\/assets\/~[a-f0-9]{16}\/art\.svg$/);
+  assert.equal(oldImports['/data/assets.json'], '/data/assets.json?rv=' + hash(pinned.body));
+  assert.notEqual(hash(pinned.body), hash(source), 'the rewritten bytes, rather than the source file, identify rv');
+  assert.match(pinned.headers['cache-control'], /immutable/);
+  assert.equal(pinned.headers['last-modified'], undefined, 'source mtime does not validate a generated manifest');
+  const localPinned = await request(server, oldImports['/data/local-assets.json']);
+  assert.equal(oldImports['/data/local-assets.json'], '/data/local-assets.json?rv=' + hash(localPinned.body));
+  assert.match(JSON.parse(localPinned.body).groups.ui.test.path, /\/~[a-f0-9]{16}\//);
+  const br = await request(server, oldImports['/data/assets.json'], { headers: { 'Accept-Encoding': 'br' } });
+  assert.deepEqual(brotliDecompressSync(br.body), pinned.body);
+  const range = await request(server, oldImports['/data/assets.json'], { headers: { 'Accept-Encoding': 'br', Range: 'bytes=0-9' } });
+  assert.equal(range.status, 206); assert.equal(range.headers['content-encoding'], undefined);
+  assert.deepEqual(range.body, pinned.body.subarray(0, 10));
+  for (const url of ['/data/assets.json?rv=' + hash(source), '/data/assets.json?rv=bad', oldImports['/data/assets.json'] + '&rv=' + 'a'.repeat(64)]) {
+    assert.equal((await request(server, url)).status, 409, 'a dynamic view must not bypass rv validation');
+  }
+
+  await fs.writeFile(path.join(root, 'public/assets/art.svg'), '<svg>new asset bytes</svg>');
+  await index.refresh();
+  const live = await request(server, '/data/assets.json');
+  assert.notEqual(JSON.parse(live.body).chars.test.avatar, body.chars.test.avatar, 'the unversioned view reflects the new hash');
+  assert.deepEqual((await request(server, oldImports['/data/assets.json'])).body, pinned.body, 'already pinned bytes are immutable');
+  assert.deepEqual(importMap(await request(server, '/')), oldImports, 'one process has one runtime snapshot');
+  assert.equal((await request(server, oldImports['/data/assets.json'], { headers: { 'If-None-Match': pinned.headers.etag } })).status, 304);
+
+  replace();
+  const nextImports = importMap(await request(server, '/'));
+  assert.notEqual(nextImports['/data/assets.json'], oldImports['/data/assets.json']);
+  assert.deepEqual((await request(server, nextImports['/data/assets.json'])).body, live.body);
+  assert.equal((await request(server, oldImports['/data/assets.json'])).status, 409, 'the old rv cannot name the new snapshot');
+  assert.equal(await fs.readFile(path.join(root, 'data/assets.json'), 'utf8'), source, 'disk manifests stay unchanged');
+});
+
+test('the first runtime snapshot waits for its fixed manifest provider before publishing rv', async (t) => {
+  const { dirs } = await fixture(t, {}, { 'data/assets.json': '{"raw":true}' });
+  let release;
+  const ready = new Promise((resolve) => { release = resolve; });
+  let reads = 0;
+  let current = Buffer.from('{"generation":1}');
+  const runtime = new RuntimeCache({ ...dirs, shimBody: Buffer.from(DATA_SHIM_JS), manifestSource: {
+    ready: () => ready,
+    get: async () => { reads++; return { body: current }; },
+  } });
+  const pending = runtime.snapshot();
+  await Promise.resolve();
+  assert.equal(reads, 0);
+  current = Buffer.from('{"generation":2}');
+  release();
+  const snapshot = await pending;
+  const entry = snapshot.entries.get('/data/assets.json');
+  assert.equal(entry.hash, hash(current));
+  current = Buffer.from('{"generation":3}');
+  const stat = await fs.stat(path.join(dirs.dataDir, 'assets.json'));
+  assert.equal((await runtime.body(entry, stat)).toString(), '{"generation":2}');
+  assert.equal(reads, 1, 'later provider changes cannot alter this process snapshot');
 });
 
 test('runtime-cache rollback and custom HTML retain original revalidation behavior', async (t) => {

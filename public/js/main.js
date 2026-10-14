@@ -45,7 +45,7 @@ import { TitleScreen, sanitizeName } from './screens/title.js';
 import { LobbyScreen, rememberRoom, parseRoomParam } from './screens/lobby.js';
 import { RoomScreen } from './screens/room.js';
 import { GameScreen } from './screens/game.js';
-import { installAudio } from './audio.js';
+import { audio, installAudio } from './audio.js';
 import { settingsStore } from './ui/settings.js';
 import { GuideHost } from './ui/guide.js';
 import { AnnouncementHost, installAnnouncements } from './ui/announcements.js';
@@ -60,7 +60,7 @@ import { startBuildGuard } from './ui/buildGuard.js';
 import { MAX_SEATS } from '../../shared/constants.js';
 import { initLang, useLang, tickerText } from './ui/lang.js';
 import { t, N_, translateWire } from '../../shared/i18n.js';
-import { recordError } from './diag.js';
+import { recordError, installTrafficMeter } from './diag.js';
 import { installMatchChat } from './matchChat.js';
 import { assetCache } from './assetCache.js';
 
@@ -73,7 +73,7 @@ const SCREENS = { title: TitleScreen, lobby: LobbyScreen, room: RoomScreen, game
 
 /** Copy of a server message without transport fields. */
 function payload(msg) {
-  const { t, rid, ...rest } = msg; // eslint-disable-line no-unused-vars
+  const { t, rid, ...rest } = msg;
   return rest;
 }
 
@@ -256,6 +256,10 @@ function wireNet() {
   net.on('m.public', (msg) => { matchAt = Date.now(); store.patch('match', { public: payload(msg) }); maybeFinishRestore(); });
   net.on('m.emergency', onEmergency);
   net.on('m.private', (msg) => { matchAt = Date.now(); store.patch('match', { private: payload(msg) }); });
+  net.on('m.layer', (msg) => {
+    const s = store.get();
+    if (selectRoute(s) === 'game' && msg.playerId === s.me?.playerId) audio.layerGain(msg.bondId, msg.add);
+  });
   net.on('m.field', (msg) => store.patch('match', { field: payload(msg) }));
   net.on('m.result', (msg) => {
     const res = payload(msg);
@@ -375,6 +379,8 @@ function installGlobalErrorHandlers() {
 
 async function boot() {
   installGlobalErrorHandlers();
+  // what this page downloads, by category, for the 问题反馈 report's traffic line (diag.js; nothing is sent anywhere)
+  installTrafficMeter();
   // touch / hover / fullscreen classes, zoom-gesture blocking, rotation re-layout (ui/device.js, css/devices.css)
   installDeviceSupport();
   // A page restored from the back/forward cache has a dead socket and a stale token choice: start over.

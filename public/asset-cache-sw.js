@@ -148,6 +148,8 @@ async function fetchAsset(event, path) {
     // A new document has fresh application data but has not declared its asset version yet.
     // Never serve another page's last catalog before it pins its own version after deployment.
     const indexed = await getCatalog(pin?.version);
+    // A ~hash path matches only this pinned catalog's exact aliases. Stripping it could serve old model bytes
+    // for a new manifest (or replace the model's aggregate hash with an unrelated file hash).
     const entry = indexed?.urls.get(path);
     if (!entry) return fetch(event.request);
     const cache = await caches.open(ASSET_CACHE_NAME);

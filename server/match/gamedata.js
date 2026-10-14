@@ -101,6 +101,10 @@ export class GameData {
     const chess = this.raw.chess && typeof this.raw.chess === 'object' ? this.raw.chess : {};
     this._chess = chess;
     this._items = this.raw.items && typeof this.raw.items === 'object' ? this.raw.items : {};
+    // Fixed operator gifts are unlimited outputs, but every produced normal/advanced item still occupies 1/2 copies
+    // (card-pool experiment BV1eLXXBqEgF, maintainer-confirmed 2026-10-11). Random subset gifts are not exempt.
+    this._fixedGiftItems = new Set(Object.values(this.raw.garrisons || {})
+      .filter(g => g?.effectKey === 'SERVER_GAIN_EQUIP').map(g => this.baseIdOf(g.bbStr?.chess)).filter(id => this._items[id]));
     this._bonds = this.raw.bonds && typeof this.raw.bonds === 'object' ? this.raw.bonds : {};
     /** visible, shop-eligible base (normal) chess ids */
     this.visibleChess = Object.keys(chess).filter((id) => {
@@ -313,20 +317,11 @@ export class GameData {
     return Number.isInteger(count) && count >= 0 ? count : null;
   }
 
-  /** Whether this is one of the fixed equipment items granted by SERVER_GAIN_EQUIP traits. */
-  isTraitFixedItem(id) {
-    if (!this._traitFixed) {
-      this._traitFixed = new Set();
-      for (const g of Object.values(this.raw.garrisons || {})) {
-        if (g?.effectKey !== 'SERVER_GAIN_EQUIP' || !this.item(g.bbStr?.chess)) continue;
-        const itemId = g.bbStr.chess;
-        const rec = this.item(itemId);
-        this._traitFixed.add(itemId);
-        if (rec.goldenId) this._traitFixed.add(rec.goldenId);
-      }
-    }
-    return this._traitFixed.has(id) || this._traitFixed.has(this.baseIdOf(id));
-  }
+  /** Whether a fixed trait gift may be produced beyond stock (including the advanced version of that item). */
+  isUnlimitedGiftItem(id) { return this._fixedGiftItems.has(this.baseIdOf(id)); }
+
+  /** Compatibility for the fork's fixed-gift upgrade and merge identity marker. */
+  isTraitFixedItem(id) { return this.isUnlimitedGiftItem(id); }
 
   /** Copies needed to merge (0 = never merges: golden chess). */
   mergeCount(id) {

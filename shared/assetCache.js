@@ -7,8 +7,10 @@ export const ASSET_CACHE_LATEST_KEY = '/__sp_asset_cache__/latest';
 export const MAX_ASSET_BYTES = 128 * 1024 * 1024;
 export const MAX_CATALOG_FILES = 100000;
 export const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
+// Seven explicit audio extensions plus the extension-less route each have plain and content-hash aliases.
+export const MAX_ASSET_ALIASES = 32;
 const SHA = /^[a-f0-9]{64}$/;
-const TYPES = /\.(?:png|jpe?g|gif|webp|avif|bmp|mp3|m4a|aac|ogg|oga|opus|wav|woff2?|ttf|otf|css|json|atlas|obj|skel)$/i;
+const TYPES = /\.(?:png|jpe?g|gif|webp|avif|bmp|mp3|m4a|aac|ogg|oga|opus|wav|woff2?|ttf|otf|css|json|atlas|obj|skel|bin)$/i;
 
 export function assetCacheError(code, cause) {
   return Object.assign(new Error(code, cause ? { cause } : undefined), { code });
@@ -38,7 +40,7 @@ export function validateAssetCatalog(catalog) {
   for (const file of catalog.files) {
     if (!file || !safeAssetPath(file.url) || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > MAX_ASSET_BYTES
       || !SHA.test(file.sha256 || '') || typeof file.type !== 'string' || !file.type || /[\r\n]/.test(file.type)
-      || !Array.isArray(file.aliases) || file.aliases.length > 16) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
+      || !Array.isArray(file.aliases) || file.aliases.length > MAX_ASSET_ALIASES) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
     for (const url of [file.url, ...file.aliases]) {
       if (!safeAssetPath(url, true) || urls.has(url)) throw assetCacheError('ASSET_CACHE_BAD_CATALOG');
       urls.add(url);
@@ -118,7 +120,7 @@ export const assetContentKey = (sha256) => {
   return CACHE_KEY_PREFIX + sha256;
 };
 
-/** Query suffixes are irrelevant for verified content. Encoded path separators are not. */
+/** Query suffixes are irrelevant; encoded separators are unsafe. Keep the hash segment for exact alias lookup. */
 export function decodedAssetPath(url, origin) {
   try {
     const parsed = new (/** @type {any} */ (globalThis).URL)(url, origin);

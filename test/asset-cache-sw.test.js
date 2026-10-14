@@ -48,9 +48,9 @@ async function fixture({ slowMetadata = false, blockPassive = false } = {}) {
     handlers.get('message')({ source: windows.get(id), data, ports: [{ postMessage: resolve }],
       waitUntil(promise) { promise.catch(reject); } });
   });
-  const fetchFile = async (id) => {
+  const fetchFile = async (id, url = entry.url, headers = {}) => {
     const waits = []; let result;
-    handlers.get('fetch')({ clientId: id, request: new Request(origin + entry.url),
+    handlers.get('fetch')({ clientId: id, request: new Request(origin + url, { headers }),
       respondWith(promise) { result = promise; }, waitUntil(promise) { waits.push(promise); } });
     const response = await result;
     await Promise.all(waits);
@@ -102,4 +102,27 @@ test('SW allows the first verified pin during direct reconnect, but refuses dire
   changed.version = await helpers.sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: 1, files: changed.files })));
   assert.equal((await f.message('page', { type: 'ASSET_CACHE_PIN', catalog: changed })).error, 'ASSET_CACHE_PLAYING');
   assert.equal((await f.message('page', { type: 'ASSET_CACHE_CAN_MUTATE' })).playing, true);
+});
+
+test('SW exact hash aliases reuse unchanged full-SHA contents after an explicit catalog update and respect old pins', async () => {
+  const f = await fixture(); f.addClient('old'); f.addClient('updated');
+  await f.message('old', { type: 'ASSET_CACHE_PIN', catalog });
+  await f.message('updated', { type: 'ASSET_CACHE_PIN', catalog });
+  const cache = await f.storage.open(helpers.ASSET_CACHE_NAME);
+  await cache.put(origin + helpers.assetContentKey(sha256), new Response(body, { headers: helpers.validatedCacheHeaders(entry) }));
+  const hashUrl = `/assets/~${sha256.slice(0, 16)}/model.atlas`;
+  const changed = structuredClone(catalog);
+  changed.files[0].aliases.push(hashUrl);
+  changed.version = await helpers.sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: 1, files: changed.files })));
+  assert.equal((await f.message('updated', { type: 'ASSET_CACHE_PIN', catalog: changed })).ok, true);
+  assert.equal(await (await f.fetchFile('updated', hashUrl)).text(), 'atlas bytes');
+  assert.equal(f.network(), 0, 'an alias-only directory update does not download unchanged cache content');
+  const partial = await f.fetchFile('updated', hashUrl, { Range: 'bytes=0-4' });
+  assert.equal(partial.status, 206); assert.equal(await partial.text(), 'atlas'); assert.equal(f.network(), 0);
+  await f.fetchFile('updated', '/assets/~0000000000000000/model.atlas');
+  assert.equal(f.network(), 1, 'an unrelated hash does not resolve by dropping its segment');
+  await f.fetchFile('old', hashUrl);
+  assert.equal(f.network(), 2, 'another page retains its old catalog and does not borrow new aliases');
+  assert.equal(await (await f.fetchFile('old')).text(), 'atlas bytes');
+  assert.equal(f.network(), 2, 'the old plain-path pin continues to use its existing verified content');
 });

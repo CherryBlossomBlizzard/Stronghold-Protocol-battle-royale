@@ -24,7 +24,7 @@ const V1_EXTENSIONS = Object.freeze({
 // Published v1 has no new numeric IDs: these post-v1 business types deliberately use its JSON fallback.
 const V1_JSON_FALLBACK = Object.freeze({
   c2s: ['room.chat', 'room.setMatchmaking', 'lobby.join', 'lobby.spectate'],
-  s2c: ['m.chat', 'm.chatState', 'm.emergency'],
+  s2c: ['m.chat', 'm.chatState', 'm.emergency', 'm.layer'],
 });
 
 test('v1 complete catalog fingerprint prevents accidental published field or enum renumbering', () => {
@@ -180,7 +180,7 @@ function noPublicExtensions(message) {
     const known = new Set(fields.map(nameOf));
     for (const k of Object.keys(v)) assert.ok(k === 't' || known.has(k)
       || (fields === WIRE_RECORDS.card && k === 'soldOut')
-      || (path === 'm.public' && ['emergencyFrozen', 'emergencyFrozenAt', 'emergencyReason'].includes(k)),
+      || (path === 'm.public' && ['emergencyFrozen', 'emergencyFrozenAt', 'emergencyReason', 'bossPairs'].includes(k)),
       `${path}.${k} needs an explicit position or declared v1 extension`);
     for (const field of fields) if (typeof field !== 'string' && Object.hasOwn(v, field[0])) {
       const [key, type] = field;

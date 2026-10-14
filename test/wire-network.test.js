@@ -44,7 +44,7 @@ test('20 physical clients + spectator: mixed wire formats, compression, broadcas
   assert.equal(viewer.log.some((m) => m.t === 'm.private'), false, 'spectator never receives private data');
 
   // Representative full public views on real sockets. Transmission is deliberately unpaced to stress compression;
-  // production 5 Hz scheduling is checked independently below. This is not a twenty-human gameplay simulation.
+  // Production 8 Hz scheduling is checked independently below. This is not a twenty-human gameplay simulation.
   const room = srv.lobby.getRoom(roomState.code);
   const base = room.match.publicView();
   base.players = base.players.map((p) => ({ ...p, bonds: Array.from({ length: 18 }, (_, n) =>
@@ -195,7 +195,7 @@ test('decode failure reconnects with the same identity and disables arrays for t
   await promise;
 });
 
-test('public changes coalesce to 5 Hz, deduplicate and retain immediate forced resync', () => {
+test('public changes coalesce to 8 Hz, deduplicate and retain immediate forced resync', () => {
   const h = makeMatch({ humans: 2, fake: true }).start();
   const m = h.m;
   try {
@@ -205,13 +205,13 @@ test('public changes coalesce to 5 Hz, deduplicate and retain immediate forced r
       m.markPublic(); m.flush(); h.sched.advance(10);
     }
     const updates = h.bc.filter((v) => v.t === 'm.public').slice(initial);
-    assert.equal(updates.length, 5);
-    for (let i = 1; i < updates.length; i++) assert.equal(updates[i].serverNow - updates[i - 1].serverNow, 200);
+    assert.equal(updates.length, 8);
+    for (let i = 1; i < updates.length; i++) assert.equal(updates[i].serverNow - updates[i - 1].serverNow, 125);
     assert.equal(updates.at(-1).players[0].lp, 100);
-    h.sched.advance(200); m.markPublic(); m.flush();
-    assert.equal(h.bc.filter((v) => v.t === 'm.public').length, initial + 5, 'identical view is not resent');
+    h.sched.advance(125); m.markPublic(); m.flush();
+    assert.equal(h.bc.filter((v) => v.t === 'm.public').length, initial + 8, 'identical view is not resent');
     h.sched.advance(1); m.flush(true);
-    assert.equal(h.bc.filter((v) => v.t === 'm.public').length, initial + 6);
+    assert.equal(h.bc.filter((v) => v.t === 'm.public').length, initial + 9);
     assert.equal(h.bc.at(-1).serverNow, h.sched.now());
   } finally { m.dispose(); }
 });

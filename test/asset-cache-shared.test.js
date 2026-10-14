@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { safeAssetPath, safeAssetZipName, decodedAssetPath, parseAssetRange, validateAssetCatalog,
   assetContentKey, isVerifiedAssetResponse, validatedCacheHeaders, sha256Hex } from '../shared/assetCache.js';
 import { verifyAssetCatalog, assetCacheSummary, catalogMatchesSummary, assetCacheReadinessMatches } from '../shared/assetCache.js';
+import { MAX_ASSET_ALIASES } from '../shared/assetCache.js';
 import { createAssetCacheManager } from '../public/js/assetCache.js';
 
 const entry = { url: '/assets/audio/中 文.mp3', bytes: 3,
@@ -30,8 +31,22 @@ test('request normalization keeps same-origin aliases/query variants, rejects en
   const origin = 'https://game.test';
   assert.equal(decodedAssetPath('/assets/audio/%E4%B8%AD%20%E6%96%87.mp3?v=one', origin), entry.url);
   assert.equal(decodedAssetPath('/media/%E4%B8%AD%20%E6%96%87?x=1', origin), entry.aliases[0]);
+  assert.equal(decodedAssetPath('/assets/~0123456789abcdef/scene/test/scene.bin?v=one', origin),
+    '/assets/~0123456789abcdef/scene/test/scene.bin', 'the hash remains part of the pinned catalog lookup');
   for (const url of ['https://other.test/assets/x.png', '/assets/a%2fb.png', '/assets/%255c.png',
     '/api/asset-cache/file?url=/assets/x.png', '/assets/%zz.png']) assert.equal(decodedAssetPath(url, origin), null);
+});
+
+test('catalog accepts bounded hashed aliases and scene binaries without permitting executable or private resources', () => {
+  const value = fixture();
+  value.files[0].aliases = Array.from({ length: MAX_ASSET_ALIASES }, (_, i) => `/assets/alias-${i}.bin`);
+  assert.doesNotThrow(() => validateAssetCatalog(value));
+  value.files[0].aliases.push('/assets/too-many.bin');
+  assert.throws(() => validateAssetCatalog(value), /BAD_CATALOG/);
+  assert.equal(safeAssetPath('/assets/local/scene/test/scene.bin'), true);
+  assert.equal(safeAssetPath('/fonts/scene.bin'), false);
+  assert.equal(safeAssetPath('/runtime/scene.bin'), false);
+  assert.equal(safeAssetPath('/assets/scene.js'), false);
 });
 
 test('ZIP names retain Unicode/directory entries and reject hidden, executable path tricks and traversal', () => {

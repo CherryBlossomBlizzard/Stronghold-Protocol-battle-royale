@@ -480,6 +480,7 @@ export function makeCtx(m, ps, source, hook, ev = null) {
     lp: () => ps.lp,
     alive: () => ps.alive,
     bandId: () => ps.bandId,
+    teamMedicGranted: () => m.teamMedicGranted(),
     shopLevel: () => ps.shop.level,
     bond: (id) => (ps.bonds[id] ? { ...ps.bonds[id] } : null),
     bonds: () => Object.fromEntries(Object.entries(ps.bonds).map(([k, v]) => [k, { ...v }])),
@@ -565,14 +566,15 @@ export function makeCtx(m, ps, source, hook, ev = null) {
     },
     grantItem: (itemId, opts = {}) => {
       if (!ps.alive || !gd.item(itemId)) return null;
-      // The marker is an identity-scoped exemption for SERVER_GAIN_EQUIP targets; ordinary effects cannot opt out
-      // of the shared equipment stock by merely passing noPool.
-      const noPool = opts.noPool === true && gd.isTraitFixedItem(itemId);
+      // The legacy marker and the upstream grant flag share the fixed-family exemption. The stored marker keeps
+      // approved upgrade/merge inheritance; neither API exempts an ordinary item from its own group's stock.
+      const noPool = (opts.noPool === true || opts.requirePool === false) && gd.isUnlimitedGiftItem(itemId);
       const p = ps.acquireItem(itemId, {
         source: opts.source || source.key || 'effect',
         toTemp: !!opts.toTemp,
         noPool,
         deferMerge: ps._deferItemMerge > 0,
+        requirePool: opts.requirePool !== false,
       });
       return p ? view(p) : null;
     },

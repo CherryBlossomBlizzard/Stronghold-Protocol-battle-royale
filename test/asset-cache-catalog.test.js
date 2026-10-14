@@ -6,6 +6,10 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createAssetCacheCatalog, assetCacheURLProblem } from '../server/assetCacheCatalog.js';
 import { validateAssetCatalog, catalogURLMap } from '../shared/assetCache.js';
+import { hashedPath } from '../shared/assetPaths.js';
+import { rewriteManifest } from '../server/http/assetViews.js';
+import { createAssetIndex } from '../server/http/assetIndex.js';
+import { AUDIO_EXTS } from '../shared/media.js';
 
 async function fixture(t, assets = {}, local) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sp-asset-catalog-'));
@@ -58,7 +62,88 @@ test('media aliases match extension-less and explicit-extension priority/fallbac
   assert.ok(mp3.aliases.includes('/media/bgm/track.wav'), 'missing explicit extension falls back to mp3');
   assert.ok(ogg.aliases.includes('/media/bgm/track.ogg'));
   assert.ok(!ogg.aliases.includes('/media/bgm/track'));
-  assert.equal(new Set(catalog.files.flatMap((x) => x.aliases)).size, 8);
+  assert.equal(new Set(catalog.files.flatMap((x) => x.aliases).filter((url) => url.startsWith('/media/') && !url.includes('/~'))).size, 8);
+});
+
+test('schema-1 catalog retains plain paths and aliases content-hashed art, fonts and scene binary by actual bytes', async (t) => {
+  const local = { groups: { 'scene/act2autochess_m01': { scene: { path: '/assets/local/scene/act2autochess_m01/scene.json' },
+    bin: { path: '/assets/local/scene/act2autochess_m01/scene.bin' } } } };
+  const f = await fixture(t, { icon: '/assets/icon.webp', font: '/fonts/main.woff2' }, local);
+  for (const [url, content] of [['/assets/icon.webp', 'image'], ['/fonts/main.woff2', 'font'],
+    ['/assets/local/scene/act2autochess_m01/scene.json', '{"version":1}'],
+    ['/assets/local/scene/act2autochess_m01/scene.bin', Buffer.from([0, 1, 2, 3])]]) await f.put(url, content);
+  const catalog = await createAssetCacheCatalog(f);
+  assert.equal(catalog.schema, 1); assert.equal(catalog.complete, true); assert.deepEqual(catalog.missing, []);
+  assert.doesNotThrow(() => validateAssetCatalog(catalog));
+  const map = catalogURLMap(catalog);
+  for (const entry of catalog.files) {
+    assert.ok(!entry.url.includes('/~'), 'ZIP names and plain file requests retain their existing canonical paths');
+    assert.equal(map.get(hashedPath(entry.url, entry.sha256.slice(0, 16))), entry);
+    assert.equal(map.get(hashedPath(entry.url, '0'.repeat(16))), undefined, 'unrelated content hashes are never normalized away');
+  }
+  assert.equal(catalog.files.find((entry) => entry.url.endsWith('.bin')).type, 'application/octet-stream');
+});
+
+test('Spine aliases use the same model membership and ordered hashes as the served standard and local manifests', async (t) => {
+  const standard = { chars: { hero: { front: { skel: '/assets/hero/model.skel', atlas: '/assets/hero/model.atlas',
+    textures: ['/assets/hero/page.png'] } } } };
+  const local = { groups: { 'spine/token/token_test': {
+    'z.skel': { path: '/assets/local/spine/token/token_test/model.skel' },
+    'a.atlas': { path: '/assets/local/spine/token/token_test/model.atlas' },
+    'm.png': { path: '/assets/local/spine/token/token_test/page.png' },
+  } } };
+  const f = await fixture(t, standard, local);
+  for (const prefix of ['/assets/hero', '/assets/local/spine/token/token_test']) {
+    await f.put(`${prefix}/model.skel`, prefix + ' skeleton');
+    await f.put(`${prefix}/model.atlas`, '\npage.png\nsize: 2,2\n');
+    await f.put(`${prefix}/page.png`, prefix + ' picture');
+  }
+  const catalog = await createAssetCacheCatalog(f);
+  assert.equal(catalog.complete, true); assert.doesNotThrow(() => validateAssetCatalog(catalog));
+  const map = catalogURLMap(catalog);
+  const hashes = createAssetIndex({ publicDir: f.publicDir, cacheFile: null });
+  t.after(() => hashes.close());
+  await hashes.refresh();
+  for (const [name, manifest] of [['assets.json', standard], ['local-assets.json', local]]) {
+    const served = rewriteManifest(manifest, name, hashes);
+    for (const rels of served.models) {
+      const hash = hashes.modelHash(rels);
+      for (const rel of rels) {
+        assert.equal(map.get(hashedPath(`/${rel}`, hash)), map.get(`/${rel}`));
+        assert.equal(map.get(hashedPath(`/${rel}`, '0'.repeat(16))), undefined);
+      }
+    }
+    assert.ok(JSON.stringify(served.doc).includes('/~'), name);
+  }
+  const changed = { ...standard, chars: { hero: { front: { ...standard.chars.hero.front, textures: ['/assets/hero/missing.png'] } } } };
+  await fs.writeFile(path.join(f.dataDir, 'assets.json'), JSON.stringify(changed));
+  const incomplete = await createAssetCacheCatalog(f);
+  const known = incomplete.files.find((entry) => entry.url === '/assets/hero/model.skel');
+  assert.equal(incomplete.complete, false);
+  assert.equal(known.aliases.length, 1, 'a model with a missing member only keeps its file hash alias');
+});
+
+test('hashed media routes retain explicit-extension priority and only alias the bytes the resolver selects', async (t) => {
+  const f = await fixture(t, { audio: ['/assets/audio/bgm/track.ogg', '/assets/audio/bgm/track.mp3'] });
+  await f.put('/assets/audio/bgm/track.ogg', 'ogg'); await f.put('/assets/audio/bgm/track.mp3', 'mp3');
+  const catalog = await createAssetCacheCatalog(f);
+  const map = catalogURLMap(catalog);
+  const mp3 = map.get('/assets/audio/bgm/track.mp3');
+  const ogg = map.get('/assets/audio/bgm/track.ogg');
+  assert.doesNotThrow(() => validateAssetCatalog(catalog));
+  for (const ext of ['', ...AUDIO_EXTS]) {
+    const entry = ext === '.ogg' ? ogg : mp3;
+    assert.equal(map.get(hashedPath('/media/bgm/track' + ext, entry.sha256.slice(0, 16))), entry);
+  }
+  assert.equal(map.get(hashedPath('/media/bgm/track', ogg.sha256.slice(0, 16))), undefined,
+    'the ogg file hash must not make an extension-less mp3 response look like cached ogg bytes');
+});
+
+test('an audio stem with only one installed format accepts all seventeen exact file and media aliases', async (t) => {
+  const f = await fixture(t, { audio: '/assets/audio/track.mp3' }); await f.put('/assets/audio/track.mp3', 'mp3');
+  const catalog = await createAssetCacheCatalog(f);
+  assert.equal(catalog.files[0].aliases.length, 17);
+  assert.doesNotThrow(() => validateAssetCatalog(catalog));
 });
 
 test('local token models and atlas-only texture dependencies enter the complete package', async (t) => {

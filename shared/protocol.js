@@ -503,6 +503,8 @@ export const S2C = [
   // Post-v1 JSON fallback; repeated in welcome.emergency and match public freeze extensions.
   'm.emergency',
   'm.chat', 'm.chatState', // bounded ephemeral history; new types use v1's readable JSON fallback
+  // m.layer { playerId, bondId, add } — own live prep layer gain; ephemeral, never replayed on resync.
+  'm.layer',
   // m.unitStats { seq, round, units: [unitStatsEntry] } — the answer to g.unitStats (the requester only)
   'm.unitStats',
   // client-side combat (DESIGN §14): b.start { battleId, fieldId, kind, spec, authoritative, startAt, serverNow, elapsed,
