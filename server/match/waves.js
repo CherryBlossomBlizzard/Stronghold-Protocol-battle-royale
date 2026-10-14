@@ -252,16 +252,20 @@ function monsterPools(gd) {
     (fly ? (elite ? all.flyElite : all.flyNormal) : (elite ? all.elite : all.normal)).push({ key, power });
     all.special.push({ key, power });
   }
-  // 「中等及以下」的门槛：全部怪物属性强度的一个分位（默认 70%）。前 8 回合只用门槛以内的怪，
-  // 第 9 回合起全开 —— 骰子仍然随机，只是前期不会掷出高难度的怪。
+  // 分档门槛：低难度 = 属性强度 ≤ 全部怪物的 RULES.rollWaveLowShare 分位；中等 = ≤ RULES.rollWaveMidShare 分位。
+  // 前 RULES.rollWaveEarlyRounds 回合只用**低难度**那一档，之后全开 —— 骰子仍然随机，只是前期不会掷出高难度的怪。
   powers.sort((a, b) => a - b);
-  const cap = powers.length ? powers[Math.min(powers.length - 1, Math.floor(powers.length * RULES.rollWaveMidShare))] : Infinity;
-  const pools = { cap, earlyRounds: RULES.rollWaveEarlyRounds, midShare: RULES.rollWaveMidShare, kept: powers.filter((x) => x <= cap).length, total: powers.length };
+  const pct = (q) => (powers.length ? powers[Math.min(powers.length - 1, Math.max(0, Math.floor(powers.length * q)))] : Infinity);
+  const lowCap = pct(RULES.rollWaveLowShare);
+  const midCap = pct(RULES.rollWaveMidShare);
+  const pools = { lowCap, midCap, earlyRounds: RULES.rollWaveEarlyRounds, lowShare: RULES.rollWaveLowShare, midShare: RULES.rollWaveMidShare,
+    lowKept: powers.filter((x) => x <= lowCap).length, midKept: powers.filter((x) => x <= midCap).length, total: powers.length };
   for (const cls of Object.keys(all)) {
     const asc = all[cls].slice().sort((a, b) => a.power - b.power || (a.key < b.key ? -1 : 1));
     pools[cls] = {
       all: asc.map((x) => x.key),
-      early: asc.filter((x) => x.power <= cap).map((x) => x.key),
+      low: asc.filter((x) => x.power <= lowCap).map((x) => x.key),
+      mid: asc.filter((x) => x.power <= midCap).map((x) => x.key),
       maxPower: asc.length ? asc[asc.length - 1].power : 0,
     };
   }
@@ -271,8 +275,8 @@ function monsterPools(gd) {
 
 /** 这一回合的候选池：第 1–N 回合只给「中等及以下」（该类别为空时退回整组）。 */
 function diceList(pools, cls, round) {
-  const slot = pools[cls] || { all: [], early: [] };
-  if (round <= pools.earlyRounds) return slot.early.length ? slot.early : slot.all;
+  const slot = pools[cls] || { all: [], low: [], mid: [] };
+  if (round <= pools.earlyRounds) return slot.low.length ? slot.low : (slot.mid.length ? slot.mid : slot.all);
   return slot.all;
 }
 
@@ -294,7 +298,7 @@ export function rollWavePick(gd, rng, round) {
     elite: draw('elite') || draw('special'),
     flyNormal: draw('flyNormal') || draw('special'),
     flyElite: draw('flyElite') || draw('special'),
-    fly: false, dice: true, diceEarly: round <= p.earlyRounds, diceCap: p.cap,
+    fly: false, dice: true, diceEarly: round <= p.earlyRounds, diceCap: round <= p.earlyRounds ? p.lowCap : Infinity,
   };
 }
 
