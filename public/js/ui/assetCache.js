@@ -43,6 +43,7 @@ export function cacheErrorText(code) {
     case 'ASSET_CACHE_CATALOG_UNAVAILABLE': return t('服务器素材版本校验失败，请检查连接后重试。');
     case 'ASSET_CACHE_BAD_CATALOG': return t('本地素材目录无效，请选择本站提供的完整素材包或目录 JSON。');
     case 'ASSET_CACHE_CATALOG_REQUIRED': return t('请先获取或导入当前素材目录 JSON。');
+    case 'ASSET_CACHE_SW_UPDATE_REQUIRED': return t('缓存组件尚未完成升级，请关闭本站的全部游戏标签页后重新打开，再重试。');
     case 'ASSET_CACHE_QUOTA': return t('浏览器存储空间不足。已缓存文件保留，可释放空间后继续。');
     case 'ASSET_CACHE_HASH_MISMATCH': return t('部分文件校验失败，未写入缓存。请重新导入或下载缺项。');
     case 'ASSET_CACHE_ZIP_INVALID':
@@ -71,7 +72,7 @@ function phaseText(phase) {
     case 'updating-catalog': return t('正在更新素材目录');
     case 'paused': return t('已暂停，可继续');
     case 'ready': return t('当前素材已缓存完整');
-    case 'catalog-required': return t('需要导入本地素材目录');
+    case 'catalog-required': return t('请先获取或导入当前素材目录 JSON。');
     case 'catalog-stale': return t('本地目录尚未匹配服务器');
     case 'error': return t('操作未完成');
     default: return t('准备就绪');
@@ -116,7 +117,8 @@ export function AssetCacheHost() {
   const busy = active(state.phase);
   const disabled = busy || !state.supported || state.playing;
   const indexed = state.hasCatalog && state.catalogCurrent;
-  const canDownloadCatalog = !state.hasCatalog && !!state.serverVersion;
+  const canDownloadCatalog = !!state.serverVersion && (!state.hasCatalog
+    || !state.catalogCurrent && !(state.readyFiles > 0 && state.readyBytes > 0));
   const canUpdateCatalog = state.hasCatalog && !!state.serverVersion && state.version !== state.serverVersion && !state.catalogCurrent
     && state.readyFiles > 0 && state.readyBytes > 0;
   const retrySeconds = Math.max(0, Math.ceil(((state.catalogUpdateRetryAt || 0) - Math.max(now, Date.now())) / 1000));
@@ -188,7 +190,8 @@ export function AssetCacheHost() {
         <${Button} variant="primary" icon="folder" disabled=${disabled} onClick=${chooseFile} data-testid="asset-cache-import">
           ${t('导入本地素材包')}<span class="asset-cache__recommend">${t('强烈推荐')}</span><//>
         <${Button} variant="secondary" icon="folder" disabled=${disabled} onClick=${() => catalogInput.current?.click()} data-testid="asset-cache-catalog-import">${t('导入目录 JSON')}<//>
-        <${Button} variant="secondary" icon="download" disabled=${disabled || state.emergency || !state.serverVersion || !state.missingFiles || state.policy?.enabled === false}
+        <${Button} variant="secondary" icon="download" disabled=${disabled || state.emergency || !state.serverVersion
+            || !state.missingFiles && state.catalogCurrent || state.policy?.enabled === false || retrySeconds > 0}
             onClick=${() => run(() => assetCache.downloadMissing())} data-testid="asset-cache-download">${t('在线补齐缺项（限速）')}<//>
         ${busy ? html`<${Button} variant="secondary" onClick=${() => assetCache.pause()} data-testid="asset-cache-pause">${t('暂停')}<//>` : null}
       </div>

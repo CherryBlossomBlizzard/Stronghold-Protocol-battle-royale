@@ -1,5 +1,7 @@
 // Pure client catalog/cache helpers. This module never reads browser globals at import time.
 export const CACHE_SCHEMA = 1;
+// Page/SW coordination evolves independently of the persisted catalog format.
+export const ASSET_CACHE_SW_PROTOCOL = 1;
 export const ASSET_CACHE_NAME = 'sp-asset-cache-v1';
 export const ASSET_CACHE_META = 'sp-asset-cache-meta-v1';
 export const CACHE_KEY_PREFIX = '/__sp_asset_cache__/sha256/';

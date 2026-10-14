@@ -93,11 +93,41 @@ test('Edge title icons retain their shape; cache controls are visible and persis
       await page.screenshot({ path: path.join(OUT, `lobby-${viewport.width}.png`) });
     }
     await page.click(open);
-    await page.waitForFunction(async () => {
-      const state = (await import('/js/assetCache.js')).assetCache.getState();
-      return state.serverVersion && !['initializing', 'checking'].includes(state.phase);
+    try {
+      await page.waitForFunction(async () => {
+        const state = (await import('/js/assetCache.js')).assetCache.getState();
+        return state.serverVersion && !['initializing', 'checking'].includes(state.phase);
+      });
+    } catch (error) {
+      report.cacheInitialization = await page.evaluate(async () => ({
+        state: (await import('/js/assetCache.js')).assetCache.getState(),
+        dialog: document.querySelector('.asset-cache-dialog')?.innerText,
+        controller: navigator.serviceWorker.controller?.scriptURL,
+        imports: document.querySelector('script[type="importmap"]')?.textContent,
+      }));
+      throw error;
+    }
+    assert.equal(await page.$eval('[data-testid="asset-cache-download"]', (el) => el.disabled), false,
+      'an explicit cold fill may obtain the current directory first');
+    assert.ok(await page.$('[data-testid="asset-cache-catalog-download"]'), 'cold online directory acquisition is visible');
+    await page.evaluate(async () => {
+      const { assetCache } = await import('/js/assetCache.js');
+      window.realAssetCacheState = assetCache.getState;
+      const state = assetCache.getState();
+      assetCache.getState = () => ({ ...state, phase: 'catalog-stale', hasCatalog: true, catalogCurrent: false,
+        version: '0'.repeat(64), readyFiles: 0, readyBytes: 0 });
+      await assetCache.initialize();
     });
-    assert.equal(await page.$eval('[data-testid="asset-cache-download"]', (el) => el.disabled), true, 'a cold browser needs a local catalog first');
+    await page.waitForFunction(() => document.querySelector('[data-testid="asset-cache-local-version"]')?.textContent === '0'.repeat(64));
+    assert.ok(await page.$('[data-testid="asset-cache-catalog-download"]'), 'empty old directories retain online acquisition');
+    assert.equal(await page.$('[data-testid="asset-cache-catalog-update"]'), null, 'an empty cache uses cold acquisition');
+    assert.equal(await page.$eval('[data-testid="asset-cache-download"]', (el) => el.disabled), false,
+      'an empty old directory cannot strand the fill button');
+    await page.evaluate(async () => {
+      const { assetCache } = await import('/js/assetCache.js');
+      assetCache.getState = window.realAssetCacheState;
+      await assetCache.initialize();
+    });
     assert.ok(await page.$('[data-testid="asset-cache-catalog-import"]'), 'standalone catalog import is visible');
     assert.match(await page.$eval('[data-testid="asset-cache-import"]', (el) => el.innerText), /强烈推荐/);
     assert.notEqual(await page.$eval(persist, (el) => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)');

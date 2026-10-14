@@ -1,6 +1,6 @@
 // Browser asset-cache coordinator; pure at import time so importing it under Node is safe.
 // All expensive work runs in a dedicated worker. UI consumes codes through i18n, never raw errors.
-import { ASSET_CACHE_META, ASSET_CACHE_LATEST_KEY, MAX_MANIFEST_BYTES, verifyAssetCatalog,
+import { ASSET_CACHE_META, ASSET_CACHE_LATEST_KEY, ASSET_CACHE_SW_PROTOCOL, MAX_MANIFEST_BYTES, verifyAssetCatalog,
   assetCacheCatalogKey, validateAssetCacheSummary, catalogMatchesSummary, assetCacheError } from '../../shared/assetCache.js';
 
 const initialState = (env) => {
@@ -39,6 +39,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
   let admissionRefresh = null;
   let summaryAt = 0;
   let persistenceRequest = null;
+  let compatibleSW = null;
   const getState = () => ({ ...state, storage: { ...state.storage }, importStats: state.importStats && { ...state.importStats },
     scanStats: state.scanStats && { ...state.scanStats }, policy: state.policy && { ...state.policy } });
   const patch = (next) => {
@@ -71,8 +72,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     try { await checkingStorage; } finally { checkingStorage = null; }
   }
 
-  async function swMessage(type, payload = {}) {
-    const target = env.navigator.serviceWorker.controller || registration?.active;
+  async function swMessage(type, payload = {}, target = env.navigator.serviceWorker.controller || registration?.active) {
     if (!target) throw assetCacheError('ASSET_CACHE_SW_UNAVAILABLE');
     return new Promise((resolve, reject) => {
       const channel = new env.MessageChannel();
@@ -84,6 +84,76 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
       try { target.postMessage({ type, ...payload }, [channel.port2]); }
       catch (error) { env.clearTimeout(timer); channel.port1.close(); reject(assetCacheError('ASSET_CACHE_SW_UNAVAILABLE', error)); }
     });
+  }
+
+  function waitForSW(worker, states) {
+    if (states.includes(worker.state)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error) => {
+        env.clearTimeout(timer); worker.removeEventListener('statechange', changed);
+        if (error) reject(error); else resolve();
+      };
+      const changed = () => {
+        if (states.includes(worker.state)) finish();
+        else if (worker.state === 'redundant') finish(assetCacheError('ASSET_CACHE_SW_UPDATE_REQUIRED'));
+      };
+      const timer = env.setTimeout(() => finish(assetCacheError('ASSET_CACHE_SW_UPDATE_REQUIRED')), 15000);
+      worker.addEventListener('statechange', changed);
+      changed();
+    });
+  }
+
+  function waitForController(target) {
+    const serviceWorker = env.navigator.serviceWorker;
+    if (serviceWorker.controller === target) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error) => {
+        env.clearTimeout(timer); serviceWorker.removeEventListener('controllerchange', changed);
+        if (error) reject(error); else resolve();
+      };
+      const changed = () => { if (serviceWorker.controller === target) finish(); };
+      const timer = env.setTimeout(() => finish(assetCacheError('ASSET_CACHE_SW_UPDATE_REQUIRED')), 15000);
+      serviceWorker.addEventListener('controllerchange', changed);
+      changed();
+    });
+  }
+
+  // Reloading can leave a new page controlled by the previous SW, whose catalog validator
+  // cannot accept new aliases. Explicit maintenance upgrades it before any catalog transfer;
+  // the waiting worker independently checks every live playing pin before skipWaiting.
+  async function ensureCompatibleSW(job) {
+    const target = () => env.navigator.serviceWorker.controller || registration?.active;
+    const compatible = async () => {
+      const current = target();
+      if (current && current === compatibleSW) return true;
+      try {
+        const response = await swMessage('ASSET_CACHE_CAPABILITIES', {}, current);
+        if (response.protocol === ASSET_CACHE_SW_PROTOCOL) { compatibleSW = current; return true; }
+      } catch { /* Previous SW protocols respond with BAD_MESSAGE; update safely below. */ }
+      return false;
+    };
+    if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+    if (await compatible()) return;
+    try {
+      if (!registration?.waiting) {
+        await timeLimited(registration.update(), 15000, 'ASSET_CACHE_SW_UPDATE_REQUIRED');
+        if (registration.installing) await waitForSW(registration.installing, ['installed', 'activated']);
+      }
+      if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+      await assertMutable();
+      if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+      const waiting = registration.waiting;
+      if (waiting) {
+        await swMessage('ASSET_CACHE_ACTIVATE', {}, waiting);
+        await waitForSW(waiting, ['activated']);
+        await waitForController(waiting);
+      }
+      if (!await compatible()) throw assetCacheError('ASSET_CACHE_SW_UPDATE_REQUIRED');
+    } catch (error) {
+      if (error.code === 'ASSET_CACHE_PLAYING' || error.code === 'ASSET_CACHE_PAUSED') throw error;
+      throw assetCacheError('ASSET_CACHE_SW_UPDATE_REQUIRED', error);
+    }
+    await assertMutable();
   }
 
   const settledPhase = () => !catalog ? 'catalog-required' : !state.catalogCurrent ? 'catalog-stale'
@@ -281,7 +351,6 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     const abort = new env.AbortController();
     job.abort = abort;
     const timer = env.setTimeout(() => abort.abort(), 120000);
-    patch({ catalogUpdateRetryAt: Date.now() + 30000 });
     try {
       const params = new URLSearchParams({ from: catalog?.version || '', to: summary.version,
         readyFiles: String(state.readyFiles), readyBytes: String(state.readyBytes) });
@@ -292,7 +361,9 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
           const retryAfter = response.headers.get('Retry-After');
           const delay = /^\d+(?:\.\d+)?$/.test(retryAfter || '')
             ? Number(retryAfter) * 1000 : Date.parse(retryAfter || '') - Date.now();
-          if (Number.isFinite(delay) && delay > 0) patch({ catalogUpdateRetryAt: Math.max(state.catalogUpdateRetryAt, Date.now() + delay) });
+          // Honor the server's real remaining cooldown; a transport/validation failure is not
+          // evidence of rate limiting, and cold-directory acquisition has no fixed cooldown.
+          patch({ catalogUpdateRetryAt: Date.now() + (Number.isFinite(delay) && delay > 0 ? delay : 1000) });
           throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
         }
         if (!full && response.status === 409) {
@@ -378,6 +449,27 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
     }
   }
 
+  async function acquireCurrentCatalog(job) {
+    if (catalog && state.catalogCurrent) return;
+    if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
+    if (catalog) {
+      await runWorker('scan');
+      if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+    }
+    const full = !catalog || !state.readyFiles || !state.readyBytes;
+    await assertMutable();
+    if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+    const next = await fetchCatalogUpdate(job, { full });
+    if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+    // Recheck deployment and every playing tab after transfer. A failed adoption preserves
+    // the old directory and all verified contents, even for an empty old catalog.
+    await refreshSummary({ force: true });
+    if (!catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
+    await assertMutable();
+    if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
+    await adoptCatalog(next);
+  }
+
   async function perform(action, { deep = false, file = null, refresh = false } = {}) {
     if (state.emergency && (action === 'download' || action === 'catalog-update')) throw assetCacheError('ASSET_CACHE_EMERGENCY');
     await ensureReady();
@@ -395,26 +487,11 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
         if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
         if (mutates) {
           await assertMutable();
+          if (action !== 'clear') await ensureCompatibleSW(job);
+          if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
           if (action !== 'clear') await refreshSummary({ force: true });
           if (action === 'catalog-update') {
-            if (catalog && state.catalogCurrent) return;
-            if (Date.now() < state.catalogUpdateRetryAt) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED');
-            if (catalog) {
-              await runWorker('scan');
-              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-              if (!state.readyFiles || !state.readyBytes) throw assetCacheError('ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE');
-            }
-            await assertMutable();
-            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-            const next = await fetchCatalogUpdate(job, { full: !catalog });
-            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-            // A deploy may have happened during the throttled transfer. Recheck the small summary
-            // and the cross-tab playing guard before writing metadata. Failure preserves the old pin.
-            await refreshSummary({ force: true });
-            if (!catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
-            await assertMutable();
-            if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-            await adoptCatalog(next);
+            await acquireCurrentCatalog(job);
           } else if (action === 'catalog') {
             const result = await runWorker('read-catalog', { file, format: 'json' });
             if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
@@ -426,15 +503,7 @@ export function createAssetCacheManager({ environment = globalThis, doFetch, wor
             // may fetch the current directory first, then continue through the normal worker
             // download path. This keeps ordinary checks/status requests small while making the
             // user initiated "download missing" action self contained.
-            if (action === 'download' && !catalog) {
-              const next = await fetchCatalogUpdate(job, { full: true });
-              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-              await refreshSummary({ force: true });
-              if (!catalogMatchesSummary(next, summary)) throw assetCacheError('ASSET_CACHE_STALE_CATALOG');
-              await assertMutable();
-              if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');
-              await adoptCatalog(next);
-            }
+            if (action === 'download' && !state.catalogCurrent) await acquireCurrentCatalog(job);
             if (action === 'import' && !state.catalogCurrent) {
               const result = await runWorker('read-catalog', { file, format: 'zip' });
               if (job.paused) throw assetCacheError('ASSET_CACHE_PAUSED');

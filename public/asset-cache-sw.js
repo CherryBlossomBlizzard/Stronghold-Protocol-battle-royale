@@ -1,6 +1,6 @@
 // Asset-only cache: HTML, application code, data, APIs and private announcements never enter it.
 // Content hashes let unchanged files survive upgrades; per-client catalogs pin live matches.
-import { ASSET_CACHE_NAME, ASSET_CACHE_META, assetContentKey, catalogURLMap,
+import { ASSET_CACHE_NAME, ASSET_CACHE_META, ASSET_CACHE_SW_PROTOCOL, assetContentKey, catalogURLMap,
   verifyAssetCatalog, decodedAssetPath, isVerifiedAssetResponse, validatedCacheHeaders,
   parseAssetRange, sha256Hex } from '/shared/assetCache.js';
 
@@ -15,7 +15,8 @@ let lastNotify = 0;
 let messages = Promise.resolve();
 
 // Do not interrupt existing pages on an SW update. A new version activates naturally when old
-// clients are gone; first installation can claim current pages without requiring a reload.
+// clients are gone, or on an explicit idle-only ACTIVATE request; first installation can claim
+// current pages without requiring a reload.
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 async function readJSON(cache, path) {
@@ -60,8 +61,21 @@ async function handleMessage(event) {
   const source = event.source;
   if (!data || !source?.id || !event.ports?.[0]) return;
   const port = event.ports[0];
-  const meta = await caches.open(ASSET_CACHE_META);
   try {
+    if (data.type === 'ASSET_CACHE_CAPABILITIES') {
+      port.postMessage({ ok: true, protocol: ASSET_CACHE_SW_PROTOCOL });
+      return;
+    }
+    if (data.type === 'ASSET_CACHE_ACTIVATE') {
+      // A waiting worker does not receive the active worker's PLAYING writes. Read each live
+      // page's persisted pin afresh on every explicit attempt, without removing any metadata.
+      pins.clear();
+      if (await livePlaying()) throw new Error('ASSET_CACHE_PLAYING');
+      await self.skipWaiting();
+      port.postMessage({ ok: true });
+      return;
+    }
+    const meta = await caches.open(ASSET_CACHE_META);
     if (data.type === 'ASSET_CACHE_PIN') {
       const catalog = await verifyAssetCatalog(data.catalog);
       const previous = await getPin(source.id);

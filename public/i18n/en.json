@@ -1417,5 +1417,6 @@
   "房主已关闭公开匹配，仅能通过邀请码加入。": "The host has disabled public matchmaking. Join only with the invitation code.",
   "观战席 {used} / {capacity}": "Spectators {used} / {capacity}",
   "观战席已满": "Spectator seats full",
-  "等候中": "Waiting"
+  "等候中": "Waiting",
+  "缓存组件尚未完成升级，请关闭本站的全部游戏标签页后重新打开，再重试。": "The asset cache component has not finished updating. Close all game tabs for this site, reopen it, then retry."
 }

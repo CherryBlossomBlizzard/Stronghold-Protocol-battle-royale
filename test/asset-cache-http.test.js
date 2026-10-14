@@ -172,7 +172,7 @@ test('catalog updates require an explicit GET with an exact stale-version and po
   });
 });
 
-test('manual updates return gzip or identity JSON, with one snapshot and a per-IP 30-second cooldown', async () => {
+test('manual updates return gzip or identity JSON, with one snapshot and a per-IP 5-second cooldown', async () => {
   let now = 1000;
   await fixture(async ({ server, catalog, builds, assetCache }) => {
     const gzip = await request(server, updateURL(catalog), { headers: {
@@ -188,14 +188,14 @@ test('manual updates return gzip or identity JSON, with one snapshot and a per-I
       ...manualHeaders, 'X-Forwarded-For': '203.0.113.1',
     } });
     assert.equal(repeat.status, 429); assert.equal(errorOf(repeat), 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN');
-    assert.equal(repeat.headers['retry-after'], '30'); assert.ok(repeat.body.length < 128);
+    assert.equal(repeat.headers['retry-after'], '5'); assert.ok(repeat.body.length < 128);
     const identity = await request(server, updateURL(catalog), { headers: {
       ...manualHeaders, 'Accept-Encoding': 'gzip;q=0, *;q=1', 'X-Forwarded-For': '203.0.113.2',
     } });
     assert.equal(identity.status, 200); assert.equal(identity.headers['content-encoding'], undefined);
     assert.deepEqual(JSON.parse(identity.body), catalog);
     assert.equal(builds(), 1); assert.equal(assetCache.policy().activeDownloads, 0);
-    now += 30_000;
+    now += 5_000;
     const afterCooldown = await request(server, updateURL(catalog), { headers: {
       ...manualHeaders, 'Accept-Encoding': 'gzip', 'X-Forwarded-For': '203.0.113.1',
     } });

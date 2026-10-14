@@ -17,7 +17,7 @@ import { CacheDownloadLimiter } from './cacheLimiter.js';
 export const ASSET_CACHE_PREFIX = '/api/asset-cache/';
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const POSITIVE_INTEGER = /^[1-9]\d*$/;
-const UPDATE_COOLDOWN_MS = 30_000;
+const UPDATE_COOLDOWN_MS = 5_000;
 const MAX_UPDATE_CLIENTS = 4096;
 const gzipAsync = promisify(gzip);
 

@@ -29,26 +29,46 @@ async function zipBytes(entries, options = {}) {
   return Buffer.from(await writer.close());
 }
 
-async function fixture(run) {
+async function fixture(run, { legacy = false } = {}) {
   const contents = new Map([
     ['/assets/a.png', Buffer.from('image-one')],
     ['/assets/audio/中 文.mp3', Buffer.from('1234567890')],
     ['/assets/local/spine/token/foo.skel', Buffer.from('local-token')],
   ]);
-  let slow = false, failSummary = false;
-  const downloads = [], ordinary = [], closed = [], catalogRequests = [], statusRequests = [];
+  let slow = false, failSummary = false, hashedAliases = false, legacySW = legacy;
+  const downloads = [], ordinary = [], closed = [], catalogRequests = [], catalogUpdates = [], statusRequests = [];
   const catalog = () => {
     const files = [...contents].map(([url, body]) => ({ url, bytes: body.length, sha256: hash(body),
       type: url.endsWith('.png') ? 'image/png' : url.endsWith('.mp3') ? 'audio/mpeg' : 'application/octet-stream',
       aliases: url.includes('/audio/') ? ['/media/中 文'] : [] }));
+    if (hashedAliases) for (const file of files) {
+      const prefix = file.sha256.slice(0, 16);
+      file.aliases = [file.url.replace('/assets/', `/assets/~${prefix}/`)];
+      if (file.url.includes('/audio/')) for (const extension of ['', '.mp3', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.wav']) {
+        file.aliases.push(`/media/中 文${extension}`, `/media/~${prefix}/中 文${extension}`);
+      }
+    }
     return { schema: 1, version: hash(JSON.stringify({ schema: 1, files })), app: 'fixture', files, totalFiles: files.length,
       totalBytes: files.reduce((sum, item) => sum + item.bytes, 0), complete: true, missing: [] };
   };
+  const legacyCatalog = legacy && catalog();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://fixture');
     if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html'); res.end(PAGE); return; }
+    if (url.pathname === '/legacy-bootstrap') {
+      res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Legacy cache fixture</title><link rel="icon" href="data:,">'); return;
+    }
     if (url.pathname === '/api/asset-cache/catalog') {
       catalogRequests.push(req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(catalog())); return;
+    }
+    if (url.pathname === '/api/asset-cache/catalog-update') {
+      catalogUpdates.push(req.url);
+      if (req.headers['x-asset-cache-update'] !== 'manual' || url.searchParams.get('to') !== catalog().version) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'ASSET_CACHE_CATALOG_VERSION_MISMATCH' })); return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(catalog())); return;
     }
@@ -70,9 +90,10 @@ async function fixture(run) {
       return;
     }
     const pathname = decodeURIComponent(url.pathname);
-    if (contents.has(pathname) || pathname === '/media/中 文') {
+    const asset = catalog().files.find((file) => file.url === pathname || file.aliases.includes(pathname));
+    if (asset) {
       ordinary.push(pathname); res.writeHead(200, { 'Content-Type': pathname.includes('media') ? 'audio/mpeg' : 'application/octet-stream' });
-      res.end(contents.get(pathname) || contents.get('/assets/audio/中 文.mp3')); return;
+      res.end(contents.get(asset.url)); return;
     }
     if (pathname === '/api/private' || pathname === '/data/fixture.json') { ordinary.push(pathname); res.end('always-network'); return; }
     const files = new Map([
@@ -81,26 +102,59 @@ async function fixture(run) {
       ['/vendor/zip-native.min.js', 'public/vendor/zip-native.min.js'],
     ]);
     if (!files.has(pathname)) { res.writeHead(404); res.end('missing'); return; }
-    try { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' }); res.end(await fs.readFile(path.join(ROOT, files.get(pathname)))); }
+    let source = path.join(ROOT, files.get(pathname));
+    if (pathname === '/asset-cache-sw.js' && legacySW) source = path.join(ROOT, 'test/fixtures/asset-cache-legacy-sw.js');
+    // Optional isolated baseline source for a before/after regression probe. Normal tests only use
+    // checked-in sources; no Git history is required by the regression fixture itself.
+    if (pathname === '/js/assetCache.js' && process.env.SP_ASSET_CACHE_TEST_MANAGER) source = process.env.SP_ASSET_CACHE_TEST_MANAGER;
+    try { res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' }); res.end(await fs.readFile(source)); }
     catch { res.destroy(); }
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const puppeteer = (await import('puppeteer-core')).default;
-  const browser = await puppeteer.launch({ executablePath: EDGE, headless: true, args: ['--no-first-run', '--no-sandbox'] });
-  const problems = [];
-  const page = await browser.newPage();
-  page.on('pageerror', (error) => problems.push(error.message));
-  const url = `http://127.0.0.1:${server.address().port}/`;
+  let browser;
   try {
+    const puppeteer = (await import('puppeteer-core')).default;
+    browser = await puppeteer.launch({ executablePath: EDGE, headless: true, args: ['--no-first-run', '--no-sandbox'] });
+    const problems = [];
+    const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
+    page.on('pageerror', (error) => problems.push(error.message));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    if (legacy) {
+      await page.goto(url + 'legacy-bootstrap');
+      await page.evaluate(async () => {
+        await navigator.serviceWorker.register('/asset-cache-sw.js', { scope: '/', type: 'module', updateViaCache: 'none' });
+        await navigator.serviceWorker.ready;
+      });
+      await page.waitForFunction(() => navigator.serviceWorker.controller);
+      await page.evaluate(async ({ catalog, contents }) => {
+        const cache = await caches.open('sp-asset-cache-v1');
+        for (const entry of catalog.files) {
+          const bytes = Uint8Array.from(contents.find(([url]) => url === entry.url)[1]);
+          const key = new Request(location.origin + '/__sp_asset_cache__/sha256/' + entry.sha256,
+            { headers: { 'X-SP-Asset-SHA256': entry.sha256, 'X-SP-Asset-Bytes': String(entry.bytes) } });
+          await cache.put(key, new Response(bytes, { headers: { 'Content-Type': entry.type,
+            'Content-Length': String(entry.bytes), 'X-SP-Asset-SHA256': entry.sha256 } }));
+        }
+        await new Promise((resolve, reject) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = ({ data }) => { channel.port1.close(); data.ok ? resolve() : reject(new Error(data.error)); };
+          navigator.serviceWorker.controller.postMessage({ type: 'ASSET_CACHE_PIN', catalog, playing: false }, [channel.port2]);
+        });
+      }, { catalog: legacyCatalog, contents: [...contents].map(([url, body]) => [url, [...body]]) });
+      legacySW = false; hashedAliases = true;
+    }
     await page.goto(url);
     await page.waitForFunction(() => window.cacheFixture);
     await page.evaluate(() => window.cacheFixture.ready);
     await page.waitForFunction(() => navigator.serviceWorker.controller);
-    await run({ page, browser, url, contents, downloads, ordinary, problems, closed, catalog, catalogRequests, statusRequests,
+    if (legacy) await page.waitForFunction(async () => !!(await navigator.serviceWorker.getRegistration())?.waiting);
+    await run({ page, browser, url, contents, downloads, ordinary, problems, closed, catalog, catalogRequests, catalogUpdates,
+      statusRequests, legacyCatalog,
       setSlow: (value) => { slow = value; }, setFail: (value) => { failSummary = value; },
       upgrade: () => { contents.set('/assets/a.png', Buffer.from('image-two')); } });
   } finally {
-    await browser.close();
+    await browser?.close();
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
   }
 }
@@ -115,8 +169,25 @@ async function importBytes(page, bytes) {
 const importCatalog = (page, value) => page.evaluate((catalog) => window.cacheFixture.manager.importCatalog(
   new File([JSON.stringify(catalog)], 'catalog.json', { type: 'application/json' })), value);
 
+const swCapabilities = (page) => page.evaluate(() => new Promise((resolve, reject) => {
+  const channel = new MessageChannel();
+  const timer = setTimeout(() => { channel.port1.close(); reject(new Error('capability probe timed out')); }, 5000);
+  channel.port1.onmessage = ({ data }) => { clearTimeout(timer); channel.port1.close(); resolve(data); };
+  navigator.serviceWorker.controller.postMessage({ type: 'ASSET_CACHE_CAPABILITIES' }, [channel.port2]);
+}));
+
+const cacheSnapshot = (page) => page.evaluate(async () => {
+  const meta = await caches.open('sp-asset-cache-meta-v1');
+  const metadata = {};
+  for (const key of await meta.keys()) metadata[new URL(key.url).pathname] = await (await meta.match(key)).json();
+  const content = await caches.open('sp-asset-cache-v1');
+  const bodies = {};
+  for (const key of await content.keys()) bodies[new URL(key.url).pathname] = await (await content.match(key)).text();
+  return { metadata, bodies };
+});
+
 test('Edge caches full assets, audio aliases/ranges, reload persistence and only changed files after upgrade', opts, async () => {
-  await fixture(async ({ page, contents, downloads, ordinary, upgrade, problems, catalog }) => {
+  await fixture(async ({ page, contents, downloads, ordinary, upgrade, problems, catalog, catalogUpdates, catalogRequests }) => {
     assert.equal((await state(page)).supported, true); assert.equal((await state(page)).readyFiles, 0);
     assert.equal((await state(page)).phase, 'catalog-required');
     await importCatalog(page, catalog());
@@ -139,10 +210,14 @@ test('Edge caches full assets, audio aliases/ranges, reload persistence and only
     upgrade();
     await page.evaluate(() => window.cacheFixture.manager.scan());
     assert.equal((await state(page)).phase, 'catalog-stale');
-    assert.match(await download(page).catch((error) => error.message), /ASSET_CACHE_STALE_CATALOG/);
-    await importCatalog(page, catalog());
-    assert.equal((await state(page)).missingFiles, 1);
-    await download(page); assert.equal(downloads.length, 4);
+    assert.equal(catalogUpdates.length, 0, 'ordinary checking never fetches a stale directory');
+    await download(page);
+    assert.equal((await state(page)).catalogCurrent, true);
+    assert.equal((await state(page)).version, catalog().version);
+    assert.equal((await state(page)).readyFiles, 3);
+    assert.equal(catalogUpdates.length, 1, 'explicit online filling updates the old directory first');
+    assert.equal(catalogRequests.length, 0);
+    assert.equal(downloads.length, 4);
     assert.equal(downloads.at(-1), '/assets/a.png');
     assert.equal(await page.evaluate(async () => (await fetch('/assets/a.png')).text()), contents.get('/assets/a.png').toString());
     assert.deepEqual(problems, []);
@@ -236,4 +311,88 @@ test('Edge invalid, stale and missing ZIP directories cannot bootstrap or write 
     assert.equal((await state(page)).catalogCurrent, true); assert.equal((await state(page)).readyFiles, 0);
     assert.deepEqual(downloads, []); assert.deepEqual(ordinary, []);
   });
+});
+
+test('Edge legacy cache SW migrates a 17-alias directory without closing tabs or redownloading unchanged contents', opts, async () => {
+  await fixture(async ({ page, browser, url, downloads, ordinary, problems, catalog, legacyCatalog, catalogUpdates, catalogRequests }) => {
+    assert.equal((await state(page)).readyFiles, 3);
+    assert.equal((await state(page)).catalogCurrent, false);
+    assert.equal(catalog().files.find((entry) => entry.url.includes('/audio/')).aliases.length, 17);
+    assert.deepEqual(await swCapabilities(page), { ok: false, error: 'ASSET_CACHE_BAD_MESSAGE' });
+    const second = await browser.newPage();
+    await second.goto(url); await second.waitForFunction(() => window.cacheFixture);
+    await second.evaluate(() => window.cacheFixture.ready);
+    const before = await cacheSnapshot(page);
+    await page.evaluate(() => window.cacheFixture.manager.updateCatalog());
+    const next = await state(page);
+    assert.equal(next.version, catalog().version); assert.equal(next.catalogCurrent, true);
+    assert.equal(next.readyFiles, 3); assert.equal(next.missingFiles, 0);
+    const capabilities = await swCapabilities(page);
+    assert.equal(capabilities.ok, true); assert.equal(capabilities.protocol, 1);
+    assert.equal(await second.evaluate(() => window.cacheFixture.state().version), legacyCatalog.version,
+      'activation must preserve the other page\'s pinned catalog');
+    const after = await cacheSnapshot(page);
+    assert.deepEqual(after.bodies, before.bodies, 'SW replacement and catalog adoption retain verified bytes');
+    assert.deepEqual(Object.keys(after.metadata).sort(), [...Object.keys(before.metadata),
+      '/__sp_asset_cache__/catalog/' + catalog().version].sort(), 'old catalogs and all page pins survive activation');
+    const pins = Object.entries(after.metadata).filter(([url]) => url.startsWith('/__sp_asset_cache__/pin/'));
+    assert.equal(pins.filter(([, pin]) => pin.version === catalog().version).length, 1);
+    assert.equal(pins.filter(([, pin]) => pin.version === legacyCatalog.version).length, pins.length - 1);
+    const audio = catalog().files.find((entry) => entry.url.includes('/audio/'));
+    const hashed = audio.aliases.find((url) => url.startsWith('/media/~') && url.endsWith('.mp3'));
+    assert.equal(await page.evaluate(async (url) => (await fetch(url, { cache: 'no-store' })).text(), hashed), '1234567890');
+    assert.equal(catalogUpdates.length, 1); assert.equal(catalogRequests.length, 0);
+    assert.deepEqual(downloads, []); assert.deepEqual(ordinary, []); assert.deepEqual(problems, []);
+    await second.close();
+  }, { legacy: true });
+});
+
+test('Edge legacy SW upgrade is blocked by a playing tab without changing catalog pins or fetching a directory', opts, async () => {
+  await fixture(async ({ page, browser, url, downloads, problems, catalogRequests, catalogUpdates }) => {
+    const second = await browser.newPage();
+    await second.goto(url); await second.waitForFunction(() => window.cacheFixture);
+    await second.evaluate(() => window.cacheFixture.ready);
+    await second.evaluate(() => window.cacheFixture.manager.setPlaying(true));
+    const before = await cacheSnapshot(page);
+    assert.match(await page.evaluate(() => window.cacheFixture.manager.updateCatalog()).catch((error) => error.message), /ASSET_CACHE_PLAYING/);
+    assert.deepEqual(await cacheSnapshot(page), before);
+    const refused = await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration();
+      return new Promise((resolve, reject) => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(() => { channel.port1.close(); reject(new Error('activation probe timed out')); }, 5000);
+        channel.port1.onmessage = ({ data }) => { clearTimeout(timer); channel.port1.close(); resolve(data); };
+        registration.waiting.postMessage({ type: 'ASSET_CACHE_ACTIVATE' }, [channel.port2]);
+      });
+    });
+    assert.deepEqual(refused, { ok: false, error: 'ASSET_CACHE_PLAYING' });
+    assert.deepEqual(await swCapabilities(page), { ok: false, error: 'ASSET_CACHE_BAD_MESSAGE' });
+    assert.deepEqual(await cacheSnapshot(page), before);
+    assert.equal(catalogRequests.length, 0); assert.equal(catalogUpdates.length, 0);
+    assert.deepEqual(downloads, []); assert.deepEqual(problems, []);
+    await second.evaluate(() => window.cacheFixture.manager.setPlaying(false));
+    await second.close();
+  }, { legacy: true });
+});
+
+test('Edge cleared old cache can explicitly acquire the current directory or refill without requiring old contents', opts, async () => {
+  for (const action of ['downloadCatalog', 'downloadMissing']) {
+    await fixture(async ({ page, catalog, catalogRequests, catalogUpdates, downloads, problems }) => {
+      await page.evaluate(() => window.cacheFixture.manager.clear());
+      assert.equal((await state(page)).readyFiles, 0);
+      assert.equal((await state(page)).catalogCurrent, false);
+      await page.evaluate((action) => window.cacheFixture.manager[action](), action);
+      assert.equal((await state(page)).version, catalog().version);
+      assert.equal((await state(page)).catalogCurrent, true);
+      assert.equal(catalogRequests.length, 1, 'empty old contents use the explicit full-catalog acquisition route');
+      assert.equal(catalogUpdates.length, 0, 'empty reports never enter the stale-update route');
+      if (action === 'downloadCatalog') {
+        assert.equal((await state(page)).readyFiles, 0, 'directory acquisition does not download art');
+        assert.deepEqual(downloads, []);
+        await download(page);
+      }
+      assert.equal((await state(page)).readyFiles, 3);
+      assert.equal(downloads.length, 3); assert.deepEqual(problems, []);
+    }, { legacy: true });
+  }
 });

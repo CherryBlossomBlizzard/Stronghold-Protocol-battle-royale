@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createAssetCacheManager } from '../public/js/assetCache.js';
-import { ASSET_CACHE_LATEST_KEY, MAX_MANIFEST_BYTES, assetCacheCatalogKey, assetCacheSummary } from '../shared/assetCache.js';
+import { ASSET_CACHE_LATEST_KEY, ASSET_CACHE_SW_PROTOCOL, MAX_MANIFEST_BYTES, assetCacheCatalogKey, assetCacheSummary } from '../shared/assetCache.js';
 
 const catalog = { schema: 1, files: [{ url: '/assets/a.png', bytes: 3,
   sha256: 'b'.repeat(64), type: 'image/png', aliases: [] }], totalFiles: 1, totalBytes: 3, complete: true, missing: [] };
@@ -28,7 +28,7 @@ function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpd
       metadata.set(origin + assetCacheCatalogKey(data.catalog.version), structuredClone(data.catalog));
     }
     if (data.type === 'ASSET_CACHE_CLEAR') ready = 0;
-    ports[0].postMessage({ ok: true, playing });
+    ports[0].postMessage({ ok: true, playing, protocol: ASSET_CACHE_SW_PROTOCOL });
   } };
   const registration = { active: sw };
   const environment = {
@@ -69,7 +69,7 @@ function fixture({ storage = {}, secure = true, persistedCatalog = true, fastUpd
     statusReads++;
     return Response.json(broken ? {} : { ...serverSummary, policy: { enabled: online } });
   } });
-  return { manager, messages, work, metadata, catalogUpdates, catalogReads: () => catalogReads, statusReads: () => statusReads,
+  return { manager, environment, registration, messages, work, metadata, catalogUpdates, catalogReads: () => catalogReads, statusReads: () => statusReads,
     updateResponse: (value) => { updateResponse = typeof value === 'function' ? value : () => value; },
     catalogResponse: (value) => { catalogResponse = typeof value === 'function' ? value : () => value; },
     externalPlaying(value) {
@@ -213,22 +213,88 @@ async function outdatedFixture(options) {
   return { ...f, next };
 }
 
-test('explicit directory update can fetch a cold directory online; partial caches still require local files and current directories are a no-op', async () => {
+test('pausing, destruction or starting play during SW installation prevents activation and directory transfers', async () => {
+  for (const action of ['pause', 'destroy', 'own-playing', 'other-playing']) {
+    const f = await outdatedFixture();
+    const old = f.environment.navigator.serviceWorker.controller;
+    const send = old.postMessage;
+    old.postMessage = (data, ports) => data.type === 'ASSET_CACHE_CAPABILITIES'
+      ? ports[0].postMessage({ ok: false, error: 'ASSET_CACHE_BAD_MESSAGE' }) : send(data, ports);
+    let started, finish, activations = 0;
+    const installing = new Promise((resolve) => { started = resolve; });
+    f.registration.update = () => {
+      started();
+      return new Promise((resolve) => { finish = () => {
+        f.registration.waiting = { state: 'installed', postMessage: () => { activations++; } };
+        resolve(f.registration);
+      }; });
+    };
+    try {
+      const updating = f.manager.updateCatalog();
+      await installing;
+      if (action === 'own-playing') await f.manager.setPlaying(true);
+      else if (action === 'other-playing') f.externalPlaying(true);
+      else f.manager[action]();
+      finish();
+      assert.equal((await updating).phase, 'paused', action);
+      assert.equal(activations, 0, action);
+      assert.equal(f.catalogReads(), 0); assert.equal(f.catalogUpdates.length, 0);
+      assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, catalog.version);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('an unavailable SW upgrade reports the component error before downloading or replacing the catalog', async () => {
+  const f = await outdatedFixture();
+  const old = f.environment.navigator.serviceWorker.controller;
+  const send = old.postMessage;
+  old.postMessage = (data, ports) => data.type === 'ASSET_CACHE_CAPABILITIES'
+    ? ports[0].postMessage({ ok: false, error: 'ASSET_CACHE_BAD_MESSAGE' }) : send(data, ports);
+  f.registration.update = async () => { throw new Error('worker update offline'); };
+  try {
+    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_SW_UPDATE_REQUIRED/);
+    assert.equal(f.manager.getState().error, 'ASSET_CACHE_SW_UPDATE_REQUIRED');
+    assert.equal(f.manager.getState().catalogUpdateRetryAt, 0);
+    assert.equal(f.catalogUpdates.length, 0); assert.equal(f.catalogReads(), 0);
+    assert.equal(f.manager.getState().version, catalog.version);
+  } finally { f.manager.destroy(); }
+});
+
+test('an empty or cleared old directory can be explicitly fetched online, while current directories are a no-op', async () => {
   for (const kind of ['cold', 'empty', 'cleared', 'current']) {
     const f = fixture({ persistedCatalog: kind !== 'cold' });
     try {
+      const next = upgradedCatalog();
+      f.catalogResponse(() => Response.json(next));
       if (kind === 'cleared') f.ready(1);
       await f.manager.initialize();
       if (kind === 'cleared') await f.manager.clear();
-      if (kind !== 'current') f.summary(assetCacheSummary(upgradedCatalog()));
-      if (kind === 'current') await f.manager.updateCatalog();
-      else if (kind === 'cold') {
-        await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UNAVAILABLE/);
-      } else {
-        await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE/);
-      }
+      if (kind !== 'current') f.summary(assetCacheSummary(next));
+      await f.manager.updateCatalog();
+      assert.equal(f.manager.getState().version, kind === 'current' ? catalog.version : next.version, kind);
+      assert.equal(f.manager.getState().catalogCurrent, true, kind);
+      assert.equal(f.manager.getState().readyFiles, 0, 'directory acquisition does not download missing files');
       assert.equal(f.catalogUpdates.length, 0, kind);
-      assert.equal(f.catalogReads(), kind === 'cold' ? 1 : 0, kind);
+      assert.equal(f.catalogReads(), kind === 'current' ? 0 : 1, kind);
+    } finally { f.manager.destroy(); }
+  }
+});
+
+test('online filling explicitly refreshes stale directories and recovers after clearing their contents', async () => {
+  for (const cleared of [false, true]) {
+    const f = await outdatedFixture({ online: true });
+    try {
+      f.catalogResponse(() => Response.json(f.next));
+      if (cleared) await f.manager.clear();
+      await f.manager.scan(); await f.manager.initialize();
+      assert.equal(f.catalogReads(), 0); assert.equal(f.catalogUpdates.length, 0, 'ordinary checks remain summary-only');
+      await f.manager.downloadMissing();
+      assert.equal(f.manager.getState().version, f.next.version);
+      assert.equal(f.manager.getState().phase, 'ready');
+      assert.equal(f.manager.getState().readyFiles, f.next.totalFiles);
+      assert.equal(f.catalogReads(), cleared ? 1 : 0);
+      assert.equal(f.catalogUpdates.length, cleared ? 0 : 1);
+      assert.equal(f.work.filter((job) => job.action === 'download').length, 1);
     } finally { f.manager.destroy(); }
   }
 });
@@ -248,7 +314,7 @@ test('only an explicit manual update downloads a verified directory and reuses o
     assert.equal(request.options.headers['X-Asset-Cache-Update'], 'manual');
     assert.equal(params.get('from'), catalog.version); assert.equal(params.get('to'), f.next.version);
     assert.equal(params.get('readyFiles'), '1'); assert.equal(params.get('readyBytes'), '3');
-    assert.ok(phases.includes('updating-catalog')); assert.ok(updated.catalogUpdateRetryAt > Date.now());
+    assert.ok(phases.includes('updating-catalog')); assert.equal(updated.catalogUpdateRetryAt, 0);
     assert.equal(f.work.some((job) => job.action === 'download'), false);
     assert.equal(f.messages.some((message) => message.type === 'ASSET_CACHE_PRUNE'), false);
     assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, f.next.version);
@@ -257,17 +323,19 @@ test('only an explicit manual update downloads a verified directory and reuses o
   } finally { f.manager.destroy(); }
 });
 
-test('actual local scan overrides a stale ready display before permitting manual directory update', async () => {
+test('actual local scan selects cold acquisition after content eviction despite a stale nonzero display', async () => {
   const f = await outdatedFixture();
   try {
     assert.equal(f.manager.getState().readyFiles, 1);
     f.ready(0);
-    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_REQUIRES_CACHE/);
-    assert.equal(f.catalogUpdates.length, 0); assert.equal(f.manager.getState().readyFiles, 0);
+    f.catalogResponse(() => Response.json(f.next));
+    await f.manager.updateCatalog();
+    assert.equal(f.catalogUpdates.length, 0); assert.equal(f.catalogReads(), 1);
+    assert.equal(f.manager.getState().readyFiles, 0); assert.equal(f.manager.getState().version, f.next.version);
   } finally { f.manager.destroy(); }
 });
 
-test('manual directory update is mutually exclusive and a failed request imposes local cooldown without retries', async () => {
+test('manual directory update is mutually exclusive and a failed request reports its error without an invented cooldown', async () => {
   const f = await outdatedFixture(); let finish, started;
   const pendingFetch = new Promise((resolve) => { started = resolve; });
   f.updateResponse(() => { started(); return new Promise((resolve) => { finish = resolve; }); });
@@ -276,22 +344,31 @@ test('manual directory update is mutually exclusive and a failed request imposes
     await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_BUSY/);
     finish(Response.json({ error: 'ASSET_CACHE_CATALOG_UNAVAILABLE' }, { status: 500 }));
     await assert.rejects(first, /ASSET_CACHE_CATALOG_UNAVAILABLE/);
-    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
     assert.equal(f.catalogUpdates.length, 1); assert.equal(f.manager.getState().version, catalog.version);
+    assert.equal(f.manager.getState().error, 'ASSET_CACHE_CATALOG_UNAVAILABLE');
+    assert.equal(f.manager.getState().catalogUpdateRetryAt, 0, 'only a server 429 starts a cooldown');
     assert.equal(f.metadata.get('https://game.test' + ASSET_CACHE_LATEST_KEY).version, catalog.version);
+    f.updateResponse(() => Response.json(f.next));
+    await f.manager.updateCatalog();
+    assert.equal(f.catalogUpdates.length, 2, 'another explicit click can recover without waiting');
+    assert.equal(f.manager.getState().version, f.next.version);
   } finally { f.manager.destroy(); }
 });
 
-test('HTTP 429 preserves a longer Retry-After countdown and never retries automatically', async () => {
-  const f = await outdatedFixture();
-  f.updateResponse(Response.json({ error: 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN' }, { status: 429, headers: { 'Retry-After': '120' } }));
-  try {
-    const before = Date.now();
-    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
-    assert.ok(f.manager.getState().catalogUpdateRetryAt >= before + 120000);
-    await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
-    assert.equal(f.catalogUpdates.length, 1); assert.equal(f.manager.getState().version, catalog.version);
-  } finally { f.manager.destroy(); }
+test('HTTP 429 uses the actual short or long Retry-After countdown and never retries automatically', async () => {
+  for (const seconds of [3, 120]) {
+    const f = await outdatedFixture();
+    f.updateResponse(Response.json({ error: 'ASSET_CACHE_CATALOG_UPDATE_COOLDOWN' }, { status: 429,
+      headers: { 'Retry-After': String(seconds) } }));
+    try {
+      const before = Date.now();
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
+      assert.ok(f.manager.getState().catalogUpdateRetryAt >= before + seconds * 1000);
+      assert.ok(f.manager.getState().catalogUpdateRetryAt <= Date.now() + seconds * 1000);
+      await assert.rejects(f.manager.updateCatalog(), /ASSET_CACHE_CATALOG_UPDATE_RATE_LIMITED/);
+      assert.equal(f.catalogUpdates.length, 1); assert.equal(f.manager.getState().version, catalog.version);
+    } finally { f.manager.destroy(); }
+  }
 });
 
 test('HTTP 503 distinguishes an explicit owner-disabled error from bounded/unreadable catalogue failures', async () => {

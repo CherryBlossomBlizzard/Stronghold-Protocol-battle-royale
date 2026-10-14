@@ -15,7 +15,7 @@ const source = (await fs.readFile(new URL('../public/asset-cache-sw.js', import.
 
 async function fixture({ slowMetadata = false, blockPassive = false } = {}) {
   const handlers = new Map(), stores = new Map(), windows = new Map();
-  let network = 0, locks = 0;
+  let network = 0, locks = 0, activations = 0;
   const storage = {
     async open(name) {
       if (!stores.has(name)) stores.set(name, new Map());
@@ -36,7 +36,7 @@ async function fixture({ slowMetadata = false, blockPassive = false } = {}) {
   const clients = { async matchAll() { return [...windows.values()]; }, async claim() {} };
   const self = { location: { origin }, clients, navigator: { locks: { async request(_name, _options, fn) {
     locks++; return fn(blockPassive ? null : {});
-  } } }, addEventListener(name, callback) { handlers.set(name, callback); } };
+  } } }, async skipWaiting() { activations++; }, addEventListener(name, callback) { handlers.set(name, callback); } };
   const context = vm.createContext({ ...helpers, self, caches: storage, fetch: async () => {
     network++;
     // Fetch returns decoded bytes, while Content-Length still describes the compressed wire body.
@@ -56,8 +56,60 @@ async function fixture({ slowMetadata = false, blockPassive = false } = {}) {
     await Promise.all(waits);
     return response;
   };
-  return { addClient, message, fetchFile, storage, network: () => network, locks: () => locks };
+  return { addClient, removeClient: (id) => windows.delete(id), message, fetchFile, storage,
+    network: () => network, locks: () => locks, activations: () => activations };
 }
+
+test('SW advertises its coordination protocol without activating automatically', async () => {
+  const f = await fixture(); f.addClient('page');
+  assert.equal(f.activations(), 0);
+  const reply = await f.message('page', { type: 'ASSET_CACHE_CAPABILITIES' });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.protocol, helpers.ASSET_CACHE_SW_PROTOCOL);
+  assert.equal(f.activations(), 0, 'capability probing must not replace the active worker');
+});
+
+test('an explicit idle SW activation preserves catalogs, old page pins and cached contents', async () => {
+  const f = await fixture(); f.addClient('old'); f.addClient('new');
+  const changed = structuredClone(catalog);
+  changed.files[0].aliases.push(`/assets/~${sha256.slice(0, 16)}/model.atlas`);
+  changed.version = await helpers.sha256Hex(new TextEncoder().encode(JSON.stringify({ schema: 1, files: changed.files })));
+  await f.message('old', { type: 'ASSET_CACHE_PIN', catalog });
+  await f.message('new', { type: 'ASSET_CACHE_PIN', catalog: changed });
+  const cache = await f.storage.open(helpers.ASSET_CACHE_NAME);
+  await cache.put(origin + helpers.assetContentKey(sha256), new Response(body, { headers: helpers.validatedCacheHeaders(entry) }));
+  const meta = await f.storage.open(helpers.ASSET_CACHE_META);
+  const snapshot = async () => Promise.all((await meta.keys()).map(async (key) => [key.url, await (await meta.match(key)).text()]));
+  const before = await snapshot();
+  assert.equal(f.activations(), 0, 'pinning does not activate a waiting worker');
+  assert.equal((await f.message('new', { type: 'ASSET_CACHE_ACTIVATE' })).ok, true);
+  assert.equal(f.activations(), 1);
+  assert.deepEqual(await snapshot(), before, 'activation must not rewrite or prune persisted pins and catalogs');
+  assert.equal(await (await f.fetchFile('old')).text(), 'atlas bytes');
+  assert.equal(await (await f.fetchFile('new', changed.files[0].aliases[0])).text(), 'atlas bytes');
+  assert.equal(f.network(), 0, 'both page catalogs still reuse their verified contents');
+});
+
+test('any live playing page blocks SW activation, including pins changed by the active worker', async () => {
+  const f = await fixture(); f.addClient('requester'); f.addClient('playing');
+  const meta = await f.storage.open(helpers.ASSET_CACHE_META);
+  const key = `${origin}/__sp_asset_cache__/pin/playing`;
+  await meta.put(key, Response.json({ version: catalog.version, playing: true }));
+  assert.equal((await f.message('requester', { type: 'ASSET_CACHE_ACTIVATE' })).error, 'ASSET_CACHE_PLAYING');
+  assert.equal(f.activations(), 0);
+  assert.equal((await (await meta.match(key)).json()).playing, true, 'refusal preserves the live page pin');
+  // Emulate another (active) worker writing this shared metadata after the waiting worker's probe.
+  await meta.put(key, Response.json({ version: catalog.version, playing: false }));
+  assert.equal((await f.message('requester', { type: 'ASSET_CACHE_ACTIVATE' })).ok, true);
+  assert.equal(f.activations(), 1, 'a cached playing=true pin must not permanently block a later idle retry');
+  await meta.put(key, Response.json({ version: catalog.version, playing: true }));
+  assert.equal((await f.message('requester', { type: 'ASSET_CACHE_ACTIVATE' })).error, 'ASSET_CACHE_PLAYING');
+  assert.equal(f.activations(), 1, 'a cached playing=false pin must not admit a page that has since entered a match');
+  f.removeClient('playing');
+  assert.equal((await f.message('requester', { type: 'ASSET_CACHE_ACTIVATE' })).ok, true);
+  assert.equal(f.activations(), 2, 'a closed page does not retain a live activation guard');
+  assert.equal((await (await meta.match(key)).json()).playing, true, 'ignoring a closed page does not delete its metadata');
+});
 
 test('SW uses the ordinary network until this document pins its own catalog, even if old verified cache exists', async () => {
   const f = await fixture(); f.addClient('old'); f.addClient('new');
