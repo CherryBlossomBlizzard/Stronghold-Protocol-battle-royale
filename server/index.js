@@ -55,7 +55,7 @@ export {
  *   lobbyGraceMs?: number, reconnectWindowMs?: number, heartbeatMs?: number, helloTimeoutMs?: number,
  *   ratePerSec?: number, rateBurst?: number, maxConnections?: number, maxRooms?: number, compactWire?: boolean, runtimeCache?: boolean,
  *   maxConnectionsPerAddr?: number, maxRoomsPerAddr?: number, maxMatchesPerAddr?: number, resyncMinGapMs?: number,
- *   heavyPerSec?: number, heavyBurst?: number, trustProxy?: 'auto' | boolean, soloReconnectWindowMs?: number,
+ *   heavyPerSec?: number, heavyBurst?: number, trustProxy?: 'auto' | boolean, soloReconnectWindowMs?: number | null,
  *   assetCacheLimits?: { totalBps?: number, clientBps?: number, maxDownloads?: number, maxDownloadsPerClient?: number },
  *   assetCacheBuildCatalog?: Function,
  *   bandwidthEmergency?: object | false,

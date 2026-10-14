@@ -3,7 +3,7 @@
 // Responsibilities:
 //   * Session objects (playerId, secret reconnect token, name, bound socket, connection state) and the
 //     SessionRegistry that resolves reconnect tokens and expires sessions after the reconnect window (10 min; the
-//     lobby may extend it per session via `session.resumeWindowMs` — a solo run: 24 h, see server/lobby.js).
+//     lobby may extend it per session via `session.resumeWindowMs` — a solo run: default 2 h, see server/lobby.js).
 //   * Per-connection pipeline: token-bucket rate limit (40 msg/s) → JSON/negotiated wire decode → schema validation
 //     (shared/protocol.js) → `hello`/`ping` handling → dispatch to the lobby handler → `ok`/`error`
 //     reply echoing the request id (`rid`). Intents whose answer is a large state resend (`g.watch` →
@@ -127,7 +127,7 @@ export class Session {
     this.limitKey = null;
     /**
      * @type {number | null} lobby-owned extension of the reconnect window for this session (ms; null = the registry's
-     * window). A solo run keeps its session resumable for the official `singleReconnectTime` (24 h) — see lobby.js.
+     * window). A solo run keeps its session resumable for 2 h by default — see lobby.js.
      */
     this.resumeWindowMs = null;
   }

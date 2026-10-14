@@ -137,7 +137,7 @@ Top level: `{ season, seasonName, modes, economy, lpCapPerRound, bossOvertimeAft
 | `trophies` | `{"byRoundsPassed":[{"maxRound":4,"FUNNY":0,…},…],"hiddenCore":{…},"multiOnly":true,"medals":[{"count":0,"iconId":"trophy_level1_icon"},…]}` | |
 | `roundScores[]` | `{"round":4,"score":50}` | |
 | `rewards` | `{"itemId":"act2autochess_token_chess","baseByRoundsPassed":[{"round":1,"count":10,"dailyPoint":10},…],"formula":"…","difficultyFactor":{…},"modeFactor":{…}}` | 卫戍认证 |
-| `constants` | `{"maxLevelCnt":15,"bossTrailerStartRound":3,"singleReconnectTime":86400,…,"pingConds":[…]}` | misc official constData; `singleReconnectTime` (s) = how long a dropped **solo** run stays resumable (server/lobby.js; co-op keeps the 10-minute window) |
+| `constants` | `{"maxLevelCnt":15,"bossTrailerStartRound":3,"singleReconnectTime":86400,…,"pingConds":[…]}` | misc official constData; `singleReconnectTime` (s) is the official solo reconnect window (24 h). This branch defaults to 2 h via `LOBBY_DEFAULTS.soloReconnectWindowMs` (server/lobby.js; [D033](development/DECISIONS.md#d033)); explicit null retains the official fallback. Co-op keeps the 10-minute window |
 
 ---
 

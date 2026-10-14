@@ -14,7 +14,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startServer, parseRange, acceptsGzip, parseTrustProxy } from '../server/index.js';
 import { loadData, lookup, getChess, getBond, getBand, getMode, getConfig, INDEXED_FILES } from '../server/data.js';
 import * as dataModule from '../server/data.js';
-import { CODE_ALPHABET, BOT_NAMES } from '../server/lobby.js';
+import { Lobby, CODE_ALPHABET, BOT_NAMES } from '../server/lobby.js';
 import { sanitizeName, TokenBucket, SessionRegistry, clientAddress, normalizeIp, isLocalIp, limitKeyOf } from '../server/net.js';
 import { StubMatch as Match } from '../server/match/StubMatch.js';
 import { Match as RealMatch } from '../server/match/Match.js';
@@ -1392,20 +1392,73 @@ describe('lobby timers and match interface', () => {
     assert.ok(freed);
   });
 
-  test('a dropped solo run keeps the official singleReconnectTime (24 h), not the 10-minute window', () => {
-    assert.equal(srv.lobby.soloResumeWindowMs(), 86_400 * 1000, 'data config.constants.singleReconnectTime');
+  test('a dropped solo run uses the branch default (2 h), overriding official singleReconnectTime (24 h)', () => {
+    assert.equal(srv.lobby.soloResumeWindowMs(), 2 * 60 * 60_000, 'branch retention policy');
     assert.ok(srv.lobby.soloResumeWindowMs() > WINDOW);
+  });
+
+  test('explicit null solo retention uses official data through server startup', async (t) => {
+    const official = await startServer({ port: 0, host: '127.0.0.1', quiet: true, soloReconnectWindowMs: null });
+    t.after(() => official.close());
+    assert.equal(official.lobby.opts.soloReconnectWindowMs, null);
+    assert.equal(official.lobby.soloResumeWindowMs(), 24 * 60 * 60_000);
+  });
+
+  test('default solo retention resets on reconnect and expires the token plus room after two hours', async (t) => {
+    let now = 1000;
+    const windowMs = 2 * 60 * 60_000;
+    const registry = new SessionRegistry({ now: () => now });
+    const lobby = new Lobby({ registry, now: () => now, MatchClass: RecordingMatch });
+    t.after(() => lobby.shutdown());
+    const host = registry.create('Solo');
+    host.connected = true;
+    assert.deepEqual(lobby.create(host, { mode: 'solo', difficulty: 'NORMAL' }), { ok: true });
+    const room = lobby.getRoom(host.roomCode);
+    assert.deepEqual(lobby.start(host), { ok: true });
+    const match = room.match;
+    const drop = () => {
+      host.connected = false;
+      host.disconnectedAt = now;
+      lobby.onDisconnect(host);
+    };
+    drop();
+    assert.equal(host.resumeWindowMs, windowMs);
+    now += windowMs - 1;
+    assert.equal(registry.byToken(host.token), host, 'original identity remains resumable before two hours');
+    assert.deepEqual(registry.sweep(), []);
+    assert.equal(lobby.getRoom(room.code)?.match, match);
+
+    host.connected = true;
+    host.disconnectedAt = null;
+    lobby.onHello(host, { resumed: true, repeat: false });
+    assert.equal(room.seatOf(host.playerId).connected, true);
+    assert.ok(match.calls.some(([hook]) => hook === 'onReconnect'));
+    now += 100;
+    drop();
+    now += windowMs;
+    assert.equal(registry.byToken(host.token), host, 'the full window restarts at the latest disconnect');
+    assert.deepEqual(registry.sweep(), []);
+    now++;
+    assert.equal(registry.byToken(host.token), null, 'expired token cannot resume');
+    const expired = registry.sweep();
+    assert.deepEqual(expired, [host]);
+    for (const session of expired) lobby.onExpire(session);
+    assert.ok(match.calls.some(([hook]) => hook === 'onLeave'));
+    assert.equal(lobby.getRoom(room.code), null, 'last human expiry releases the retained room');
+    assert.equal(lobby.stats().rooms, 0);
+    await delay(10); // match disposal follows onEnd on the next macrotask
+    assert.ok(match.calls.some(([hook]) => hook === 'dispose'));
   });
 });
 
 // ---------------------------------------------------------------------------------------------------
-// Solo runs: 下半 solo has no prep / 机变 timer and may be resumed within singleReconnectTime (24 h, research 01 §1,
-// 06 §17); only co-op sessions expire after the reconnect window (real Match: the untimed solo match waits).
+// Solo runs have no prep / 机变 timer and may be resumed for 2 h by default; an explicit shorter override below
+// exercises real reconnect and expiry. Co-op sessions keep the plain reconnect window.
 // ---------------------------------------------------------------------------------------------------
 
 describe('solo resume window', () => {
   const WINDOW = 300;       // stands in for the 10-minute reconnect window
-  const SOLO_WINDOW = 1500; // stands in for singleReconnectTime (24 h)
+  const SOLO_WINDOW = 1500; // shortened override of the branch's default 2 h window
   let srv;
   let url;
   const open = [];

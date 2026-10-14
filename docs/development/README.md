@@ -29,7 +29,7 @@
 | 项目 | 已核实状态 |
 |---|---|
 | 分支 | 当前核心 `feat/IncreasePlayerCapacity` 已接纳 v0.2.4；带宽优化来源分支 `perf/compact-wire-bandwidth` 保留，仍指向 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466` |
-| 最近本地开发 | [DEV-20261012-04](records/2026-10-12-04-announcement-mobile.md)：手机横屏非全屏公告按实际可见高度适配，底部可勾选/关闭、适度收窄，电脑普通鼠标布局不变；代码与记录同一提交。前次带宽监测开关见 [DEV-20261012-03](records/2026-10-12-03-bandwidth-emergency-toggle.md)，大厅功能见 [DEV-20261012-02](records/2026-10-12-02-lobby-access-spectate.md)。各任务本地操作与验证以其记录为准，本次未推送或部署 |
+| 最近本地开发 | [DEV-20261014-01](records/2026-10-14-01-solo-reconnect-two-hours.md)：进行中独立模拟断线续玩默认由 24 小时缩短至 2 小时，保留同盟 10 分钟、等候房 60 秒及现有窗口覆盖；41 项定向测试通过，与记录同一功能提交，未推送或部署。前次手机公告适配见 [DEV-20261012-04](records/2026-10-12-04-announcement-mobile.md)，带宽监测开关见 [DEV-20261012-03](records/2026-10-12-03-bandwidth-emergency-toggle.md)，大厅功能见 [DEV-20261012-02](records/2026-10-12-02-lobby-access-spectate.md) |
 | 当前 Windows 便携包 | `../releases/v0.2.3-20p.4/Stronghold-Protocol-v0.2.3-20p.4-Windows-x64.zip`，548.35 MiB；内含官方 Node v22.23.3、生产依赖和完整素材；SHA-256 与验证结果见 [DEV-20261010-11](records/2026-10-10-11-windows-portable-v023-20p4.md)，包未进入 Git |
 | 最近本地分支合并 | 核心合并前 `cf30fb2980fe27363dcafdfb677317f80c503b49`，来源 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466`；与 [DEV-20261010-10](records/2026-10-10-10-merge-compact-wire.md) 同一合并提交，按记录路径查询 |
 | 最近上游合并前的 HEAD | `9815b3afaddb0c03c67cc2240988fbeb0786ba81`；既有 `v0.2.1-20p.2` 仍指向 `b4c6ebe`，不移动旧标签 |
@@ -45,7 +45,7 @@
 | 当前策略及机变 | [D012](DECISIONS.md#d012)：固定组并行，策略每轮50秒、跨组可重复；机变仍本组30/16秒，全房同一种类型，各组独立六张，允许偶然同页；全队支援仍全房。见 [DEV-20261008-05](records/2026-10-08-05-parallel-group-drafts.md)，Edge 真实 WebSocket 两会话＋18 AI 及二十席位完整模拟通过 |
 | 当前联防规则 | [D013](DECISIONS.md#d013)：轮数上限等于固定组数，至多五轮/十名不同助手，沿用全房原排序。每轮多数票可在本轮打完后取消后续全部联防，资格不变；见 [DEV-20261008-06](records/2026-10-08-06-group-unite-rounds.md) |
 | 当前开局重刷 | [D018](DECISIONS.md#d018)：全体未离开的真人一致同意（含托管），有真人掉线不能发起/取消投票；重建全部固定组与禁用库存，保留个人配置 |
-| 当前房间管理 | [D017](DECISIONS.md#d017)：全真人离线房标断线保留并置底；[D019](DECISIONS.md#d019)：默认不限，CLI 动态 AI 上限及等候房末席裁剪；[D020](DECISIONS.md#d020)：等候房真人转让实际 P1，局内固定席位，结束归位；[D032](DECISIONS.md#d032)：在线作战真人计数，等候房房主可关闭公开加入、隐藏目录邀请码，保留邀请码加入及两席公开观战 |
+| 当前房间管理 | [D017](DECISIONS.md#d017)：全真人离线房标断线保留并置底；[D033](DECISIONS.md#d033)：独立模拟默认断线 2 小时，同盟 10 分钟、等候房 60 秒；[D019](DECISIONS.md#d019)：默认不限，CLI 动态 AI 上限及等候房末席裁剪；[D020](DECISIONS.md#d020)：等候房真人转让实际 P1，局内固定席位，结束归位；[D032](DECISIONS.md#d032)：在线作战真人计数，等候房房主可关闭公开加入、隐藏目录邀请码，保留邀请码加入及两席公开观战 |
 | 当前准备与文字聊天 | [D026](DECISIONS.md#d026)：等候房合法切换容量保留原准备；[D027](DECISIONS.md#d027)：全真人及观战整局聊天，每条 200 字、最近 200 条，结算清内存，独立于原表情入口 |
 | 当前公告图片 | [D015](DECISIONS.md#d015)：仅使用公告存储目录的 `assets/`，不放 public、不支持外链；普通和紧急通知共用显示，见 [使用说明](../ANNOUNCEMENTS.md#在公告中放图片) |
 | 本次上游合并验证 | 选择库存/分组/协议/模拟/渲染/大厅定向检查，实际命令、Edge 环境、跳过项、失败修正及资源释放状态见 [任务记录](records/2026-10-11-06-upstream-v0.2.4.md)；不等同于二十真人实战压测或服务器部署 |

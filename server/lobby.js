@@ -27,9 +27,8 @@
 //     Disconnect in a match: the seat is kept and match.onDisconnect(playerId) is called.
 //   * Reconnect: `hello` with a known token (reconnect window, 10 min, see net.js) rebinds the session;
 //     the lobby then broadcasts room.state and, in a match, calls match.onReconnect(playerId).
-//     Solo runs (下半: "休整期及机变阶段没有时间限制…24小时内随时返回", research 01 §1 / 06 §17): a session that drops
-//     while its solo room's match runs stays resumable for the official `config.constants.singleReconnectTime`
-//     (86400 s; option `soloReconnectWindowMs` overrides it) instead of the 10-minute window — the untimed solo match
+//     Solo runs: a session that drops while its solo room's match runs stays resumable for 2 h by default
+//     (option `soloReconnectWindowMs` overrides it), instead of the 10-minute window — the untimed solo match
 //     simply waits (net.js session.resumeWindowMs, set at every disconnect). Only after that does expiry turn into
 //     match.onLeave ('abandoned'). The extension outlives the match, so a run that ended meanwhile (e.g. a server-run
 //     Final Assault) still shows its result on the player's return.
@@ -120,7 +119,7 @@ export const LOBBY_DEFAULTS = Object.freeze({
   maxRoomsPerAddr: 16,    // rooms created from one client network that may exist at once (0 = unlimited)
   maxMatchesPerAddr: 8,   // matches started from one client network that may run at once (0 = unlimited)
   resyncMinGapMs: 1000,   // heavy resyncs (match state / result replay) per session at most this often on repeated hellos
-  soloReconnectWindowMs: null, // a dropped solo run stays resumable this long (null = data singleReconnectTime, 24 h)
+  soloReconnectWindowMs: 2 * 60 * 60_000, // branch policy: 2 h; explicit null retains the official data fallback
 });
 
 /** Official `singleReconnectTime` (s) when the data lacks it (constData, research 01 §1). */
@@ -449,7 +448,7 @@ export class Lobby {
     this.discovery.changed();
     this.clearResync(session.playerId); // the next resume resyncs immediately
     const room = this.roomOf(session);
-    // a solo run may be resumed within singleReconnectTime (24 h); everything else keeps the registry's window
+    // a solo run may be resumed within the configured window (default 2 h); everything else keeps the registry's window
     session.resumeWindowMs = room && room.match && room.mode === 'solo' ? this.soloResumeWindowMs() : null;
     if (!room) return;
     const player = room.seatOf(session.playerId);
@@ -1158,7 +1157,7 @@ export class Lobby {
     try { return this.getData(); } catch (e) { this.log.error('[lobby] getData failed', e); return Object.freeze({}); }
   }
 
-  /** How long a dropped solo run stays resumable (ms): the option, else data singleReconnectTime, else 24 h. */
+  /** Solo resume window (ms): option (default 2 h); explicit null/invalid retains the official 24 h data fallback. */
   soloResumeWindowMs() {
     const o = this.opts.soloReconnectWindowMs;
     if (typeof o === 'number' && Number.isFinite(o) && o > 0) return o;
