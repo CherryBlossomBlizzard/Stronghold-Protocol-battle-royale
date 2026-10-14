@@ -2,6 +2,7 @@
 // runtime/announcements/index.json + <id>.md by default; SP_ANNOUNCEMENTS_DIR can name persistent storage.
 // The small index is checked on every request. Bodies are read on demand and verified against their index hash.
 // Publishing commits the body first, then atomically replaces the index; readers never see a half-written index.
+// Deletion commits the index first, then removes that body; shared assets remain independently managed.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -225,6 +226,25 @@ export class AnnouncementStore {
     return this.mutate((state) => {
       this.writeIndex({ ...state, pinnedId: null });
       return this.list();
+    });
+  }
+
+  /** Remove an announcement without creating a new publication or changing suppression preferences. */
+  remove(id) {
+    if (!isAnnouncementId(id)) throw new Error('公告 ID 无效');
+    return this.mutate((state) => {
+      const item = state.items.find((entry) => entry.id === id);
+      if (!item) throw new Error(`找不到公告 ${id}`);
+      // Make deletion visible atomically before touching its body. A failed index replacement must leave the
+      // old publication intact; shared images and the publisher's original Markdown draft are never touched.
+      this.writeIndex({ ...state, pinnedId: state.pinnedId === id ? null : state.pinnedId,
+        items: state.items.filter((entry) => entry.id !== id) });
+      for (const key of this.bodies.keys()) if (key.startsWith(`${id}:`)) this.bodies.delete(key);
+      try { fs.unlinkSync(path.join(this.dir, `${id}.md`)); }
+      catch (e) {
+        if (e.code !== 'ENOENT') this.warn(`公告 ${id} 已从索引删除，但正文文件 ${id}.md 未能清理`, e);
+      }
+      return metadataOf(item);
     });
   }
 }

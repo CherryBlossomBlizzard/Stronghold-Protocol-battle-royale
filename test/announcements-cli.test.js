@@ -56,6 +56,8 @@ test('CLI publish/list/pin/unpin persist across independent processes with clean
   const newer = JSON.parse(run('list', '--json').stdout);
   assert.notEqual(newer.revision, firstIndex.revision);
   assert.equal(newer.pinnedId, 'maintenance');
+  assert.deepEqual(newer.items.map((item) => item.id), ['update', 'maintenance'], 'JSON retains canonical publication order');
+  assert.match(run('list').stdout.split('\n')[0], /^\[置顶\] maintenance\t/, 'ordinary CLI history puts the pin first');
   assert.equal(run('pin', 'update').status, 0);
   assert.equal(JSON.parse(run('list', '--json').stdout).pinnedId, 'update');
   assert.equal(run('unpin').status, 0);
@@ -63,6 +65,7 @@ test('CLI publish/list/pin/unpin persist across independent processes with clean
   assert.equal(unpinned.pinnedId, null);
   assert.equal(unpinned.revision, newer.revision);
   assert.match(run('list').stdout, /更新公告/);
+  assert.match(run('list').stdout.split('\n')[0], /^update\t/, 'unpin restores canonical publication order');
 });
 
 test('CLI requires explicit Markdown input, rejects unknown/repeated arguments and never invents a publication', (t) => {
@@ -95,4 +98,60 @@ test('CLI environment-selected persistent storage and explicitly selected storag
   assert.equal(duplicate.status, 1);
   assert.match(duplicate.stderr, /已存在/);
   assert.equal(createAnnouncementStore({ dir }).list().items.length, 1);
+});
+
+test('CLI deletion persists, preserves suppression revision and leaves original drafts and shared assets untouched', (t) => {
+  const { dir, file, run } = fixture(t);
+  assert.equal(run('publish', '--id', 'older', '--title', '旧公告', '--file', file, '--pin').status, 0);
+  assert.equal(run('publish', '--id', 'newest', '--title', '新公告', '--file', file).status, 0);
+  const revision = JSON.parse(run('list', '--json').stdout).revision;
+  const original = fs.readFileSync(file);
+  const assets = path.join(dir, 'assets');
+  fs.mkdirSync(assets);
+  const image = path.join(assets, 'shared.png');
+  fs.writeFileSync(image, Buffer.from([1, 2, 3]));
+  const deleted = run('delete', 'newest');
+  assert.equal(deleted.status, 0, deleted.stderr);
+  assert.match(deleted.stdout, /已删除公告 newest/);
+  assert.equal(deleted.stderr, '');
+  const remaining = JSON.parse(run('list', '--json').stdout);
+  assert.equal(remaining.revision, revision);
+  assert.equal(remaining.pinnedId, 'older');
+  assert.deepEqual(remaining.items.map((item) => item.id), ['older']);
+  assert.equal(createAnnouncementStore({ dir }).read('newest'), null);
+  assert.equal(fs.existsSync(path.join(dir, 'newest.md')), false);
+  const notify = run('notify', 'newest');
+  assert.equal(notify.status, 1);
+  assert.match(notify.stderr, /不存在或正文不可读取/);
+  assert.equal(fs.existsSync(path.join(dir, 'commands')), false, 'a removed target cannot enqueue a new notice');
+  assert.equal(run('delete', 'older').status, 0);
+  assert.deepEqual(JSON.parse(run('list', '--json').stdout), { revision, pinnedId: null, items: [] });
+  assert.match(run('list').stdout, /当前没有公告/);
+  assert.equal(fs.existsSync(path.join(dir, 'older.md')), false);
+  assert.deepEqual(fs.readFileSync(file), original);
+  assert.deepEqual(fs.readFileSync(image), Buffer.from([1, 2, 3]));
+  assert.equal(fs.existsSync(path.join(dir, '.write.lock')), false);
+});
+
+test('CLI delete rejects missing arguments, unsafe or nonexistent IDs and locked updates with accurate exit status', (t) => {
+  const { dir, file, run } = fixture(t);
+  for (const args of [['delete'], ['delete', 'one', 'extra'], ['delete', 'one', '--pin'], ['delete', '--id', 'one']]) {
+    const result = run(...args);
+    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stderr}`);
+  }
+  assert.equal(fs.existsSync(dir), false);
+  assert.equal(run('publish', '--id', 'one', '--title', '公告', '--file', file).status, 0);
+  const before = fs.readFileSync(path.join(dir, 'index.json'), 'utf8');
+  for (const id of ['../private', 'one.md', 'con', 'missing']) {
+    const result = run('delete', id);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, id === 'missing' ? /找不到公告/ : /ID 无效/);
+  }
+  fs.writeFileSync(path.join(dir, '.write.lock'), 'another writer', 'utf8');
+  const locked = run('delete', 'one');
+  assert.equal(locked.status, 1);
+  assert.match(locked.stderr, /正在更新/);
+  assert.equal(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(dir, 'one.md')), true);
+  assert.equal(fs.readFileSync(path.join(dir, '.write.lock'), 'utf8'), 'another writer');
 });

@@ -138,7 +138,7 @@ test('invalid catalog members never replace a known valid state or provide arbit
   for (const change of [
     (index) => { index.items[0].id = '../private'; },
     (index) => { index.pinnedId = 'missing'; },
-    (index) => { index.revision = 'different'; },
+    (index) => { index.revision = 'invalid revision'; },
     (index) => { index.items.push({ ...index.items[0] }); },
     (index) => { index.items[0].bytes += 1; },
   ]) {
@@ -271,4 +271,121 @@ test('public index validation rejects malformed dates/metadata and strips privat
   assert.equal(readAnnouncementIndex({ ...raw, items: [{ ...raw.items[0], title: ' ' }] }), null);
   assert.equal(shouldShowAnnouncements(store.list(), raw.revision), false);
   assert.equal(shouldShowAnnouncements(store.list(), 'yesterday'), true);
+});
+
+test('deleting older, newest, pinned and last announcements preserves publication revision across restarts', (t) => {
+  const { dir, store } = fixture(t);
+  publish(store, 'oldest'); publish(store, 'pinned', { pin: true }); publish(store, 'newest');
+  const revision = store.list().revision;
+  const reader = createAnnouncementStore({ dir });
+  reader.read('oldest'); reader.read('pinned'); reader.read('newest');
+  for (const [id, remaining, pinnedId] of [
+    ['oldest', ['newest', 'pinned'], 'pinned'],
+    ['newest', ['pinned'], 'pinned'],
+    ['pinned', [], null],
+  ]) {
+    assert.equal(store.remove(id).id, id);
+    const index = reader.list();
+    assert.deepEqual(index.items.map((item) => item.id), remaining);
+    assert.equal(index.pinnedId, pinnedId);
+    assert.equal(index.revision, revision, 'deletion is not a new publication or an old publication replay');
+    assert.equal(shouldShowAnnouncements(index, revision), false);
+    assert.equal(reader.read(id), null, 'verified cached bodies cannot restore a deleted entry');
+    assert.equal(fs.existsSync(path.join(dir, `${id}.md`)), false);
+    assert.deepEqual(createAnnouncementStore({ dir }).list(), index);
+    assert.equal(fs.existsSync(path.join(dir, '.write.lock')), false);
+  }
+  assert.equal(defaultAnnouncementId(store.list()), null);
+  const next = publish(store, 'after-deletion');
+  assert.notEqual(next.revision, revision);
+  assert.equal(shouldShowAnnouncements(store.list(), revision), true);
+});
+
+test('deleting a pinned item clears only its pin and leaves other cached bodies, shared assets and drafts intact', (t) => {
+  const { root, dir, store } = fixture(t);
+  publish(store, 'pinned', { pin: true }); publish(store, 'other');
+  store.read('pinned'); const other = store.read('other');
+  const assets = path.join(dir, 'assets');
+  fs.mkdirSync(assets);
+  const image = path.join(assets, 'shared.png');
+  const draft = path.join(root, 'publisher-draft.md');
+  fs.writeFileSync(image, Buffer.from([1, 2, 3]));
+  fs.writeFileSync(draft, '# Original draft\n', 'utf8');
+  store.remove('pinned');
+  assert.equal(store.list().pinnedId, null);
+  assert.equal(store.read('pinned'), null);
+  assert.deepEqual(store.read('other'), other);
+  assert.deepEqual(fs.readFileSync(image), Buffer.from([1, 2, 3]));
+  assert.equal(fs.readFileSync(draft, 'utf8'), '# Original draft\n');
+});
+
+test('deletion rejects unsafe, missing and locked targets without changing the catalog or bodies', (t) => {
+  const { dir, store } = fixture(t);
+  publish(store, 'one');
+  const before = fs.readFileSync(path.join(dir, ANNOUNCEMENT_INDEX_FILE), 'utf8');
+  for (const id of ['../private', '/private', 'one.md', 'one/../private', '%2e%2e', 'CON', 'con', 'lpt1', '']) {
+    assert.throws(() => store.remove(id), /ID 无效/);
+  }
+  assert.throws(() => store.remove('missing'), /找不到公告/);
+  fs.writeFileSync(path.join(dir, '.write.lock'), 'another writer', 'utf8');
+  assert.throws(() => store.remove('one'), /正在更新/);
+  assert.equal(fs.readFileSync(path.join(dir, ANNOUNCEMENT_INDEX_FILE), 'utf8'), before);
+  assert.equal(fs.readFileSync(path.join(dir, '.write.lock'), 'utf8'), 'another writer');
+  assert.ok(store.read('one'));
+});
+
+test('a deletion index rename failure leaves the catalog and body intact and releases its lock', (t) => {
+  const { dir, store } = fixture(t);
+  publish(store, 'one', { pin: true });
+  const before = store.list();
+  const body = fs.readFileSync(path.join(dir, 'one.md'));
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (to === path.join(dir, ANNOUNCEMENT_INDEX_FILE)) throw new Error('simulated delete index failure');
+    return rename(from, to);
+  };
+  try { assert.throws(() => store.remove('one'), /simulated delete index failure/); }
+  finally { fs.renameSync = rename; }
+  assert.deepEqual(createAnnouncementStore({ dir }).list(), before);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'one.md')), body);
+  assert.equal(fs.readdirSync(dir).some((name) => name.startsWith('.tmp-') || name === '.write.lock'), false);
+});
+
+test('body cleanup failure is reported after a successful deletion without restoring the catalog entry', (t) => {
+  const { dir, store, warnings } = fixture(t);
+  const item = publish(store, 'one', { pin: true });
+  store.read('one');
+  const bodyFile = path.join(dir, 'one.md');
+  const unlink = fs.unlinkSync;
+  fs.unlinkSync = (file) => {
+    if (file === bodyFile) throw Object.assign(new Error('simulated cleanup denied'), { code: 'EACCES' });
+    return unlink(file);
+  };
+  try { assert.deepEqual(store.remove('one'), item); }
+  finally { fs.unlinkSync = unlink; }
+  const expected = { revision: item.revision, pinnedId: null, items: [] };
+  assert.deepEqual(store.list(), expected);
+  assert.deepEqual(createAnnouncementStore({ dir }).list(), expected);
+  assert.equal(store.read('one'), null);
+  assert.equal(fs.existsSync(bodyFile), true, 'the warning must not imply that filesystem cleanup succeeded');
+  assert.equal(fs.existsSync(path.join(dir, '.write.lock')), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /已从索引删除.*one\.md 未能清理.*simulated cleanup denied/);
+});
+
+test('deletion strictly validates existing data before rewriting any catalog', (t) => {
+  const { dir, store } = fixture(t);
+  publish(store, 'one'); publish(store, 'two');
+  const catalogFile = path.join(dir, ANNOUNCEMENT_INDEX_FILE);
+  const original = fs.readFileSync(catalogFile, 'utf8');
+  fs.writeFileSync(catalogFile, '{ invalid catalog', 'utf8');
+  assert.throws(() => store.remove('one'), /未作修改/);
+  assert.equal(fs.readFileSync(catalogFile, 'utf8'), '{ invalid catalog');
+  assert.equal(fs.existsSync(path.join(dir, 'one.md')), true);
+  fs.writeFileSync(catalogFile, original, 'utf8');
+  fs.writeFileSync(path.join(dir, 'two.md'), '# Corrupt remaining body\n', 'utf8');
+  assert.throws(() => store.remove('one'), /未作修改/);
+  assert.equal(fs.readFileSync(catalogFile, 'utf8'), original);
+  assert.equal(fs.existsSync(path.join(dir, 'one.md')), true);
+  assert.equal(fs.existsSync(path.join(dir, '.write.lock')), false);
 });

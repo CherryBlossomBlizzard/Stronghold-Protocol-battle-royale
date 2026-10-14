@@ -29,7 +29,7 @@
 | 项目 | 已核实状态 |
 |---|---|
 | 分支 | 当前核心 `feat/IncreasePlayerCapacity` 已接纳 v0.2.6；带宽优化来源分支 `perf/compact-wire-bandwidth` 保留，仍指向 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466` |
-| 最近本地开发 | [DEV-20261014-04](records/2026-10-14-04-announcement-admin.md)：公告列表临时置顶与删除命令，进行中、按功能分批本地提交。前次 [DEV-20261014-03](records/2026-10-14-03-asset-catalog-recovery.md) 的旧 SW/在线目录恢复及五秒冷却继续保留；上游 v0.2.6 合并见 [DEV-20261014-02](records/2026-10-14-02-upstream-v0.2.6.md)。本次未推送或部署 |
+| 最近本地开发 | [DEV-20261014-04](records/2026-10-14-04-announcement-admin.md)：公告列表临时置顶（`b5b6144b`）、CLI 删除及免提示兼容；定向 Node 与 Edge 桌面/横屏触屏验证完成，删除功能与最终记录同一提交。前次 [DEV-20261014-03](records/2026-10-14-03-asset-catalog-recovery.md) 的旧 SW/在线目录恢复及五秒冷却继续保留；上游 v0.2.6 合并见 [DEV-20261014-02](records/2026-10-14-02-upstream-v0.2.6.md)。本次未推送或部署 |
 | Windows 便携包的历史验证记录 | `../releases/v0.2.3-20p.4/Stronghold-Protocol-v0.2.3-20p.4-Windows-x64.zip`，548.35 MiB；内含官方 Node v22.23.3、生产依赖和完整素材；SHA-256 与验证结果见 [DEV-20261010-11](records/2026-10-10-11-windows-portable-v023-20p4.md)，包未进入 Git。本次未制作 v0.2.6 玩家包 |
 | 最近本地分支合并 | 核心合并前 `cf30fb2980fe27363dcafdfb677317f80c503b49`，来源 `dbe724995aca08b0fe18f5c8b4ad90f00bc2e466`；与 [DEV-20261010-10](records/2026-10-10-10-merge-compact-wire.md) 同一合并提交，按记录路径查询 |
 | 最近上游合并前的 HEAD | 任务开始为 `f2639932e02a15d80a5aeeac36977efb90895d6f`；基线记录提交为 `f7f5fd3ebd592a536208810d821d1f0a368f2bb1`，实际合并第一父提交。既有标签不移动 |

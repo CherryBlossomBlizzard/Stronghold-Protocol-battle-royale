@@ -71,7 +71,7 @@ test('state and normalization: independent state, validated copies, service publ
   assert.equal(normalized.pinnedId, A.id);
   assert.notEqual(normalized.items, input.items);
   assert.notEqual(normalized.items[0], input.items[0]);
-  for (const bad of [null, {}, { ...input, revision: A.revision }, { ...input, pinnedId: 'missing' }]) {
+  for (const bad of [null, {}, { ...input, revision: '../invalid' }, { ...input, pinnedId: 'missing' }]) {
     assert.deepEqual(normalizeAnnouncementList(bad), indexOf([]));
   }
 });
@@ -474,6 +474,59 @@ test('empty lists never auto-open, while manual opening can show an empty state'
   assert.equal(f.target.get().listError, null);
   f.controller.setSuppressed(true);
   assert.equal(f.target.get().suppressed, false);
+});
+
+test('deleting the newest or last article retains browser suppression until an actual new publication', async () => {
+  let index = indexOf([B, A], B.id);
+  const server = serving(() => index);
+  const storage = memoryStorage();
+  const f = fixture({ ...server, storage });
+  await f.controller.open();
+  f.controller.setSuppressed(true);
+  const revision = index.revision;
+  index = { revision, pinnedId: null, items: [A] };
+  await f.controller.refresh();
+  assert.equal(f.target.get().selectedId, A.id);
+  assert.deepEqual(f.target.get().detail, detailOf(A));
+  assert.equal(f.target.get().suppressed, true);
+  assert.equal(f.target.get().listError, null);
+  f.controller.close();
+  const reloaded = fixture({ ...server, storage });
+  await reloaded.controller.refresh({ auto: true });
+  assert.equal(reloaded.target.get().open, false, 'deletion is not a new publication on a fresh page');
+  index = { revision, pinnedId: null, items: [] };
+  await reloaded.controller.refresh({ auto: true });
+  assert.equal(reloaded.target.get().open, false);
+  assert.equal(reloaded.target.get().revision, revision);
+  assert.equal(reloaded.target.get().suppressed, true);
+  assert.equal(reloaded.target.get().detail, null);
+  await reloaded.controller.open();
+  assert.equal(reloaded.target.get().selectedId, null);
+  assert.equal(reloaded.target.get().detailLoading, false);
+  assert.equal(reloaded.target.get().listError, null);
+  reloaded.controller.close();
+  index = indexOf([C]);
+  await reloaded.controller.refresh({ auto: true });
+  assert.equal(reloaded.target.get().open, true);
+  assert.equal(reloaded.target.get().suppressed, false);
+  assert.equal(reloaded.target.get().selectedId, C.id);
+});
+
+test('a late deleted detail cannot refill the empty reader after the deletion list arrives', async () => {
+  const network = deferredFetch();
+  const f = fixture(network);
+  const opening = f.controller.open();
+  await network.reply(0, indexOf([A]));
+  const refreshing = f.controller.refresh();
+  await network.reply(2, { revision: A.revision, pinnedId: null, items: [] });
+  await refreshing;
+  assert.equal(f.target.get().selectedId, null);
+  assert.equal(f.target.get().detail, null);
+  await network.reply(1, detailOf(A));
+  await opening;
+  assert.equal(f.target.get().detail, null);
+  assert.equal(f.target.get().detailLoading, false);
+  assert.equal(f.target.get().detailError, null);
 });
 
 test('disabled, malformed and quota-failing storage cannot break fetching or page-local suppression', async () => {

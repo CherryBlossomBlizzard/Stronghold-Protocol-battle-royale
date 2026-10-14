@@ -37,6 +37,7 @@ export function isAnnouncementPublishedAt(value) {
 /**
  * Validate untrusted HTTP metadata and return a copy with only the public fields, or null.
  * The items are in publication order, newest first; dates never determine this order or suppression.
+ * The latest publication revision survives deletion, even if no articles remain.
  * @param {any} raw
  * @returns {AnnouncementIndex|null}
  */
@@ -54,7 +55,7 @@ export function readAnnouncementIndex(raw) {
     ids.add(item.id); revisions.add(item.revision);
     items.push({ id: item.id, title: item.title, publishedAt: item.publishedAt, revision: item.revision });
   }
-  if (items.length ? raw.revision !== items[0].revision : raw.revision !== '') return null;
+  if ((items.length || raw.revision !== '') && !isAnnouncementRevision(raw.revision)) return null;
   if (raw.pinnedId !== null && (!isAnnouncementId(raw.pinnedId) || !ids.has(raw.pinnedId))) return null;
   return { revision: raw.revision, pinnedId: raw.pinnedId, items };
 }

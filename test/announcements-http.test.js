@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { startServer } from '../server/index.js';
+import { createAnnouncementStore } from '../server/announcements.js';
 
 async function withServer(run) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'sp-ann-http-'));
@@ -69,5 +70,31 @@ test('announcement HTTP exposes no writer and accepts no paths or private runtim
     }
     assert.equal((await request(srv, '/runtime/announcements/index.json')).status, 404);
     assert.equal((await request(srv, '/healthz')).status, 200);
+  });
+});
+
+test('external deletion immediately hides cached details over HTTP and retains the last publication revision', async () => {
+  await withServer(async (srv) => {
+    const first = srv.announcements.publish({ id: 'older', title: '旧公告', markdown: '# 旧公告', pin: true });
+    const latest = srv.announcements.publish({ id: 'newest', title: '新公告', markdown: '# 新公告' });
+    assert.equal((await request(srv, `/api/announcements/${first.id}`)).status, 200);
+    assert.equal((await request(srv, `/api/announcements/${latest.id}`)).status, 200);
+    const writer = createAnnouncementStore({ dir: srv.announcements.dir });
+    writer.remove(latest.id);
+    const list = JSON.parse((await request(srv, '/api/announcements')).body);
+    assert.equal(list.revision, latest.revision);
+    assert.equal(list.pinnedId, first.id);
+    assert.deepEqual(list.items.map((item) => item.id), [first.id]);
+    for (const method of ['GET', 'HEAD']) {
+      const removed = await request(srv, `/api/announcements/${latest.id}`, method);
+      assert.equal(removed.status, 404);
+      if (method === 'GET') assert.deepEqual(JSON.parse(removed.body), { error: 'ANNOUNCEMENT_NOT_FOUND' });
+      else assert.equal(removed.body, '');
+    }
+    writer.remove(first.id);
+    assert.deepEqual(JSON.parse((await request(srv, '/api/announcements')).body), {
+      revision: latest.revision, pinnedId: null, items: [],
+    });
+    assert.equal((await request(srv, `/api/announcements/${first.id}`)).status, 404);
   });
 });
