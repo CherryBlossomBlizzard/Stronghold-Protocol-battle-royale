@@ -237,10 +237,10 @@ test('reader keeps history navigation, Markdown source, persistent preference an
   const dialog = AnnouncementDialog({ state, actions });
   const nodes = [...walk(dialog)];
   const history = nodes.filter((node) => classed(node, 'announcements__item'));
-  assert.deepEqual(history.map((node) => node.props['data-announcement-id']), ['latest', 'older']);
-  assert.equal(history[0].props['aria-current'], 'true');
-  assert.equal(history[1].props['aria-current'], undefined);
-  history[1].props.onClick();
+  assert.deepEqual(history.map((node) => node.props['data-announcement-id']), ['older', 'latest']);
+  assert.equal(history[1].props['aria-current'], 'true');
+  assert.equal(history[0].props['aria-current'], undefined);
+  history[0].props.onClick();
   const markdown = nodes.find((node) => node.type === AnnouncementMarkdown);
   assert.equal(markdown.props.source, state.detail.markdown, 'the safe Markdown component receives text, not HTML');
   assert.ok(nodes.some((node) => classed(node, 'announcements__body') && node.props.tabIndex === '0'));
@@ -264,6 +264,23 @@ test('empty history cannot suppress an unknown publication, and detail failures 
   const retry = [...walk(failed)].find((node) => node.props?.icon === 'refresh');
   retry.props.onClick();
   assert.deepEqual(calls, [item.id]);
+});
+
+test('pinning temporarily leads the history list while selection and publication order stay unchanged', () => {
+  const newer = metadata('newer', 'pub-newer');
+  const older = metadata('older', 'pub-older');
+  const items = Object.freeze([newer, item, older]);
+  const state = { ...createAnnouncementState(), open: true, revision: newer.revision,
+    items, pinnedId: older.id, selectedId: item.id };
+  const history = (pinnedId) => [...walk(AnnouncementDialog({ state: { ...state, pinnedId } }))]
+    .filter((node) => classed(node, 'announcements__item'));
+  assert.deepEqual(history(older.id).map((node) => node.props['data-announcement-id']), ['older', 'newer', 'latest']);
+  assert.equal(history(older.id)[2].props['aria-current'], 'true');
+  assert.deepEqual(history(newer.id).map((node) => node.props['data-announcement-id']), ['newer', 'latest', 'older']);
+  assert.deepEqual(history(null).map((node) => node.props['data-announcement-id']), ['newer', 'latest', 'older']);
+  assert.deepEqual(items.map((entry) => entry.id), ['newer', 'latest', 'older']);
+  assert.equal(state.revision, newer.revision);
+  assert.equal(state.selectedId, item.id);
 });
 
 test('announcement trigger has a named accessible button and declared dates remain independent of revisions', () => {

@@ -8,6 +8,7 @@ import { createStore, store, useStore, selectRoute as appRoute } from '../store.
 import { t } from '../../../shared/i18n.js';
 import { createAnnouncementState, createAnnouncementController } from './announcementModel.js';
 import { AnnouncementMarkdown } from './announcementMarkdown.js';
+import { announcementHistoryItems } from '../../../shared/announcements.js';
 
 export const ANNOUNCEMENT_POLL_MS = 60_000;
 export const ANNOUNCEMENT_MOUNT_DELAY_MS = 120;
@@ -103,7 +104,7 @@ export function AnnouncementDialog({ state, actions = viewActions, bodyRef, onVi
             iconRight="chevronRight" onClick=${(event) => { onViewAction?.(event?.currentTarget); actions.showDetail(); }}>${t('返回正文')}<//>` : null}
         </div>
         <nav class="announcements__history-scroll" aria-label=${t('公告列表')}>
-          ${state.items.map((item) => html`<button type="button" key=${item.id}
+          ${announcementHistoryItems(state).map((item) => html`<button type="button" key=${item.id}
               class=${cx('announcements__item', item.id === state.selectedId && 'is-selected')}
               aria-current=${item.id === state.selectedId ? 'true' : undefined}
               onClick=${(event) => { onViewAction?.(event?.currentTarget); actions.select(item.id); }} data-announcement-id=${item.id}>

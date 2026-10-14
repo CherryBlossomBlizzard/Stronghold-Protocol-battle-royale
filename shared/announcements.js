@@ -64,6 +64,15 @@ export function defaultAnnouncementId(index) {
   return index?.pinnedId || index?.items?.[0]?.id || null;
 }
 
+/** Display the pinned article first without changing the persisted publication order.
+ * @param {Pick<AnnouncementIndex, 'items'|'pinnedId'>} index
+ * @returns {AnnouncementMetadata[]}
+ */
+export function announcementHistoryItems(index) {
+  const pinned = index.items.find((item) => item.id === index.pinnedId);
+  return pinned ? [pinned, ...index.items.filter((item) => item.id !== pinned.id)] : index.items.slice();
+}
+
 /** Suppression lasts until another publication, independent of the date, selected article or pinned ID. */
 export function shouldShowAnnouncements(index, dismissedRevision) {
   return !!index?.items?.length && isAnnouncementRevision(index.revision) && dismissedRevision !== index.revision;
