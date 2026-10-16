@@ -1,10 +1,59 @@
+## 卫戍协议20人版总结
+
+本分支项目由龙千尘基于作者上游原作者项目[sganggs/Stronghold-Protocol](https://github.com/sganggs/Stronghold-Protocol)，将其扩展为最大20人联机版本，并且做了相应网络优化，新功能添加与体验优化。目前同步至0.2.6版本；公共状态最高8Hz，保留20人压缩默认及固定分组玩法。
+
+### 新增设计
+
+#### 联机设计
+
+- 同盟房容量扩展至 4 / 8 / 10 / 16 / 20 人
+  - 调整房间容量时保留成员准备状态
+
+- 玩家**分组机制**，当玩家人数超过5人时，将按平均每组3-5人进行分组，并且设计了分组UI
+  - 人数分组所有情况数字可见[PLAYER_CAPACITY.md](/docs/PLAYER_CAPACITY.md)
+- 各组牌库**互相独立**，组内牌库共享，3/4人是原版牌库，5人组牌库扩充1.25倍
+- 各组**并行进行**策略选择，机变选择，极大加快了多人流程中的冗长等待
+  - 组内策略不允许重复，各组间可以重复
+  - 机变选择每组回归6个选项
+  - 信标可以跨组投送
+- 将联防轮数上限设置为组数，并且提供投票跳过后续联防
+- boss血量将随存活人数线性增长
+- 新增局内文字聊天功能
+
+- 新增联机大厅，快速匹配，房间列表，可查看在线人数，游玩人数，房间数。
+- 房主现在可以转让，房主可设置房间是否允许被匹配。
+
+#### 网络带宽优化
+
+- 新增预缓存功能，支持在线下载与本地素材包导入，并且有目录版本校验
+
+- 关于人数较多时的联机带宽，我通过网络抓包定位到了webSocket连接中m.public公共状态报文大小随人数O(N²)级别增长，其为ws的最大带宽占用，所以我专门对其进行了开启raw-deflate压缩，建立紧凑 WebSocket 协议将原本的json明文编码为“位置数组+连接字典”，在极大程度上削减了报文大小，初步估算将其流量大小削减了90%-99%，代价是需要CPU算力进行解码。
+
+#### 服务器专用功能
+
+具体命令可以见项目目录下“[开服必看.md](开服必看.md)”
+
+- 公告功能，支持置顶公告和局内紧急公告
+
+- 限制房间最大ai数量
+- 在线预缓存下载限速
+- 控制是否允许未预缓存完毕的玩家游玩
+
+---
+
+玩法边界见 [多人容量说明](docs/PLAYER_CAPACITY.md)，基线、决定与维护记录见 [本分支开发记录](docs/development/README.md)。上游新增规则与已确认的多人分支决定结合。
+
+后续此项目将大幅降低更新频率，并且不再大量开发新功能，祝玩的开心
+
 # 卫戍协议：盟约 · Stronghold Protocol: Alliance
 
-《明日方舟》季节性自走棋塔防玩法「卫戍协议：盟约」的**非官方同人复刻**：浏览器即开即玩，单人或 1–4 人联机合作。
+《明日方舟》季节性自走棋塔防玩法「卫戍协议：盟约」的**非官方同人复刻**：浏览器即开即玩，单人或最多 20 人联机合作。
 
 ![version](https://img.shields.io/badge/version-0.3.0-2ea44f)
 ![license](https://img.shields.io/badge/code%20license-GPL--3.0--or--later-blue)
 ![node](https://img.shields.io/badge/node-22%20%7C%2024-339933)
+
+
 
 ## 声明
 
@@ -35,7 +84,7 @@ English summary: [below](#english).
 
 「卫戍协议：盟约」是自走棋 + 塔防：休整期在调度中心招募干员、摆阵、配装备，作战期干员自动部署，迎击从红门涌来的敌人，漏过去的敌人扣目标生命值。本项目在浏览器里复刻了这一玩法，规则和数值尽量对照官方数据表与 PRTS 核对。
 
-- **独立模拟**（单人）与**同盟模拟**（1–4 人**合作**，没有 PvP；空位可以加 AI 队友）。
+- **独立模拟**（单人）与**同盟模拟**（最多 20 人**合作**，没有 PvP；空位可以加 AI 队友）。
 - 服务器是一个 Node.js 程序，**战斗在各玩家的浏览器里模拟**（和官方一样），服务器只管经济与回合，一台低功耗小主机就能开服。
 - 当前版本 0.3.0：加入插件系统——外观、数据、DSL、脚本与界面插件，浏览器插件工作台和安装工具；可选的「官方特效」用本机客户端提取的官方战斗特效（完整包附带）；官方场景按客户端着色器重新打光并补上水面，伊利昂的木驮兽和「越长尘」会载客，冻结后手动刷新会取消冻结，机器人的布阵、采购和演习也有改进，详见 [CHANGELOG.md](CHANGELOG.md)。仍有少数规则按推断实现，与官方不一致的地方欢迎在 Issue 里反馈。
 
@@ -43,7 +92,7 @@ English summary: [below](#english).
 
 - **完整的一局**：确认本局信息 → 策略轮选（40 名策略）→ 14 回合 → 结算称号；险境及以上满足条件时进入第 15 回合「隐秘核心」。
 - **4 种难度**：标准 / 险境 / 绝境 / 终极，独立与同盟各一套参数，均取自官方数据。
-- **休整期**：招募、刷新、冻结、升级调度中心；整备区与临时整备区；从整备区拖到棋盘部署，用**方向轮盘**选择朝向。同盟模拟的卡池共用。
+- **休整期**：招募、刷新、冻结、升级调度中心；整备区与临时整备区；从整备区拖到棋盘部署，用**方向轮盘**选择朝向。同盟模拟的卡池按座位分组共享。
 - **晋升精锐**：3 名同名干员自动合成精锐，并获得一次高一阶的免费招募。
 - **干员与调配**：112 名可招募干员（+ 精锐）及其技能、天赋和特质；开局前可以为每名干员选择携带的技能（283 个技能全部手工实现）和精锐的模组。
 - **盟约与层数**：23 个盟约（8 个势力核心盟约 + 附加盟约），层数整局保留，每个盟约最多 999 层。
@@ -53,7 +102,7 @@ English summary: [below](#english).
 - **联防**：有人漏怪、又有人完美作战时，完美作战的队友带着阵容帮忙拦截漏掉的敌人。
 - **最终攻势与隐秘核心**：两人共享一个战场，全队共同削减同一条领袖血条；10 个敌方领袖，巨型领袖约 5×3 格的受击范围，以及官方的限伤规则。
 - **结算称号**：卫戍之星、不朽盟约、坚若磐石等 6 个称号。
-- **断线重连**：同盟模拟断线后 10 分钟内重新打开页面即可回到原座位，掉线期间按原阵容自动作战，也可以「暂离」交给 AI 托管；独立模拟 24 小时内可以回来继续（同一个浏览器）。
+- **断线重连**：同盟模拟断线后 10 分钟内重新打开页面即可回到原座位，掉线期间按原阵容自动作战，也可以「暂离」交给 AI 托管；独立模拟默认在断线后 2 小时内可以回来继续（同一个浏览器）。
 - **交互细节**：漏怪时顶栏用红字 + 「−N」标记待扣的目标生命值（结算时才扣除）；点选、拖放和配发装备都按地上的方格；购买、升级和机变选卡都需要点两次确认；只有一名玩家时除作战外不计时。
 - **画面与声音**：真实 Spine 小人、官方 BGM 与音效、表情（6 套 × 6 个）、作战特效；可选的官方 3D 棋盘（需要从本机客户端提取贴图）。
 - **手机与电脑**：触摸拖拽、长按查看详情，推荐横屏；设置里可以调低画质。
@@ -132,7 +181,7 @@ npm start          # 启动服务器：http://localhost:3000
 3. 所有人点「准备就绪」后房主开始。
 4. 同一 Wi-Fi / 路由器下的朋友打开启动窗口里列出的地址（形如 `http://192.168.x.x:3000`）即可。打不开时多半是防火墙：Windows 首次启动时在弹窗中允许「专用网络」，或运行 `npm run doctor` 查看具体命令；访客 Wi-Fi 常开启「AP 隔离」，也会导致连不上。
 
-刷新页面或断线后，同盟模拟 10 分钟内、独立模拟 24 小时内重新打开即可回到原座位。服务器把房间和对局都保存在内存里，**重启服务器会结束所有对局**。
+刷新页面或断线后，同盟模拟 10 分钟内、独立模拟默认 2 小时内重新打开即可回到原座位。服务器把房间和对局都保存在内存里，**重启服务器会结束所有对局**。
 
 ## 插件
 
@@ -262,7 +311,7 @@ node tools/perfbench.mjs --cpu 1,4,6 --profile             # 真实战斗的帧�
 
 ## English
 
-An **unofficial, non-commercial fan remake** of Arknights' seasonal auto-chess tower-defense mode *Stronghold Protocol: Alliance*, played in the browser: solo, or 1–4 player co-op (AI teammates can fill seats). Combat is simulated in each player's browser, so a low-power PC can host.
+An **unofficial, non-commercial fan remake** of Arknights' seasonal auto-chess tower-defense mode *Stronghold Protocol: Alliance*, played in the browser: solo, or up to 20-player co-op (AI teammates can fill seats). Co-op rooms offer 4 / 8 / 10 / 16 / 20 seats, defaulting to 8; see [capacity rules](docs/PLAYER_CAPACITY.md). Combat is simulated in each player's browser, so a low-power PC can host.
 
 - **Run:** download the full bundle `Stronghold-Protocol-v<version>.zip` (~800 MB, all the art inside, the Chinese, Japanese, English, Korean and own-language operator voices, the official battlefield scenes and the official battle effects included) from [Releases](../../releases/latest) — or the lite one, `…-lite.zip` (~25 MB), which downloads the art (~720 MB) on its first start; from 0.2.1 on, `…-update.zip` holds only the files changed since the earlier 0.2.x releases: stop the server, extract it over an existing 0.2.x folder and start again (the first start deletes the files the new version dropped and verifies the install) — install Node.js 22 or 24, then double-click `scripts\start-windows.bat` (Windows) or run `./scripts/start.sh` (macOS / Linux) and open <http://localhost:3000>. From source: `npm install && npm run setup && npm start` (setup downloads ~720 MB of art from public mirrors, the emotes and the how-to-play pages included; the official 3D board, some official HUD icons, two enemy models and 39 summon models are extracted from a local Arknights client — without one the game uses the 2D board and look-alike stand-ins (the summons show their avatars), and a server can copy `public/assets/local/` and `data/local-assets.json` from the full bundle of the same version).
 - **Languages:** Chinese (the default), English, 日本語, 한국어 and 繁體中文 — switch on the title screen or in Settings. Game texts come from the official clients; the Japanese, Korean and Traditional Chinese interface strings are machine translations (corrections welcome: [docs/I18N.md](docs/I18N.md)).

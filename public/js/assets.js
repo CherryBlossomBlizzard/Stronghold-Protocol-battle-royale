@@ -51,6 +51,7 @@
 // caller falls back (docs/ASSETS.md "Other fallbacks").
 
 import { cosmetics, createCosmeticLayers, EMPTY_MANIFEST } from './cosmetics.js';
+import { runtimeURL, runtimeCacheMode } from './runtime.js';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' && v ? v : null);
@@ -782,7 +783,8 @@ export function createAssets(options) {
 
   /** One fetch of the manifest → the JSON object, or throws (err.status / err.badJson as data.js). */
   async function fetchOnce() {
-    const res = await doFetch(url, { cache: 'no-cache' });
+    const versioned = runtimeURL(url);
+    const res = await doFetch(versioned, { cache: runtimeCacheMode(versioned) });
     if (!res || !res.ok) throw Object.assign(new Error(`HTTP ${res ? res.status : '???'}`), { status: res ? res.status : null });
     let json;
     try { json = await res.json(); } catch (err) { throw Object.assign(err instanceof Error ? err : new Error(String(err)), { badJson: true }); }
@@ -888,7 +890,8 @@ export function createAssets(options) {
     if (!localPromise) {
       localPromise = (async () => {
         try {
-          const res = await doFetch(localUrl, { cache: 'no-cache' });
+          const versioned = runtimeURL(localUrl);
+          const res = await doFetch(versioned, { cache: runtimeCacheMode(versioned) });
           if (!res || !res.ok) return localManifest;
           const json = await res.json();
           if (!localManifest && isObj(json) && isObj(json.groups)) { localManifest = json; notify('local'); }

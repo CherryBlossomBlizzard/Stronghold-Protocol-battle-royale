@@ -93,6 +93,7 @@ export function assetIndexOptionsFrom(opts, publicDir) {
 /** net.js Network options out of the startServer() options; `trustProxy` falls back to TRUST_PROXY. */
 export function netOptionsFrom(opts) {
   const netOptions = {};
+  if (typeof opts.compactWire === 'boolean') netOptions.compactWire = opts.compactWire;
   for (const k of NET_OPTION_KEYS) {
     if (opts[k] != null) netOptions[k] = opts[k];
   }
@@ -100,11 +101,11 @@ export function netOptionsFrom(opts) {
   return netOptions;
 }
 
-/** lobby.js Lobby options out of the startServer() options. */
+/** lobby.js Lobby options out of the startServer() options; explicit solo null selects the official data fallback. */
 export function lobbyOptionsFrom(opts) {
   const lobbyOptions = {};
   for (const k of LOBBY_OPTION_KEYS) {
-    if (opts[k] != null) lobbyOptions[k] = opts[k];
+    if (opts[k] != null || (k === 'soloReconnectWindowMs' && opts[k] === null)) lobbyOptions[k] = opts[k];
   }
   return lobbyOptions;
 }

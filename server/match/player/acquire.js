@@ -264,20 +264,20 @@ export class PlayerAcquire {
    * is actually kept, record the copies that did not fit (`need` minus `left` before the gain). A failed stow or
    * merge records nothing. Fixed gift families stay unlimited without a debt entry. Every other grant still refuses.
    */
-  acquireItem(itemId, { source = 'grant', toTemp = false, silent = false, deferMerge = false, requirePool = true, displayed = false } = {}) {
+  acquireItem(itemId, { source = 'grant', toTemp = false, silent = false, deferMerge = false, requirePool = true, displayed = false, noPool = false } = {}) {
     const rec = this.gd.item(itemId);
     if (!rec) return null;
     // Only the fixed operator-gift families can overdraw. Several unrelated strategy grants also pass
     // requirePool:false; they must retain their stock limit (for example commercial packaging).
-    const unlimitedGift = !requirePool && this.gd.isUnlimitedGiftItem(itemId);
-    const pool = this.m.itemPool;
+    const unlimitedGift = (noPool === true || !requirePool) && this.gd.isUnlimitedGiftItem(itemId);
+    const pool = this.m.itemPoolFor(this);
     const leftBefore = pool.left(itemId);
     const need = pool.need(itemId);
     if (!unlimitedGift && !displayed && !pool.canGain(itemId)) {
       this.m.toast(this, 'warn', '装备库存不足，未获得该装备');
       return null;
     }
-    let piece = this.newPiece('item', itemId);
+    let piece = this.newPiece('item', itemId, unlimitedGift ? { noPool: true } : {});
     // A prep-end grant may sit beside an identical copy until the next prep. The invariant counts only copies
     // without this mark, so the fight that is about to start is not reported as a missed merge.
     if (deferMerge) piece.deferMerge = true;
@@ -285,7 +285,11 @@ export class PlayerAcquire {
       piece = this._mergeItem(itemId, piece);
       if (!piece) return null;
     } else {
-      this.stow(piece, { allowTemp: true, toTemp });
+      if (!this.stow(piece, { allowTemp: true, toTemp })) {
+        this.m.toast(this, 'warn', '整备区已满，获得的装备已销毁');
+        return null;
+      }
+      // 若上面已发出则无事；未发出时上面已 return（#624 的 displayed 分支不受影响）
     }
     if (displayed && !unlimitedGift) {
       const shortfall = leftBefore === Infinity ? 0 : Math.max(0, need - leftBefore);
@@ -304,8 +308,16 @@ export class PlayerAcquire {
     for (const l of locs) { if (consumed.length >= need) break; consumed.push(l); }
     if (consumed.length < need) return null;
     for (const l of consumed) if (l.area !== 'new') this._detach(l);
-    const golden = this.newPiece('item', rec.upgradeChessId || rec.goldenId);
-    this.stow(golden, { allowTemp: true });
+    const slotOf = consumed.filter((x) => x.area === 'equipped').map((x) => ({ holder: x.holder, idx: x.holder.items.indexOf(x.piece) }));
+    const golden = this.newPiece('item', rec.upgradeChessId || rec.goldenId, consumed.every((x) => x.piece.noPool) ? { noPool: true } : {});
+    if (!this.stow(golden, { allowTemp: true })) {
+      const at = slotOf[0];
+      if (!at || !this.find(at.holder.uid)) {
+        this.m.toast(this, 'warn', '整备区已满，合成的装备已销毁');
+        return null;
+      }
+      at.holder.items.splice(Math.max(0, Math.min(at.idx, at.holder.items.length)), 0, golden);
+    }
     this.stats.itemMerges++;
     this.m.dispatch(this, 'onMerge', { kind: 'item', piece: golden, itemId, consumed: consumed.map((l) => l.piece.uid) });
     return golden;

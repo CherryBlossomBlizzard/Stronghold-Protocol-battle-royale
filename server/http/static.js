@@ -122,6 +122,9 @@ const CS_FILE = /^\/cs\/([0-9a-f]{16})\/([A-Za-z0-9._\/-]{1,200})$/;
  *   set's /cs/ manifest)
  * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, rawPath: string, query: string) => Promise<void>}
  */
+  const stale = (req, res) => sendError(req, res, 409, '页面资源版本已变化，请刷新页面 · Runtime version changed, reload');
+
+
 export function createStaticHandler({ publicDir, dataDir, sharedDir, simDir = path.join(ROOT, 'server', 'sim'), packsDir = path.join(ROOT, 'packs'),
   pluginsDir = path.join(path.dirname(path.resolve(packsDir)), 'plugins'), packs = null, content = null, log = noopLog,
   assetIndex = null, views = null, visual = null, contents = null }) {

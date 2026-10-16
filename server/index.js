@@ -218,3 +218,14 @@ export async function startServer(opts = {}) {
 
 // `node server/index.js` / npm start: listen, print the banner, stop on SIGINT / SIGTERM (http/boot.js).
 if (isProcessEntry(import.meta.url)) runMain(startServer);
+
+  function applySettings(next) {
+    lobby.setAiLimit(next.maxAiPerRoom);
+    lobby.setAssetCachePolicy({ required: next.requireAssetCache, getSummary: assetCache.currentSummary });
+    assetCache.setLimits(next.assetCacheLimits ?? fallbackAssetCacheLimits);
+    // A persisted owner setting overrides the startup/env fallback and is applied by the
+    // existing private settings poll; an absent field keeps the normal emergency option.
+    bandwidthEmergency?.setEnabled(next.bandwidthEmergencyEnabled ?? emergencyOptions.enabled);
+    // Runtime enabling fails closed until a summary is ready; ordinary optional startup stays lazy.
+    if (next.requireAssetCache && !assetCache.currentSummary()) void warmAssetSummary();
+  }

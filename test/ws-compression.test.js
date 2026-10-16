@@ -1,7 +1,6 @@
 // WebSocket permessage-deflate (server/http/websocket.js WS_DEFLATE, host bandwidth layer 0): a browser-like client
-// negotiates it with no server context takeover and a 2 KB server window, a large JSON frame goes out compressed, a
-// frame under the 1 KB threshold and a client without the extension get plain frames, and an offer that caps the server
-// window below ours is answered without compression instead of a refused handshake.
+// negotiates the capacity branch's retained server context and 32 KB window, while clients without the extension or
+// with incompatible window/context offers connect uncompressed. Payloads and the inflated-frame limit stay intact.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -48,15 +47,17 @@ describe('WebSocket permessage-deflate', () => {
   before(async () => { srv = await fakeServer(); });
   after(async () => { await srv.close(); });
 
-  test('negotiated with no server context takeover and a small server window; a large frame is compressed', async () => {
+  test('negotiates the retained server dictionary and capacity window; payloads arrive intact', async () => {
     const r = await receive(srv.url);
     assert.match(r.extensions, /permessage-deflate/);
-    assert.match(r.extensions, /server_no_context_takeover/);
+    assert.doesNotMatch(r.extensions, /server_no_context_takeover/);
+    assert.match(r.extensions, /client_no_context_takeover/);
     assert.match(r.extensions, new RegExp(`server_max_window_bits=${WS_DEFLATE.serverMaxWindowBits}`));
     assert.deepEqual(r.msgs, [BIG, SMALL], 'the payloads arrive intact');
     assert.ok(BIG.length > 10000);
     assert.ok(r.read < BIG.length / 4, `compressed on the wire: ${r.read} bytes read for ${BIG.length} of payload`);
-    assert.equal(WS_DEFLATE.threshold, 1024);
+    assert.equal(WS_DEFLATE.threshold, 256);
+    assert.equal(WS_DEFLATE.serverMaxWindowBits, 15);
   });
 
   test('a client without the extension gets the same messages uncompressed', async () => {
@@ -71,11 +72,47 @@ describe('WebSocket permessage-deflate', () => {
     assert.equal(r.extensions, '');
     assert.deepEqual(r.msgs, [BIG, SMALL]);
     assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=9'), true);
-    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=12; client_max_window_bits'), false);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=12; client_max_window_bits'), true);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=14; client_max_window_bits'), true);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=15; client_max_window_bits'), false);
     assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=9, permessage-deflate'), false, 'another offer is acceptable');
     assert.equal(narrowDeflateOffer('permessage-deflate; client_max_window_bits'), false);
     assert.equal(narrowDeflateOffer(undefined), false);
   });
+
+  test('windows above upstream 11 but below capacity 15 also connect without compression', async () => {
+    for (const serverMaxWindowBits of [12, 14]) {
+      const r = await receive(srv.url, { perMessageDeflate: { serverMaxWindowBits } });
+      assert.equal(r.extensions, '');
+      assert.deepEqual(r.msgs, [BIG, SMALL]);
+    }
+  });
+
+  test('a client requiring no retained server context gets an uncompressed connection', async () => {
+    const r = await receive(srv.url, { perMessageDeflate: { serverNoContextTakeover: true } });
+    assert.equal(r.extensions, '');
+    assert.deepEqual(r.msgs, [BIG, SMALL]);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_no_context_takeover'), true);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_no_context_takeover, permessage-deflate'), false);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=12', { serverMaxWindowBits: 11 }), false);
+    assert.equal(narrowDeflateOffer('permessage-deflate; server_max_window_bits=9', false), false);
+  });
+});
+
+test('SP_WS_DEFLATE rollback keeps a normal uncompressed handshake', async () => {
+  const saved = process.env.SP_WS_DEFLATE;
+  process.env.SP_WS_DEFLATE = '0';
+  let srv;
+  try {
+    srv = await fakeServer();
+    const r = await receive(srv.url);
+    assert.equal(r.extensions, '');
+    assert.deepEqual(r.msgs, [BIG, SMALL]);
+  } finally {
+    await srv?.close();
+    if (saved === undefined) delete process.env.SP_WS_DEFLATE;
+    else process.env.SP_WS_DEFLATE = saved;
+  }
 });
 
 test('the real server negotiates compression at /ws and keeps the 64 KB inflated frame limit', async () => {

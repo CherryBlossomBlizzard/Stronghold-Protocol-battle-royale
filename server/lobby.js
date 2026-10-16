@@ -592,7 +592,9 @@ export class Lobby {
       case 'room.diy': return this.diy(session, msg);
       case 'room.spectate': return this.spectate(session, msg);
       case 'room.removeSpectator': return this.removeSpectator(session, msg);
-      case 'room.setPlugins': return this.setPlugins(session, msg);
+            // 大逃杀（20 人房）：龙千尘的房间内聊天（配套 matchChat/界面按钮）
+      case 'room.chat': return this.chat(session, msg);
+case 'room.setPlugins': return this.setPlugins(session, msg);
       case 'room.setMode': return this.setMode(session, msg);
       case 'room.contentReady': return this.contentReady(session, msg, ctx);
       case 'room.consent': return this.consent(session,msg);
@@ -829,6 +831,114 @@ export class Lobby {
    * when it is the set the room already has. The host's result replay (a settlement screen still open) is dropped only
    * when the set did change: re-applying the same plugins, or a refused set, leaves it.
    */
+  allowEmergencyResume(session) { return !!this.roomOf(session)?.match; }
+
+
+  assetCacheAdmission(report) {
+    if (!this.requireAssetCache) return null;
+    const expected = this.getAssetCacheSummary();
+    if (assetCacheReadinessMatches(report, expected)) return null;
+    return fail(ERR.ASSET_CACHE_REQUIRED, !expected ? 'server-assets-pending'
+      : !expected.complete || expected.missingFiles ? 'server-assets-incomplete' : 'precache-missing');
+  }
+
+  promoteHostSeat(room) {
+    if (room.match || !room.hostId) return;
+    const host = room.seatOf(room.hostId);
+    if (!host || host.isBot || host.left || host.seat === 0) return;
+    const oldIndex = host.seat;
+    const first = room.seats[0];
+    room.seats[0] = host;
+    host.seat = 0;
+    room.seats[oldIndex] = first;
+    if (first) first.seat = oldIndex;
+  }
+
+  sendChatState(room, playerId) {
+    const ctx = room.matchCtx;
+    if (!room.match || !ctx?.live || ctx.ended || ctx.chat.closed || room.match.phase === PHASE.RESULT) return;
+    this.sendToPlayer(room, playerId, ctx.chat.snapshot());
+  }
+
+  setAiLimit(limit) {
+    if (limit !== null && (!Number.isInteger(limit) || limit < 0 || limit >= MAX_SEATS)) {
+      throw new RangeError(`AI limit must be null or an integer from 0 to ${MAX_SEATS - 1}`);
+    }
+    if (this.maxAiPerRoom === limit) return;
+    this.maxAiPerRoom = limit;
+    for (const room of this.rooms.values()) {
+      room.maxAiPerRoom = limit;
+      if (!room.match) this.trimBots(room);
+      this.broadcastState(room);
+    }
+  }
+
+  setAssetCachePolicy({ required, getSummary = this.getAssetCacheSummary }) {
+    if (typeof required !== 'boolean' || typeof getSummary !== 'function') throw new TypeError('invalid asset-cache policy');
+    this.getAssetCacheSummary = getSummary;
+    if (this.requireAssetCache === required) return;
+    this.requireAssetCache = required;
+    this.discovery.changed();
+  }
+
+  setCapacity(session, { capacity }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (room.mode === 'solo' || !ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
+    if (room.seats.some((s, i) => s && i >= capacity)) return fail(ERR.BAD_TARGET, 'occupied seat outside requested capacity');
+    if (room.capacity === capacity) return OK;
+    this.dropReplay(room, session.playerId);
+    if (capacity > room.capacity) room.seats.push(...new Array(capacity - room.capacity).fill(null));
+    else room.seats.length = capacity;
+    room.capacity = capacity;
+    this.broadcastState(room);
+    return OK;
+  }
+
+  setEmergency(state) {
+    this.emergency = { active: !!state.active, reason: state.reason || 'bandwidth',
+      since: state.startedAt || state.since || this.now(), retryAt: state.retryAt || 0 };
+    for (const room of this.rooms.values()) if (room.match) {
+      this.callMatch(room, 'setEmergencyFreeze', this.emergency.active, this.emergency);
+    }
+    this.discovery.changed();
+  }
+
+  setMatchmaking(session, { allowed }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (room.mode !== 'coop') return fail(ERR.BAD_TARGET, 'solo rooms cannot be matched');
+    if (typeof allowed !== 'boolean') return fail(ERR.BAD_MSG, 'invalid matchmaking policy');
+    if (room.allowMatchmaking === allowed) return OK;
+    this.dropReplay(room, session.playerId);
+    room.allowMatchmaking = allowed;
+    this.broadcastState(room);
+    return OK;
+  }
+
+  transferHost(session, { playerId }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    const target = room.seatOf(playerId);
+    const targetSession = this.registry.byId(playerId);
+    if (!target || target.isBot || target.left || !target.connected || target.playerId === session.playerId
+      || !targetSession?.connected || targetSession.roomCode !== room.code) {
+      return fail(ERR.BAD_TARGET, 'target must be another connected human in this room');
+    }
+    this.dropReplay(room, session.playerId);
+    room.hostId = playerId;
+    this.promoteHostSeat(room);
+    this.broadcastState(room);
+    this.log.info(`[lobby] ${room.code} host transferred to ${target.name}`);
+    return OK;
+  }
+
   setPlugins(session, { plugins }) {
     const room = this.roomOf(session);
     if (!room) return fail(ERR.NOT_IN_ROOM);
