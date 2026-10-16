@@ -489,10 +489,8 @@ export class GameData {
     const nm = this.normalRoundMax;
     if (r <= nm) return base;
     const last = this.baseEnemyScale(nm);
-    // 第 14 回合：按前 13 回合的比例再涨一档
-    const hp14 = last.hpMul * RULES.hpGrowth;
-    // 第 15 回合起：血量在上一回合的基础上翻四倍（复合）；攻击仍按前 13 回合的比例递增
-    const hp = r >= RULES.hpQuadFrom ? hp14 * Math.pow(RULES.hpQuadMul, r - (RULES.hpQuadFrom - 1)) : hp14;
+    // 第 14 回合起：血量在上一回合数值的基础上翻倍（复合）；攻击仍按前 13 回合的比例递增
+    const hp = last.hpMul * Math.pow(RULES.hpDoubleMul, r - (RULES.hpDoubleFrom - 1));
     return {
       hpMul: Math.max(0.01, hp),
       atkMul: Math.max(0, last.atkMul * Math.pow(RULES.atkGrowth, r - nm)),

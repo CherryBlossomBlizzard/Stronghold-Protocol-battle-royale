@@ -27,8 +27,8 @@ export const RULES = Object.freeze({
   /** 第 1–13 回合的每回合等比（官方绝境表），第 14 回合沿用。 */
   hpGrowth: 1.095445,
   atkGrowth: 1.048809,
-  /** 从第 15 回合起：怪物血量在上一回合数值的基础上翻 4 倍（复合）。 */
-  hpQuadFrom: 15, hpQuadMul: 4,
+  /** 从第 14 回合起：怪物血量在上一回合数值的基础上翻倍（复合）。 */
+  hpDoubleFrom: 14, hpDoubleMul: 2,
   /** 无限回合下休整期 / 作战时限的每回合增量与上限（真实秒）。 */
   prepTimeStep: 10, prepTimeCap: 300,
   combatTimeStep: 10, combatTimeCap: 240,
@@ -38,11 +38,13 @@ export const RULES = Object.freeze({
   bossRound: 20, bossHp: 1_000_000_000, bossTimeLimitSec: 120,
   /** 骰子出怪：每一波从「全部怪物」里随机抽。 */
   rollWaves: true,
+  /** 无限回合：一局一直进行到没人存活（配合第 20 回合的强制首领战，实际在首领战后收尾）。 */
+  endless: true,
   /**
-   * 骰子加权：第 1–`rollWaveEarlyRounds` 回合只出**低难度**的怪（属性强度 ≤ 全部怪物的 `rollWaveLowShare` 分位），
-   * 之后全开。`rollWaveMidShare` 是「中等」的门槛（分位），保留给需要分档时用。
+   * 出怪：**第 1–13 回合完全按官方规则**（派系 / 回合表原样），第 `rollWaveFrom` 回合起才掷骰子，且**所有怪物**都可能出现
+   * （`rollWaveEarlyRounds: 0` = 不设低难度门槛；这两个分位保留给需要分档时用）。
    */
-  rollWaveEarlyRounds: 8, rollWaveLowShare: 0.4, rollWaveMidShare: 0.7,
+  rollWaveFrom: 14, rollWaveEarlyRounds: 0, rollWaveLowShare: 0.4, rollWaveMidShare: 0.7,
   /** 扣血加钱：花费多少血、换多少钱。 */
   bloodMoneyCost: 3, bloodMoneyGain: 1,
   /** 卡池：每名干员的上限放大倍数（概率不变，只把上限加大）。 */

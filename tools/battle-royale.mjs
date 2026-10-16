@@ -19,8 +19,8 @@ function status() {
   console.log(`  本服名称：${RULES.name}`);
   console.log(`  血量上限：${RULES.startLp}（所有策略 / 所有玩家）`);
   console.log(`  回合扣血上限：${on ? '已开启 · 一回合最多扣 10 点血' : '已关闭 · 扣血无限制'}`);
-  console.log(`  出怪：掷骰子（每一波从全部怪物里随机抽）；前 ${RULES.rollWaveEarlyRounds} 回合只出「低难度」（属性强度 ≤ 全部怪物的 ${Math.round(RULES.rollWaveLowShare * 100)}% 分位），第 ${RULES.rollWaveEarlyRounds + 1} 回合起全开`);
-  console.log(`  怪物倍率：第 1–13 回合官方表，第 14 回合按比例，第 15 回合起血量每回合翻四倍`);
+  console.log(`  出怪：第 1–${RULES.rollWaveFrom - 1} 回合完全按官方规则，第 ${RULES.rollWaveFrom} 回合起掷骰子（全部怪物）`);
+  console.log(`  怪物倍率：第 1–13 回合官方表；第 14 回合起**每回合翻一倍**`);
   console.log(`  首领战：第 ${RULES.bossRound} 回合强制进入，领袖血量 ${RULES.bossHp}，限时 ${RULES.bossTimeLimitSec} 秒，打完即结束这一把`);
   console.log(`  扣血加钱：${RULES.bloodMoneyCost} 滴血换 ${RULES.bloodMoneyGain} 资金（低于 ${RULES.bloodMoneyCost} 滴不能用，刚好 ${RULES.bloodMoneyCost} 滴用完当场淘汰）`);
   console.log(`  卡池：角色无限张（概率不变，上限 ×${RULES.poolCapMultiplier}）；装备：无限量供应，无共享库存上限`);

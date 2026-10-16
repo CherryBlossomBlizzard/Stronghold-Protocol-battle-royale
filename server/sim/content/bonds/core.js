@@ -689,7 +689,7 @@ export function install(battle) {
  * milestones crossed while it was inactive ("无需激活" sources such as 烛煌) are paid the next time a hook sees it active
  * (research 02 §3.3 / §8 Q7: the payout counts layers added while inactive) — same rule as 远见 / 奇迹 (addon/meta.js).
  */
-export function payHammers(ctx) {
+export function payHammers(ctx, { handOnly = false } = {}) {
   if (!ctx.bondActive('victoriaShip')) return 0;
   const p = S.buffParams(ctx.data?.bonds?.victoriaShip ?? S.bondRecord('victoriaShip'), VICTORIA_REWARD_KEY);
   const step = Math.floor(num(p?.layer, 0));
@@ -703,11 +703,30 @@ export function payHammers(ctx) {
     const paid = ctx.counter(VICTORIA_COUNTER);
     if (paid >= due) break;
     ctx.setCounter(VICTORIA_COUNTER, paid + 1);
+    let ok = false;
+    // 晚霞大逃杀比赛服修复（见 MODIFICATIONS.md）：手牌 + 临时整备区都满、又没有同名普通装备可以就地合成时，
+    // 「发出去」只会被执行成「已销毁」并把这一档吃掉 —— 所以这里干脆不尝试，把里程碑留着，等腾出位置再补发。
+    const handRoom = () => (typeof ctx.hand === 'function' ? ctx.hand().filter((x) => !x).length : 1);
+    const room = () => handRoom() + (typeof ctx.temp === 'function' ? ctx.temp().filter((x) => !x).length : 0);
+    const mergePartner = (id) => {
+      const same = (p2) => !!p2 && p2.kind === 'item' && p2.id === id;
+      return (typeof ctx.hand === 'function' && ctx.hand().some(same)) || (typeof ctx.temp === 'function' && ctx.temp().some(same));
+    };
     for (let i = 0; i < count; i++) {
       const id = ctx.rollItem({ pool: p.pool });
+      // 休整期结束时（handOnly）只发进手牌：临时整备区会在本休整期结束被自动处理，发到那里等于凭空销毁。
+      if (id && (handOnly ? handRoom() : room()) <= 0 && !mergePartner(id)) break;
       // onPrepEnd: grantItem stows this and does not merge until the next prep start, so a second copy does not
       // take an equipped hammer off for the fight (effectsMeta _deferItemMerge). [ASSUMED] every item that hook grants.
-      if (id && ctx.grantItem(id, { source: 'bond:victoriaShip' })) granted++;
+      if (id && ctx.grantItem(id, { source: 'bond:victoriaShip' })) { granted++; ok = true; }
+    }
+    // 一件都没发出去（没位置 / 抽不到可用装备）→ 把这一档退回去，里程碑继续欠着，
+    // 等下一次钩子（回合开始 / 休整期 / 购买 / 合成 …）腾出位置再补发。
+    if (!ok) {
+      ctx.setCounter(VICTORIA_COUNTER, paid);
+      // 手牌与临时整备区都满、又没有同名装备可合成 → 这一档继续欠着，明确告诉玩家什么时候会补发，别让他以为丢了。
+      if (typeof ctx.toast === 'function') ctx.toast(msg('【维多利亚】整备区与临时整备区都满了，第{n}件维式重锤会在腾出位置后补发', { n: paid + 1 }), 'info');
+      break;
     }
   }
   if (granted && typeof ctx.toast === 'function') ctx.toast(msg('【维多利亚】获得{n}件维式重锤', { n: granted }), 'info');
@@ -725,7 +744,10 @@ export function registerMeta(registry) {
     handler[hook] = function hammers(ctx, ev) {
       if (before) before.call(this, ctx, ev);
       if (hook === 'onLayers' && !(ev && ev.bondId === 'victoriaShip')) return;
-      payHammers(ctx);
+      // 修复（「维多利亚有概率不发锤子」）：只有「休整期结束」这一钩子必须发进手牌 —— 那一刻临时整备区马上会被
+      // 自动处理，发进去等于弄丢。其余钩子（回合开始 / 购买 / 合成 / 卖出 / 获得 …）允许先进临时整备区：
+      // 临时整备区有东西时「准备就绪」会被拦住并提示处理，所以不会被偷偷销毁。这样手牌满的时候也不会一直欠着。
+      payHammers(ctx, { handOnly: hook === 'onPrepEnd' });
     };
   }
   registry.bond('victoriaShip', handler);

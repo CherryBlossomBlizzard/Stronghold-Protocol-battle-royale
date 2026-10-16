@@ -252,31 +252,20 @@ function monsterPools(gd) {
     (fly ? (elite ? all.flyElite : all.flyNormal) : (elite ? all.elite : all.normal)).push({ key, power });
     all.special.push({ key, power });
   }
-  // 分档门槛：低难度 = 属性强度 ≤ 全部怪物的 RULES.rollWaveLowShare 分位；中等 = ≤ RULES.rollWaveMidShare 分位。
-  // 前 RULES.rollWaveEarlyRounds 回合只用**低难度**那一档，之后全开 —— 骰子仍然随机，只是前期不会掷出高难度的怪。
-  powers.sort((a, b) => a - b);
-  const pct = (q) => (powers.length ? powers[Math.min(powers.length - 1, Math.max(0, Math.floor(powers.length * q)))] : Infinity);
-  const lowCap = pct(RULES.rollWaveLowShare);
-  const midCap = pct(RULES.rollWaveMidShare);
-  const pools = { lowCap, midCap, earlyRounds: RULES.rollWaveEarlyRounds, lowShare: RULES.rollWaveLowShare, midShare: RULES.rollWaveMidShare,
-    lowKept: powers.filter((x) => x <= lowCap).length, midKept: powers.filter((x) => x <= midCap).length, total: powers.length };
+  // 第 1–13 回合完全走官方规则，这里只给「第 14 回合起」的骰子用：**全部怪物**都进池子，不做难度分档。
+  const pools = { from: RULES.rollWaveFrom, total: powers.length };
   for (const cls of Object.keys(all)) {
     const asc = all[cls].slice().sort((a, b) => a.power - b.power || (a.key < b.key ? -1 : 1));
-    pools[cls] = {
-      all: asc.map((x) => x.key),
-      low: asc.filter((x) => x.power <= lowCap).map((x) => x.key),
-      mid: asc.filter((x) => x.power <= midCap).map((x) => x.key),
-      maxPower: asc.length ? asc[asc.length - 1].power : 0,
-    };
+    pools[cls] = { all: asc.map((x) => x.key), maxPower: asc.length ? asc[asc.length - 1].power : 0 };
   }
   MONSTER_POOLS.set(gd, pools);
   return pools;
 }
 
 /** 这一回合的候选池：第 1–N 回合只给「中等及以下」（该类别为空时退回整组）。 */
-function diceList(pools, cls, round) {
-  const slot = pools[cls] || { all: [], low: [], mid: [] };
-  if (round <= pools.earlyRounds) return slot.low.length ? slot.low : (slot.mid.length ? slot.mid : slot.all);
+/** 骰子候选池：只从第 14 回合起使用，对全部怪物开放。 */
+function diceList(pools, cls) {
+  const slot = pools[cls] || { all: [] };
   return slot.all;
 }
 
@@ -289,7 +278,7 @@ function rollOne(rng, list) {
 /** 卫戍协议：盟约 · 大逃杀：这一波的敌人组合（形状与官方 pick 一致，另带飞行字段）。 */
 export function rollWavePick(gd, rng, round) {
   const p = monsterPools(gd);
-  const draw = (cls) => rollOne(rng, diceList(p, cls, round));
+  const draw = (cls) => rollOne(rng, diceList(p, cls));
   const half = round <= firstHalfMax(gd);
   return {
     round, type: 'DICE', firstHalf: half,
@@ -298,13 +287,14 @@ export function rollWavePick(gd, rng, round) {
     elite: draw('elite') || draw('special'),
     flyNormal: draw('flyNormal') || draw('special'),
     flyElite: draw('flyElite') || draw('special'),
-    fly: false, dice: true, diceEarly: round <= p.earlyRounds, diceCap: round <= p.earlyRounds ? p.lowCap : Infinity,
+    fly: false, dice: true, diceFrom: p.from,
   };
 }
 
 export function roundPick(gd, rng, factionsOrSetup, round) {
   // 卫戍协议：盟约 · 大逃杀：出怪掷骰子 —— 不从官方的派系/回合表里挑，而是从全部怪物里随机抽
-  if (gd.rollWaves) return rollWavePick(gd, rng, round);
+  // 晚霞大逃杀比赛服：第 1–13 回合走官方那套（派系 / 回合表原样），第 RULES.rollWaveFrom 回合起才掷骰子
+  if (gd.rollWaves && round >= RULES.rollWaveFrom) return rollWavePick(gd, rng, round);
   const src = factionsOrSetup;
   const picks = src && !Array.isArray(src) && Array.isArray(src.picks) ? src.picks : (src && src.schedule && Array.isArray(src.schedule.picks) ? src.schedule.picks : null);
   if (picks) {
