@@ -430,7 +430,11 @@ function templateSpawns(gd, tpl, round, pick) {
       preview: previewInfo(gd, key, routes[routeIndex], isBoss, leader),
     };
     if (tag) spec.tag = tag;
-    if (s.unharmful || isPart) spec.countInTotal = false;
+    // 卫戍协议：盟约 · 大逃杀：**正常回合里刷出来的 boss / 领袖漏掉不扣玩家血量** —— `countInTotal: false` 让这次
+    // 漏怪不计入扣血（也不破坏「完美作战」），战斗本身照常（血量 / 攻击仍按本回合倍率）。首领战（领袖模板）的 LP 走
+    // 首领池 / b.progress 那条路，不受这里影响；`fields.js` 的客户端校验也只要求这种漏怪出现在 uncountedKeys 里。
+    const leaderLike = isBoss || (() => { const rec = gd.enemy(key); return !!rec && (rec.rank === 'BOSS' || !!gd.boss(key)); })();
+    if (s.unharmful || isPart || leaderLike) spec.countInTotal = false;
     spawns.push(spec);
     // client ShouldActionUpToServer: valid, not the leader, no randomSpawnGroupKey — only those units are in the list a
     // bounty is inserted into (the others spawn locally on their own timing)

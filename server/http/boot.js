@@ -67,8 +67,8 @@ export function isProcessEntry(metaUrl) {
 /** Print the boot banner of a started server. @param {{ url: string, host: string, port: number }} srv */
 export function printBanner(srv) {
   console.log(`\n  卫戍协议：盟约 · Stronghold Protocol: Alliance v${APP_VERSION}`);
-  console.log(`  ${SERVER_NAME} · 定制规则：血量 30 / 卡池角色无限张 / 装备无限量 / 无联防 / 出怪掷骰子`
-  + ` / 第 15 回合起血量 ×4 / 第 ${BR_BANNER.bossRound} 回合首领战（十亿血 · 限时 ${BR_BANNER.bossTimeLimitSec} 秒）`);
+  console.log(`  ${SERVER_NAME} · 定制规则：血量 30 / 卡池角色无限张 / 装备无限量 / 无联防 / 出怪掷骰子（第 14 回合起）`
+  + ` / 第 14 回合起血量每回合翻倍 / 第 ${BR_BANNER.bossRound} 回合首领战（十亿血 · 限时 ${BR_BANNER.bossTimeLimitSec} 秒）`);
   if (DEV_BUILD) console.log('  ! 开发版（dev 分支）：不稳定，请勿用于公开服务器 · development build — unstable, not for public servers');
   console.log(`  Local:   ${srv.url}`);
   if (srv.host === '0.0.0.0' || srv.host === '::') {
