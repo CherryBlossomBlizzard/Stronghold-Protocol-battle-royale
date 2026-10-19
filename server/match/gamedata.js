@@ -548,6 +548,22 @@ export class GameData {
     const d = this.config.dp && typeof this.config.dp === 'object' ? this.config.dp : {};
     return { dpInit: numOr(d.init, 10), dpPerSec: numOr(d.perSec, 1), dpMax: numOr(d.max, 99) };
   }
+
+  /**
+   * 卫戍协议：盟约 · 大逃杀：这一局每一块战场都要带的 `battle.flags` —— DP 经济值 + 本服的两条规则开关：
+   *   * `bossHitLimit: false` 关掉官方的限伤（打十亿血的首领用，server/sim/damage.js leaderHitCancelled）；
+   *   * `timesHpBonus: false` 让次数怪（频次器物）不吃回合血量加成，次数用数据原值
+   *     （server/sim/content/enemies/archetypes.js `times`）。
+   * 两个开关都从 RULES 读，规格里带过去，所以服务端和浏览器跑同一份战斗时行为一致；工具与 golden 不经过这里，
+   * 保持上游默认（限伤开、次数吃加成）。
+   */
+  get battleFlags() {
+    return {
+      ...this.dp,
+      ...(RULES.bossHitLimit ? {} : { bossHitLimit: false }),
+      ...(RULES.timesHpBonus ? {} : { timesHpBonus: false }),
+    };
+  }
   get unite() {
     const u = this.config.unite && typeof this.config.unite === 'object' ? this.config.unite : {};
     return {
