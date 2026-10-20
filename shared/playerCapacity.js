@@ -13,10 +13,30 @@ import { BASE_SEATS, MAX_SEATS, MAX_DRAFT_CARDS } from './constants.js';
 
 export const MIN_COOP_DRAFT_CARDS = 6;
 export const DRAFT_SPARE_CARDS = 2;
-/** 7 人起分池（6 人及以下仍是一个共享池） */
-export const GROUPED_POOL_MIN_PLAYERS = 7;
-/** 8 人起一局可以联防两轮 */
-export const SECOND_UNITE_MIN_PLAYERS = 8;
+/**
+ * 固定分组表（维护者确认）：6 人起按座位依次切分。3/4 人的组保留完整官方池，只有 5 人的组放大副本数。
+ * 每一项都是新数组，调用方改不动下一次对局。
+ */
+const POOL_GROUP_LAYOUTS = Object.freeze({
+  6: Object.freeze([3, 3]),
+  7: Object.freeze([4, 3]),
+  8: Object.freeze([4, 4]),
+  9: Object.freeze([4, 5]),
+  10: Object.freeze([4, 3, 3]),
+  11: Object.freeze([4, 4, 3]),
+  12: Object.freeze([4, 4, 4]),
+  13: Object.freeze([5, 4, 4]),
+  14: Object.freeze([4, 4, 3, 3]),
+  15: Object.freeze([4, 4, 4, 3]),
+  16: Object.freeze([4, 4, 4, 4]),
+  17: Object.freeze([5, 4, 4, 4]),
+  18: Object.freeze([4, 4, 4, 3, 3]),
+  19: Object.freeze([4, 4, 4, 4, 3]),
+  20: Object.freeze([4, 4, 4, 4, 4]),
+});
+/** 6 人起分池（1–5 人仍是一个共享池，见 POOL_GROUP_LAYOUTS） */
+export const GROUPED_POOL_MIN_PLAYERS = 6;
+/** 联防一局最多几名帮手（每轮 2 名，跨轮不重复） */
 export const MAX_UNITE_HELPERS = 4;
 
 /** 这一轮选牌发几张：本局存活人数 + DRAFT_SPARE_CARDS，夹在 [MIN_COOP_DRAFT_CARDS, MAX_DRAFT_CARDS]。 */
@@ -25,23 +45,23 @@ export function coopDraftCardCount(players) {
 }
 
 /**
- * 按座位排序的分组人数：7 人起分成 ceil(n / 4) 组、人数尽量均分（5 人 → [5]，9 人 → [5, 4]，20 人 → [5, 5, 5, 5]）。
- * 人数非法时抛 RangeError —— 调用方拿到的永远是能直接 slice 的整数数组。
+ * 按座位排序的分组人数：1–5 人共用一个池；6 人起使用固定的分组表（3/4/5 人的组合，由维护者确认）——
+ * 7 人 4+3、8 人 4+4、9 人 4+5、10 人 4+3+3、16 人 4×4、20 人 4×5。人数非法时抛 RangeError。
  */
 export function poolGroupSizes(players) {
   if (!Number.isInteger(players) || players < 1 || players > MAX_SEATS) throw new RangeError('invalid player count');
   if (players < GROUPED_POOL_MIN_PLAYERS) return [players];
-  const groups = Math.ceil(players / BASE_SEATS);
-  const size = Math.floor(players / groups);
-  const extra = players % groups;
-  return Array.from({ length: groups }, (_, i) => size + (i < extra ? 1 : 0));
+  return POOL_GROUP_LAYOUTS[players].slice();
 }
 
-/** 池子副本数的放大倍数：四人及以下的组用完整的官方副本，5/6 人的共享池按人数等比放大。 */
+/** 池子副本数的放大倍数：四人及以下的组用完整的官方副本，五人组的共享池按人数放大（×1.25）。 */
 export const poolCopyScale = (groupSize) => Math.max(1, groupSize / BASE_SEATS);
 
-/** 一局能联防几轮：8 人起两轮，否则一轮。 */
-export const uniteRoundLimit = (livingPlayers) => (livingPlayers >= SECOND_UNITE_MIN_PLAYERS ? 2 : 1);
+/**
+ * 一局最多联防几轮 = 开局的固定卡池组数（1–5 轮），所以 4 人及以下永远只有 1 轮，20 人最多 5 轮。
+ * 参数是「组数」，不是人数（Match.poolGroups.length）。
+ */
+export const uniteRoundLimit = (groups) => Math.max(1, Math.min(5, Math.trunc(groups || 1)));
 
 /** 隐秘核心的解锁门槛：四人的基线按「人数 / 4」等比放大（8 人房要两倍的层数）。 */
 export const coopHiddenLayerThreshold = (baseline, players) => Math.ceil(baseline * Math.max(1, players / BASE_SEATS));

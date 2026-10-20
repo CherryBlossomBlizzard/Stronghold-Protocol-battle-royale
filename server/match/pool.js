@@ -93,9 +93,12 @@ export class SharedPool {
     this.entries = new Map();
     for (const id of gd.visibleChess) {
       if (ban.has(id)) continue;
-      const cap = Math.ceil(gd.poolCopies(id) * this.scale);
+      const tier = gd.tierOf(id);
+      const scaled = gd.poolCopies(id) * this.scale;
+      // 五人组（×1.25）的 III 阶取 22 而不是把 18 × 1.25 向上取成 23（维护者确认）；其余品阶向上取整
+      const cap = this.scale === poolCopyScale(5) && tier === 3 ? Math.floor(scaled) : Math.ceil(scaled);
       if (cap <= 0) continue;
-      this.entries.set(id, { cap, left: cap, tier: gd.tierOf(id) });
+      this.entries.set(id, { cap, left: cap, tier });
     }
     this.banned = [...ban].sort();
   }

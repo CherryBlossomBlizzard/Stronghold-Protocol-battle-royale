@@ -5,7 +5,7 @@
 
 import { PHASE, GEO } from '../../../shared/constants.js';
 import { deriveSeed } from '../../sim/rng.js';
-import { uniteBattleOpts, uniteSurvivors } from '../unite.js';
+import { uniteBattleOpts, uniteSurvivors, nextUnitePlan } from '../unite.js';
 import { FieldRunner, timelineAt, uniteBillBounds } from '../fields.js';
 import { uniteLeft } from '../../sim/spec.js';
 import { FLOW_TICKER_PRIORITY, DELAYS } from './common.js';
@@ -35,7 +35,7 @@ export class MatchUnite {
         this.fields[0].live = false;
         this.deadline = 0;
         this.markPublic();
-        this.later(this.scaled(DELAYS.COMBAT_END), () => this.settle(plan, res));
+        this.later(this.scaled(DELAYS.COMBAT_END), () => this._afterUniteWave(plan, res));
       },
     });
     this.runner.start();
@@ -96,7 +96,19 @@ export class MatchUnite {
     this.deadline = 0;
     this.markPublic();
     const plan = this.unitePlan;
-    this.later(this.scaled(DELAYS.COMBAT_END), () => this.settle(plan, res));
+    this.later(this.scaled(DELAYS.COMBAT_END), () => this._afterUniteWave(plan, res));
+  }
+
+  /**
+   * 卫戍协议 · 20 人房（龙千尘）: a wave per pool group of the match (at most five, two helpers each, none reused).
+   * Run the next unused pair only while enemies remain; otherwise settle every completed wave at once. A match with a
+   * single pool (4 players or fewer) always has exactly one wave, so this settles straight away.
+   */
+  _afterUniteWave(plan, result) {
+    if (this.phase !== PHASE.UNITE || this.unitePlan !== plan) return;
+    const next = nextUnitePlan(plan, result);
+    if (next) this.startUnite(next);
+    else this.settle(plan, result);
   }
 
   /**
