@@ -162,7 +162,7 @@
 //     a player seat (the seat is kept and given back on resume).
 
 import { randomBytes, randomInt } from 'node:crypto';
-import { DIFFICULTIES, ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
+import { DIFFICULTIES, ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor, ROOM_CAPACITIES, DEFAULT_SEATS } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks, charPotentialChanges, checkSkinSelection, operatorCharIds } from '../shared/protocol.js';
 import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
 import { getData as defaultGetData, lookup } from './data.js';
@@ -262,13 +262,22 @@ function freezeSkins(skins, hasOperator) {
   return Object.freeze({ ...res.skins });
 }
 
-/** One room: 4 seat slots, host, difficulty, optional running match. */
+/** One room: up to MAX_SEATS (20) seat slots, host, difficulty, optional running match. */
 export class Room {
-  /** @param {string} code @param {'solo'|'coop'} mode @param {string} difficulty @param {number} now */
-  constructor(code, mode, difficulty, now) {
+  /**
+   * @param {string} code @param {'solo'|'coop'} mode @param {string} difficulty @param {number} now
+   * @param {number} [capacity] co-op seats (ROOM_CAPACITIES; 龙千尘's 20-player branch), DEFAULT_SEATS for a new co-op room
+   */
+  constructor(code, mode, difficulty, now, capacity = mode === 'solo' ? 1 : DEFAULT_SEATS) {
     this.code = code;
     this.mode = mode;
     this.difficulty = difficulty;
+    /**
+     * 卫戍协议 · 20 人房（龙千尘 feat/IncreasePlayerCapacity）: co-op seat capacity, one of ROOM_CAPACITIES
+     * (room.setCapacity, host only, LOBBY phase). A solo room holds exactly one. The match's pool groups, draft cards,
+     * 联防 rounds and hidden-core threshold follow it (shared/playerCapacity.js).
+     */
+    this.capacity = mode === 'solo' ? 1 : (ROOM_CAPACITIES.includes(capacity) ? capacity : DEFAULT_SEATS);
     /**
      * 「AI 队友最后选择」 (room.setAiPicksLast, GitHub #338; co-op only, off by default): the match's strategy and 机变 drafts
      * put every human seat before every AI seat (Match opts.aiPicksLast). Kept across the room's matches.
@@ -328,11 +337,20 @@ export class Room {
   /** @param {string} playerId @returns {{ playerId: string, name: string, connected: boolean } | null} */
   spectatorOf(playerId) { return this.spectators.find((s) => s.playerId === playerId) || null; }
 
-  /** Lowest free seat index, or -1. */
-  freeSeat() { return this.seats.indexOf(null); }
+  /**
+   * The seat slots this room actually uses (龙千尘's 20-player branch): `seats` keeps MAX_SEATS slots so a capacity change
+   * never re-indexes an occupied seat, but a room of 4 holds 4 players. `capacity` is the co-op size (1 in solo).
+   */
+  seatLimit() { return this.capacity; }
+
+  /** Lowest free seat index below the room's capacity, or -1 when the room is full. */
+  freeSeat() {
+    for (let i = 0; i < this.seatLimit(); i++) if (this.seats[i] == null) return i;
+    return -1;
+  }
 
   /** Humans that have not departed, in seat order. @returns {Seat[]} */
-  activeHumans() { return this.seats.filter((s) => s && !s.isBot && !s.left); }
+  activeHumans() { return this.seats.slice(0, this.seatLimit()).filter((s) => s && !s.isBot && !s.left); }
 
   /** `room.state` frame (DESIGN §8.1) plus `inMatch`. */
   toState() {
@@ -343,8 +361,10 @@ export class Room {
       mode: this.mode,
       difficulty: this.difficulty,
       aiPicksLast: this.aiPicksLast,
+      // 龙千尘 20 人房: the co-op seat count this room holds (a solo room: 1); the seats array below is cut to it
+      capacity: this.capacity,
       inMatch: !!this.match,
-      seats: this.seats.map((s) => (s
+      seats: this.seats.slice(0, this.seatLimit()).map((s) => (s
         ? { seat: s.seat, playerId: s.playerId, name: s.name, isBot: s.isBot, ready: s.ready, connected: s.connected && !s.left,
           // a room with gameplay plugins (header "Gameplay plugins"): has this player's page loaded and checked its content?
           ...(this.modded && !s.isBot ? { content: s.content || 'loading' } : {}) }
@@ -641,6 +661,7 @@ export class Lobby {
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
+      case 'room.setCapacity': return this.setCapacity(session, msg);
       case 'room.addBot': return this.addBot(session);
       case 'room.removeBot': return this.removeBot(session, msg);
       case 'room.kick': return this.kick(session, msg);
@@ -725,9 +746,11 @@ export class Lobby {
   // room.* handlers
   // ---------------------------------------------------------------------------------------------------
 
-  create(session, { mode, difficulty, test } = {}) {
+  create(session, { mode, difficulty, test, capacity } = {}) {
     // A test room exists only when the process switch allowed it. The check runs before the room is built.
     if (test === true && this.testEnabled !== true) return fail(ERR.TEST_DISABLED);
+    // 龙千尘 20 人房: the room's co-op size — one of ROOM_CAPACITIES, DEFAULT_SEATS when omitted; a solo room is always 1
+    if (capacity !== undefined && mode !== 'solo' && !ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
     const cur = this.roomOf(session);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     if (this.rooms.size >= this.opts.maxRooms) return fail(ERR.INTERNAL, 'too many rooms');
@@ -743,7 +766,7 @@ export class Lobby {
     const code = this.genCode();
     if (!code) return fail(ERR.INTERNAL, 'no room code available');
     if (cur) this.removeMember(cur, session.playerId);
-    const room = new Room(code, mode, difficulty, this.now());
+    const room = new Room(code, mode, difficulty, this.now(), capacity);
     room.test = test === true;
     room.content = this.vanilla;
     // the server owner's default plugins (plugins/config.json `default`; header "Gameplay plugins"): none — the original game
@@ -884,6 +907,29 @@ export class Lobby {
     if (room.aiPicksLast !== on) {
       room.aiPicksLast = on;
       for (const s of room.seats) if (s && !s.isBot && s.playerId !== room.hostId) s.ready = false;
+      this.broadcastState(room);
+    }
+    return OK;
+  }
+
+  /**
+   * 龙千尘 20 人房: `room.setCapacity` — host only, before the match, co-op rooms only (a solo room holds one player).
+   * Growing the room only adds free seats. Shrinking is refused while a seat at or above the new size is taken, so no
+   * member is ever dropped by a capacity change; when it does apply, the members keep their ready state (the seats and
+   * their players are untouched — only the usable range shrinks). No rng is drawn.
+   */
+  setCapacity(session, { capacity }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (room.mode === 'solo') return fail(ERR.BAD_TARGET, 'solo rooms hold one player');
+    if (!ROOM_CAPACITIES.includes(capacity)) return fail(ERR.BAD_MSG, 'invalid capacity');
+    if (capacity < room.capacity) {
+      for (let i = capacity; i < room.seats.length; i++) if (room.seats[i]) return fail(ERR.BAD_TARGET, 'seats above the new capacity are taken');
+    }
+    if (room.capacity !== capacity) {
+      room.capacity = capacity;
       this.broadcastState(room);
     }
     return OK;

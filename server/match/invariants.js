@@ -40,7 +40,11 @@ export function collectViolations(m, { limit = 25 } = {}) {
   const out = [];
   const fail = (msg) => { if (out.length < limit) out.push(msg); };
   const gd = m.gd;
+  // 卫戍协议 · 20 人房（龙千尘）: copies are held against the POOL GROUP the seat draws from (Match.poolGroups): one
+  // shared pool for 1–6 players, one per group of at most BASE_SEATS above that. `held` = the match-wide total (only
+  // meaningful with a single group), `heldByPool` = per pool's SharedPool instance.
   const held = new Map();
+  const heldByPool = new Map();
   const uids = new Set();
   const banned = new Set(m.bannedChess || []);
   const note = (ps, p) => {
@@ -114,8 +118,14 @@ export function collectViolations(m, { limit = 25 } = {}) {
         const maxCopies = rec.isGolden ? gd.goldenCopies : 1;
         if (!Number.isInteger(p.poolCopies) || p.poolCopies < 0 || p.poolCopies > maxCopies) fail(`${id}: ${p.id} holds ${p.poolCopies} copies`);
         const base = gd.baseIdOf(p.id);
-        const tally = rec.isDiy ? diyHeld : held;
-        tally.set(base, (tally.get(base) || 0) + (p.poolCopies || 0));
+        if (rec.isDiy) diyHeld.set(base, (diyHeld.get(base) || 0) + (p.poolCopies || 0));
+        else {
+          held.set(base, (held.get(base) || 0) + (p.poolCopies || 0));
+          const pool = ps.pool || m.pool;
+          if (!heldByPool.has(pool)) heldByPool.set(pool, new Map());
+          const g = heldByPool.get(pool);
+          g.set(base, (g.get(base) || 0) + (p.poolCopies || 0));
+        }
       } else if (p.kind === 'item') {
         if (!gd.item(p.id)) fail(`${id}: unknown item ${p.id}`);
         countItem(p);
@@ -199,13 +209,17 @@ export function collectViolations(m, { limit = 25 } = {}) {
     for (const [base, n] of diyHeld) if (!(ps.diyStock && ps.diyStock.has(base)) && n !== 0) fail(`${id}: 自选 slot ${base} without stock holds ${n} copies`);
   }
 
-  // shared pool accounting
-  for (const [base, e] of m.pool.entries) {
-    if (!(Number.isInteger(e.left) && e.left <= e.cap)) fail(`pool ${base}: balance ${e.left} cap ${e.cap}`);
-    const h = held.get(base) || 0;
-    if (e.left + h !== e.cap) fail(`pool ${base}: left ${e.left} + held ${h} != cap ${e.cap}`);
+  // shared pool accounting — per POOL GROUP (20 人房: a match may run several pools, one per group of seats)
+  for (const pool of (m.poolGroups ? m.poolGroups.map((g) => g.pool) : [m.pool])) {
+    const mine = heldByPool.get(pool) || new Map();
+    for (const [base, e] of pool.entries) {
+      if (!(Number.isInteger(e.left) && e.left <= e.cap)) fail(`pool ${base}: balance ${e.left} cap ${e.cap}`);
+      const h = mine.get(base) || 0;
+      if (e.left + h !== e.cap) fail(`pool ${base}: left ${e.left} + held ${h} != cap ${e.cap}`);
+    }
+    for (const [base, n] of mine) if (!pool.has(base) && n !== 0) fail(`non-pool chess ${base} holds ${n} copies`);
   }
-  for (const [base, n] of held) if (!m.pool.has(base) && n !== 0) fail(`non-pool chess ${base} holds ${n} copies`);
+  if (!m.poolGroups) for (const [base, n] of held) if (!m.pool.has(base) && n !== 0) fail(`non-pool chess ${base} holds ${n} copies`);
 
   // Displayed shop cards and item rewards may overdraw; itemPool.debt is that overage (#624). Fixed gift families
   // may overdraw without a debt entry. debt > over is always a missed repay or a debt recorded for a piece not kept.

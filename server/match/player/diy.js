@@ -207,9 +207,10 @@ export class PlayerDiy {
     return { stock, banned: Object.freeze(banned) };
   }
 
-  /** The copy accounting of base chess `baseId` for this player: its own stock for a slotted DIY slot, else the shared pool. */
+  /** The copy accounting of base chess `baseId` for this player: its own stock for a slotted DIY slot, else the shared pool
+   * (its pool group's, Match.poolGroups — the official stock for four players or fewer). */
   poolOf(baseId) {
-    return this.diyStock && this.diyStock.has(baseId) ? this.diyStock : this.m.pool;
+    return this.diyStock && this.diyStock.has(baseId) ? this.diyStock : this.pool;
   }
 
   /**

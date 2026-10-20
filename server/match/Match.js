@@ -211,7 +211,7 @@ import { DataSource } from '../sim/simdata.js';
 import { createRng, deriveSeed } from '../sim/rng.js';
 import { GameData } from './gamedata.js';
 import { RealScheduler } from './scheduler.js';
-import { SharedPool, SharedItemPool, drawDisabledBonds } from './pool.js';
+import { SharedItemPool, drawDisabledBonds, createPoolGroups } from './pool.js';
 import { PlayerState } from './PlayerState.js';
 import { EffectDispatcher, getDefaultRegistry } from './effectsMeta.js';
 import { setupMatchWaves } from './waves.js';
@@ -438,7 +438,13 @@ export class Match {
     this.disabledBonds = bans.drawn;
     this.staticInactiveBonds = bans.staticOff;
     this.bannedChess = bans.banned;
-    this.pool = new SharedPool(this.gd, { banned: bans.banned });
+    // 卫戍协议 · 20 人房（龙千尘）: one shared pool per pool group. 1–6 players = a single group = the official shared
+    // stock; 7+ split evenly into groups of at most BASE_SEATS by seat order (pool.js createPoolGroups).
+    this.poolGroups = createPoolGroups(this.gd, this.order, { banned: bans.banned });
+    /** playerId → the SharedPool that player draws from (PlayerState.pool) */
+    this.playerPools = new Map(this.poolGroups.flatMap((g) => g.playerIds.map((id) => [id, g.pool])));
+    /** the match-wide pool — the first group's: the diagnostics that read one pool (platform.js / infra.js) mean it */
+    this.pool = this.poolGroups[0].pool;
     this.itemPool = new SharedItemPool(this.gd, () => this.order);
     // 自选编队 (0.2.0): each human's slotted DIY pieces get their own stock — none for one whose bonds are all off this
     // match (player/diy.js initDiyStock); no randomness is drawn here

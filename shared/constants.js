@@ -18,7 +18,19 @@ export const DEV_BUILD = /-dev$/.test(APP_VERSION);
  */
 export const PLUGIN_API = Object.freeze({ current: 2, min: 1 });
 
-export const MAX_SEATS = 4;
+/**
+ * Room capacity (龙千尘's 20-player branch, feat/IncreasePlayerCapacity): four players stay the baseline for the
+ * economy and the leader HP pool; a co-op room may hold up to MAX_SEATS (humans + AI seats). `ROOM_CAPACITIES` are
+ * the sizes the lobby offers; `DEFAULT_SEATS` the one a new room starts with.
+ * The per-size rules (pool groups, draft cards, 联防 helpers, hidden-core layers) live in shared/playerCapacity.js.
+ */
+export const BASE_SEATS = 4;
+export const MAX_SEATS = 20;
+export const DEFAULT_SEATS = 8;
+export const ROOM_CAPACITIES = Object.freeze([4, 8, 10, 16, 20]);
+/** The strategy / 机变 draft hands out more cards the more seats a room holds (shared/playerCapacity.js
+ * coopDraftCardCount): one spare pair above the player count, within this ceiling. */
+export const MAX_DRAFT_CARDS = MAX_SEATS + 2;
 /**
  * Spectator seats of a co-op room (community report #26, owner's decision 2026-10-04) — a remake feature: the official
  * room has 1–4 players and no spectator seat (there only eliminated players and 联防 bystanders watch, research 09 §3.1).

@@ -24,6 +24,9 @@ function opsCharIds(raw) {
 
 export class PlayerBasics {
   get isHumanActive() { return !this.isBot && !this.left; }
+  /** 卫戍协议 · 20 人房（龙千尘）: the chess pool this seat draws from — its pool group's (Match.poolGroups), else the
+   * match-wide one. Every shop roll / copy return goes through here, so a group of 5/6 shares its own stock. */
+  get pool() { return (this.m.playerPools && this.m.playerPools.get(this.playerId)) || this.m.pool; }
   /** The engine acts for this seat (AI teammate or "AI 托管"; a departed human is eliminated, so nothing is left to do). */
   get botControlled() { return this.isBot || this.left || this.autoplay; }
 

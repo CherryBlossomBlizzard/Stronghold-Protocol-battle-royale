@@ -21,6 +21,8 @@
 // the promotion reward and random grants pass diyStockEntries (the roll's own tier, DESIGN §30.23). Weighted by its
 // copies like any chess, drawn by that player only.
 
+import { poolGroupSizes, poolCopyScale } from '../../shared/playerCapacity.js';
+
 /**
  * Per-match disabled bond set D and banned chess (research 01 A2): D = uniform sample of `core` core bonds and `addon`
  * add-on bonds among weight > 0 bonds that are active in the mode. A visible chess is banned iff every one of its
@@ -55,19 +57,43 @@ function sample(arr, n, rng) {
   return a.slice(0, Math.max(0, Math.min(n, a.length)));
 }
 
+/**
+ * 卫戍协议 · 20 人房（龙千尘 feat/IncreasePlayerCapacity）: the pool groups of a match, one shared pool each.
+ * Groups are cut by occupied seat order at match start and never reshuffled after eliminations
+ * (shared/playerCapacity.js poolGroupSizes): 1–6 players share one pool, 7+ split evenly into groups of at most
+ * BASE_SEATS; a group of 5/6 gets proportionally more copies of every chess (poolCopyScale), so four players or
+ * fewer see exactly the official stock.
+ * @param {import('./gamedata.js').GameData} gd
+ * @param {Array<{ seat: number, playerId: string }>} players
+ * @param {{ banned?: Iterable<string> }} [opts]
+ * @returns {Array<{ id: number, playerIds: string[], scale: number, pool: SharedPool }>}
+ */
+export function createPoolGroups(gd, players, opts = {}) {
+  const sorted = players.slice().sort((a, b) => a.seat - b.seat);
+  let offset = 0;
+  return poolGroupSizes(sorted.length).map((size, i) => {
+    const playerIds = sorted.slice(offset, offset + size).map((p) => p.playerId);
+    offset += size;
+    const scale = poolCopyScale(size);
+    return { id: i + 1, playerIds, scale, pool: new SharedPool(gd, { ...opts, scale }) };
+  });
+}
+
 export class SharedPool {
   /**
    * @param {import('./gamedata.js').GameData} gd
-   * @param {{ banned?: Iterable<string> }} [opts]
+   * @param {{ banned?: Iterable<string>, scale?: number }} [opts] `scale` multiplies every chess's copy count
+   *   (a pool group of 5/6 players); 1 = the official stock
    */
-  constructor(gd, { banned = [] } = {}) {
+  constructor(gd, { banned = [], scale = 1 } = {}) {
     this.gd = gd;
+    this.scale = Number.isFinite(scale) && scale > 0 ? scale : 1;
     const ban = new Set(banned);
     /** @type {Map<string, { cap: number, left: number, tier: number }>} */
     this.entries = new Map();
     for (const id of gd.visibleChess) {
       if (ban.has(id)) continue;
-      const cap = gd.poolCopies(id);
+      const cap = Math.ceil(gd.poolCopies(id) * this.scale);
       if (cap <= 0) continue;
       this.entries.set(id, { cap, left: cap, tier: gd.tierOf(id) });
     }
