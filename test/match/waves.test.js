@@ -139,7 +139,19 @@ test('normal waves: one pick per round, per-action counts 1–5, the other movem
         // every placeholder action of the pick's class is present, every other one skipped
         for (const [i, a] of tpl.spawns.entries()) {
           if (a.action || !PLACEHOLDERS.has(a.key)) continue;
-          const sameClass = w.pick.dice ? true : DATA.factions.generation.placeholders[a.key].fly === pick.fly;
+          const ph = DATA.factions.generation.placeholders[a.key];
+          let sameClass;
+          if (!w.pick.dice) {
+            sameClass = ph.fly === pick.fly;
+          } else {
+            // 卫戍协议：盟约 · 大逃杀：骰子回合里飞行槽只有 flySpawnChance 的概率真抽飞行怪；
+            // 抽到地面怪时该 action 因「槽位类别不符」被跳过（不刷、不预告），地面槽总是地面怪。
+            const field = ph.cls === 'special' ? (ph.fly ? 'flyKey' : 'key')
+              : ph.cls === 'elite' ? (ph.fly ? 'flyElite' : 'elite')
+                : (ph.fly ? 'flyNormal' : 'normal');
+            const chosen = w.pick[field];
+            sameClass = typeof chosen === 'string' ? fly(chosen) === ph.fly : false;
+          }
           assert.equal(w.spawns.some((s) => s.actionIndex === i), sameClass, `R${r} action ${i} (${a.slot})`);
           assert.equal(w.actions.find((x) => x.index === i).valid, sameClass);
         }

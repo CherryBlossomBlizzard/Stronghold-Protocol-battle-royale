@@ -160,7 +160,7 @@ export class GameData {
    * @returns {number}
    */
   bossPoolHp(bossId, aliveCount) {
-    // 卫戍协议：盟约 · 大逃杀：首领战血量固定（RULES.bossHp = 十亿），不再按存活人数缩放。
+    // 卫戍协议：盟约 · 大逃杀：首领战血量固定（RULES.bossHp = 五亿），不再按存活人数缩放。
     if (this.bossFixedHp) return this.bossFixedHp;
     const boss = this.boss(bossId);
     const diff = this.difficulty;
@@ -573,7 +573,7 @@ export class GameData {
   /** 掷骰子从第几回合开始：之前的回合按官方派系 / 波次表出怪（本服 = 第 14 回合起）。 */
   get rollWaveFrom() { return RULES.rollWaveFrom; }
 
-  /** 卫戍协议：盟约 · 大逃杀：首领战固定血量（十亿）；0 = 用官方按存活人数缩放的算法。 */
+  /** 卫戍协议：盟约 · 大逃杀：首领战固定血量（五亿）；0 = 用官方按存活人数缩放的算法。 */
   get bossFixedHp() { return RULES.bossHp > 0 ? RULES.bossHp : null; }
 
   /** 卫戍协议：盟约 · 大逃杀：回合数没有上限（第 13 回合之后继续普通回合，第 20 回合才进首领战）。 */
@@ -581,7 +581,7 @@ export class GameData {
 
   /**
    * 卫戍协议：盟约 · 大逃杀：这一局每一块战场都要带的 `battle.flags` —— DP 经济值 + 本服的两条规则开关：
-   *   * `bossHitLimit: false` 关掉官方的限伤（打十亿血的首领用，server/sim/damage.js leaderHitCancelled）；
+   *   * `bossHitLimit: false` 关掉官方的限伤（打五亿血的首领用，server/sim/damage.js leaderHitCancelled）；
    *   * `timesHpBonus: false` 让次数怪（频次器物）不吃回合血量加成，次数用数据原值
    *     （server/sim/content/enemies/archetypes.js `times`）。
    * 两个开关都从 RULES 读，随规格一起发给浏览器，所以服务端和浏览器跑同一份战斗时行为一致；

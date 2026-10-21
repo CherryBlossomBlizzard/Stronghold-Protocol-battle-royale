@@ -1,10 +1,11 @@
-// 卫戍协议：盟约 · 大逃杀：本服的两条战场规则（RULES.bossHitLimit / RULES.timesHpBonus，经 GameData.battleFlags
-// 写进每块战场的 specs.flags）+ 前 13 回合的官方出怪校验。
+// 卫戍协议：盟约 · 大逃杀：本服的战场规则（RULES，经 GameData.battleFlags 写进每块战场的 specs.flags）
+// + 前 13 回合的官方出怪校验。
 //
-//   1. 首领战关闭官方限伤：单次伤害 >= 300000 不再被整个抵消（打十亿血的首领用）；
+//   1. 首领战关闭官方限伤：单次伤害 >= 300000 不再被整个抵消（打五亿血的首领用）；
 //   2. 次数怪（频次器物）不吃回合血量加成：次数固定用数据原值；
 //   3. 第 1-13 回合 = 官方派系 / 回合表 + 官方数值表，一点没改；
-//   4. 第 14 回合起次数怪（频次器物）不再进波次，只以亡语形态（击杀后召唤 / 分裂）出现；首领本体也不进普通波次。
+//   4. 第 14 回合起次数怪（频次器物）不再进波次，只以亡语形态（击杀后召唤 / 分裂）出现；首领本体也不进普通波次；
+//   5. 首领战血量固定五亿；第 14 回合起飞行怪频率降低（flySpawnChance）；亡语 / 召唤产物不进骰子池。
 //
 // 两个开关都只在「比赛里的战场」打开（GameData.battleFlags），工具与 golden 构造的战场不带这些 flag，保持上游默认。
 
@@ -13,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { makeBattle, chessRec, enemyRec } from '../helpers/battleHarness.js';
 import * as enemiesMod from '../../server/sim/content/enemies.js';
-import { SharedBossPool } from '../../server/match/finalAssault.js';
+import { SharedBossPool, bossPoolHp } from '../../server/match/finalAssault.js';
 import { GameData } from '../../server/match/gamedata.js';
 import { setupMatchWaves, buildNormalWave, roundPick } from '../../server/match/waves.js';
 import { createRng } from '../../server/sim/rng.js';
@@ -181,4 +182,77 @@ test('次数怪只是「不直接出现」：它们的亡语形态（击杀后�
   // 我们不删它，只是让 TIMES 本体不再直接进波次。
   assert.deepEqual(DATA.enemy_1199_sfjin.summons, ['enemy_1200_msfjin']);
   assert.ok(DATA.enemy_1200_msfjin && !isTimesRec(DATA.enemy_1200_msfjin));
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// 5. 首领战血量五亿；第 14 回合起飞行怪频率降低；亡语/召唤产物不进骰子池
+
+test('首领战血量固定五亿（RULES.bossHp / GameData.bossFixedHp / bossPoolHp）', () => {
+  assert.equal(RULES.bossHp, 500_000_000);
+  const gd = new GameData(GAME, 'mode_multi_normal');
+  assert.equal(gd.bossFixedHp, 500_000_000);
+  // 不按存活人数缩放：1 人和 4 人都是同一个池子
+  assert.equal(gd.bossPoolHp('boss_1', 1), 500_000_000);
+  assert.equal(gd.bossPoolHp('boss_1', 4), 500_000_000);
+  assert.equal(bossPoolHp(gd, 'boss_1', 4), 500_000_000);
+});
+
+test('第 14 回合起整体降低飞行怪频率：飞行槽只有 flySpawnChance 的概率真刷飞行怪', () => {
+  assert.ok(RULES.flySpawnChance < 1, 'flySpawnChance lowers the fly rate');
+  const gd = new GameData(GAME, 'mode_multi_normal');
+  let flyActions = 0;
+  let flySpawned = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const setup = setupMatchWaves(gd, createRng(seed));
+    for (const r of [14, 15, 16, 17]) {
+      const w = buildNormalWave(gd, createRng(seed + 700), setup.factions, r);
+      for (const a of w.actions) {
+        const act = gd.wave(w.templateId) && Array.isArray(gd.wave(w.templateId).spawns) ? gd.wave(w.templateId).spawns[a.index] : null;
+        const slot = String(act && (act.slot || '') || '');
+        if (slot.includes('F')) {
+          flyActions++;
+          const rec = a.valid && a.key ? DATA[a.key] : null;
+          if (rec && (rec.isFlyEnemy === true || rec.stats?.motion === 'FLY')) flySpawned++;
+        }
+      }
+    }
+  }
+  // 飞行槽位被跳过的比例 ≈ 1 - flySpawnChance（0.5）：40 种子 × 4 回合的飞行槽里，
+  // 真刷出飞行怪的不超过 7 成、至少有 3 成被跳过（允许抽样波动，但趋势必须是「大幅减少」）
+  assert.ok(flyActions >= 40, `fly placeholder actions seen (${flyActions})`);
+  const rate = flySpawned / flyActions;
+  assert.ok(rate < 0.72, `fly rate ${rate} < 0.72 (flySpawnChance = ${RULES.flySpawnChance})`);
+  assert.ok(rate > 0.28, `fly rate ${rate} > 0.28 (not wiped out either)`);
+  // 第 1–13 回合不读这个开关：官方排期照旧（有飞行敌人就照刷）
+  let earlyFly = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const setup = setupMatchWaves(gd, createRng(seed));
+    for (const r of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const w = buildNormalWave(gd, createRng(seed + 800), setup.factions, r);
+      for (const s of w.spawns) {
+        const rec = DATA[s.enemyKey];
+        if (rec && (rec.isFlyEnemy === true || rec.stats?.motion === 'FLY')) earlyFly++;
+      }
+    }
+  }
+  assert.ok(earlyFly > 0, 'the official early rounds still field flyers');
+});
+
+test('亡语/召唤产物不进骰子池：身观的青铜镜（enemy_1200_msfjin）不再直接刷进怪海', () => {
+  const MIRRORED = new Set(['enemy_1200_msfjin', 'enemy_1202_msfzhi', 'enemy_1204_msfhu', 'enemy_1210_msfden']);
+  for (const k of MIRRORED) assert.ok(DATA[k], `${k} is in the data (summons still work)`);
+  const gd = new GameData(GAME, 'mode_multi_normal');
+  const seen = new Set();
+  for (let seed = 1; seed <= 60; seed++) {
+    const setup = setupMatchWaves(gd, createRng(seed));
+    for (const r of [14, 15, 16, 17, 18, 19]) {
+      const w = buildNormalWave(gd, createRng(seed + 900), setup.factions, r);
+      for (const s of w.spawns) {
+        seen.add(s.enemyKey);
+        assert.ok(!MIRRORED.has(s.enemyKey), `R${r}: 亡语产物 ${s.enemyKey} 直接出现在怪海里`);
+      }
+    }
+  }
+  // 骰子池本身仍有足够多的候选（不是空池）
+  assert.ok(seen.size >= 30, `dice pool still rich (${seen.size} distinct keys)`);
 });

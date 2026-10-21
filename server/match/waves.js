@@ -223,9 +223,47 @@ export function setupMatchWaves(gd, rng) {
 /**
  * 卫戍协议：盟约 · 大逃杀：把 data/enemies.json 里的**全部怪物**编成候选池（按槽位类别分开），
  * 第 `RULES.rollWaveFrom`（14）回合起每一波用骰子抽一个。排除：召唤物 / 部件（tokenOnly、notCountInTotal）、
- * 领袖本体（只在首领回合出现）、本局禁用敌人。飞行与地面分开，抽出来的怪才能放进对应路线。
+ * 亡语 / 召唤产物（只在召唤者被击杀时出现，见 spawnProducts）、领袖本体（只在首领回合出现）、本局禁用敌人。
+ * 飞行与地面分开，抽出来的怪才能放进对应路线。
  */
 const MONSTER_POOLS = new WeakMap();
+/** 亡语 / 召唤产物（某个敌人的 `*.enemy_key` 黑板或 `summons` 数组指向的怪），按 GameData 缓存。 */
+const SPAWN_PRODUCTS = new WeakMap();
+
+/**
+ * 卫戍协议：盟约 · 大逃杀：**亡语 / 召唤产物不进骰子池**（`data/enemies.json` 里的 `DeadSpawn.enemy_key` /
+ * `Summon.enemy_key` / `DeathRattle.enemy_key` / `1.enemy_key` 等黑板与 `summons` 数组指向的 key）。
+ *
+ * 上游数据没有用 `tokenOnly` / `notCountInTotal` 标出这些「别人的孩子」，所以第 14 回合起的骰子
+ * 会把它们当成普通怪**直接刷进怪海** —— 典型就是次数怪（频次器物）的亡语产物：木制瑞印、小说卷轴、青铜镜、
+ * 铜矛头、铜灯盘、青瓷茶器 …（`times.js` 的器物 key）本该只在召唤者被击杀时出现。这里按数据把这一族排除：
+ *   * 黑板 / `summons` 指到的 key（身观 掉落的青铜镜等）；
+ *   * 「生命值 = attrPower」的频次器物本体（数据没给它们 TIMES 标注，但正常怪的 attrPower 是攻/血/防/抗的
+ *     加权和，不会恰好等于 maxHp —— 这正是 `archetypes.js times`: setHits(e, e.base.maxHp …) 的特征）。
+ */
+function spawnProducts(gd) {
+  const hit = SPAWN_PRODUCTS.get(gd);
+  if (hit) return hit;
+  const set = new Set();
+  const scan = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const v of node) scan(v); return; }
+    for (const [k, v] of Object.entries(node)) {
+      if (/enemy_key$/i.test(k)) { if (typeof v === 'string') set.add(v); } else scan(v);
+    }
+  };
+  for (const rec of Object.values(gd.raw.enemies || {})) {
+    if (!rec || typeof rec !== 'object') continue;
+    if (Array.isArray(rec.summons)) for (const s of rec.summons) { if (typeof s === 'string') set.add(s); else if (s && typeof s.key === 'string') set.add(s.key); }
+    scan(rec);
+  }
+  for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
+    const hp = Number(rec && rec.stats && rec.stats.maxHp), ap = Number(rec && rec.attrPower);
+    if (Number.isFinite(hp) && Number.isFinite(ap) && hp > 0 && hp === ap) set.add(key);
+  }
+  SPAWN_PRODUCTS.set(gd, set);
+  return set;
+}
 /** 怪物类别属性：attr 里 TIMES = 频次器物（次数怪）。 */
 const TIMES = 'TIMES';
 /** 数据里标注「频次器物」的方式（acType / acTypes）。 */
@@ -252,9 +290,12 @@ function monsterPools(gd) {
     if (b && typeof b.enemyKey === 'string') leaders.add(b.enemyKey);
   }
   const all = { normal: [], elite: [], flyNormal: [], flyElite: [], groundSpecial: [], flySpecial: [] };
+  const products = spawnProducts(gd);
   for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
     if (!rec || typeof rec !== 'object') continue;
     if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || gd.inactiveEnemies.has(key)) continue;
+    // 亡语 / 召唤产物（次数怪的亡语产物等）：只在召唤者被击杀时出现，不直接刷进怪海
+    if (products.has(key)) continue;
     const rank = String(rec.rank || 'NORMAL');
     if (rank === 'BOSS') continue;                       // 领袖本体：只在首领战出现
     // 卫戍协议：盟约 · 大逃杀：次数怪（频次器物）从 RULES.timesDropFrom 起不进波次，只以亡语形态（击杀后召唤 /
@@ -298,6 +339,13 @@ export function rollWavePick(gd, rng, round) {
   // 槽位 -> 候选池：地面槽只抽地面怪、飞行槽只抽飞行怪（两边都不会退回对方那一档，
   // 否则抽到行动方式不对的怪就会被模板的类别检查跳过，一波里少一批怪）。
   const draw = (primary, fallback) => rollOne(rng, diceList(p, primary)) || rollOne(rng, diceList(p, fallback)) || null;
+  // 卫戍协议：盟约 · 大逃杀：**整体降低飞行怪频率** —— 飞行槽位只有 `flySpawnChance` 的概率真抽一只飞行怪；
+  // 其余情况抽一只地面怪，那次刷新会因「槽位类别不符」在 templateSpawns 里被直接跳过（不刷、不预告），
+  // 于是整体飞行怪变少。第 1–13 回合走官方表，不读这个开关。
+  const flyChance = Number.isFinite(RULES.flySpawnChance) ? Math.min(1, Math.max(0, RULES.flySpawnChance)) : 1;
+  const flyDraw = (flyPrimary, flyFallback, groundPrimary) => (flyChance >= 1 || rng() < flyChance
+    ? draw(flyPrimary, flyFallback)
+    : (draw(groundPrimary, 'groundSpecial') || draw('normal', 'groundSpecial') || draw('elite', 'groundSpecial')));
   const half = round <= firstHalfMax(gd);
   return {
     round, type: 'DICE', firstHalf: half,
@@ -306,8 +354,8 @@ export function rollWavePick(gd, rng, round) {
     flyKey: draw('flySpecial', 'flyNormal'),
     normal: draw('normal', 'groundSpecial'),
     elite: draw('elite', 'groundSpecial'),
-    flyNormal: draw('flyNormal', 'flySpecial'),
-    flyElite: draw('flyElite', 'flySpecial'),
+    flyNormal: flyDraw('flyNormal', 'flySpecial', 'normal'),
+    flyElite: flyDraw('flyElite', 'flySpecial', 'elite'),
     fly: false, dice: true, diceFrom: p.from,
   };
 }
