@@ -147,6 +147,18 @@ export function MissTag({ n, name = null }) {
 /** Phases whose leaks are still to be charged at settlement (normal rounds: the own battle, then 联防). */
 const LEAK_PHASES = new Set([PHASE.COMBAT, PHASE.UNITE]);
 
+/** 卫戍协议：盟约 · 大逃杀：扣血加钱的代价（3 滴目标生命值）。 */
+export const BLOOD_MONEY_COST = 3;
+
+/** 扣血加钱按钮的提示语（刚好 3 滴时会写明「用完当场淘汰」）。 */
+export function bloodMoneyTip(lp) {
+  const n = Number(lp);
+  if (!Number.isFinite(n)) return t('扣血加钱：3 滴目标生命值换 1 资金');
+  if (n < BLOOD_MONEY_COST) return t('目标生命值不足 3 点，不能扣血加钱');
+  if (n === BLOOD_MONEY_COST) return t('现在正好 3 滴：换 1 资金，但目标生命值会归零，你会当场被淘汰');
+  return t('扣血加钱：花 3 滴目标生命值换 1 资金（还剩 {left} 滴）', { left: n - BLOOD_MONEY_COST });
+}
+
 /**
  * LP a round's leaks cost at settlement — the server rule (server/match/match/settle.js): min(lpCapPerRound, counted
  * leaks), never negative.
@@ -220,6 +232,10 @@ export function liveLp(base, { phase, round, lp, statsLeaks = null, leaks = 0, c
  */
 export function pendingTip(lp, pending, { unite = false, cap = 10, left = null } = {}) {
   if (!(pending > 0)) return null;
+  // 卫戍协议：盟约 · 大逃杀：扣血上限开关关闭时 cap = Infinity，结算就是全额扣除，提示语不再写「每回合至多 N 点」
+  if (!Number.isFinite(cap)) return unite
+    ? t('目标生命值 {lp}：结算时按漏过的敌人扣除 {pending} 点', { lp, pending })
+    : t('目标生命值 {lp}：本回合已有 {pending} 个敌人进入蓝门，结算时全额扣除 {pending} 点（本局未开启回合扣血上限）', { lp, pending });
   if (unite && Number.isFinite(left)) {
     const each = left > cap ? t('剩余不足 {cap} 个后，队友每击倒一个少扣 1 点', { cap }) : t('队友每击倒一个就少扣 1 点');
     return t('目标生命值 {lp}：联防中，你漏过的敌人还剩 {left} 个，{each}；按现在结算扣除 {pending} 点（每回合至多 {cap} 点）', { lp, left, each, pending, cap });
@@ -363,7 +379,7 @@ export function PauseButton({ paused, busy = false, onToggle }) {
  *     `left` (a leaker in 联防): its enemies still standing — the capsule's ×N tag
  */
 export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, onReady, readyBusy, readyCount, playerCount, pen = false, penAvail = false, onPen = () => {},
-  config = null, frozenAt = null, pause = null, live = null, spectator = false,
+  config = null, frozenAt = null, pause = null, live = null, spectator = false, onBloodMoney = null,
   spectators = null, myId = null, isHost = false, onRemoveSpectator = null, onUniteSkipVote = () => {} }) {
   const phase = pub?.phase;
   const boss = isBossPhase(phase);
@@ -374,6 +390,8 @@ export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, 
   const roundText = hidden ? '??' : pub?.round > 0 ? String(pub.round) : '--';
   // a spectator seat (no m.private, community report #26) never readies
   const showReady = phase === PHASE.PREP && !spectator && priv?.alive !== false;
+  // 卫戍协议：盟约 · 大逃杀：休整期的「扣血加钱」按钮（还活着、休整期、并且看得见自己的 LP）
+  const showBloodMoney = phase === PHASE.PREP && !spectator && priv?.alive !== false && Number.isFinite(lp);
   // boss rounds: the overtime warning follows the clock (4 Hz while live; frozen while paused)
   const otLive = boss && Number(pub?.overtimeAt) > 0;
   useTicker(otLive && frozenAt == null ? 250 : 0);
@@ -381,7 +399,8 @@ export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, 
   const ot = otLive ? overtimeState(pub, now, { perSec: overtimeDrainPerSec(config) }) : null;
   const draining = ot?.state === 'drain';
   const lowLp = (Number.isFinite(lp) && lp - pending <= 5) || draining;
-  const cap = Number(config?.lpCapPerRound) > 0 ? Number(config.lpCapPerRound) : 10;
+  // 卫戍协议：盟约 · 大逃杀：m.public.lpCap === null 表示这一局的扣血上限开关是关着的（扣血无限制）
+  const cap = pub?.lpCap === null ? Infinity : Number(pub?.lpCap) > 0 ? Number(pub.lpCap) : Number(config?.lpCapPerRound) > 0 ? Number(config.lpCapPerRound) : 10;
   const frozenSecs = Number.isFinite(frozenAt) ? remainAt(pub?.deadline, frozenAt) : null;
   const btn = checkButtons({ pen, penAvail, infoOpen: !!drawer });
   const onLeft = () => (pen ? onPen(false) : onDrawer('info'));
@@ -410,6 +429,8 @@ export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, 
       <${PhaseCapsule} pub=${pub} hud=${hud} miss=${!boss && Number.isFinite(live?.left) ? live.left : null} />
       <${LpTower} value=${lp} size="lg" tone=${lowLp ? 'danger' : boss ? 'team' : null} pending=${pending}
         note=${pending > 0 && live?.unite ? t('联防中') : null} tip=${pendingTip(lp, pending, { unite: !!live?.unite, cap, left: live?.left ?? null })} />
+      ${showBloodMoney ? html`<${Button} variant="danger" size="sm" class="gtop__blood" disabled=${!(lp >= BLOOD_MONEY_COST)}
+        title=${bloodMoneyTip(lp)} onClick=${() => onBloodMoney && onBloodMoney()}>3 血 → 1 钱<//>` : null}
       <${Tooltip} text=${btn.right.tip} placement="bottom">
         <${CheckBtn} sprite=${btn.right.sprite} cls=${cx('enemybtn', btn.right.grey && 'is-grey')} label=${btn.right.label}
           chev=${btn.right.grey ? null : '▶▶'} disabled=${btn.right.grey && !pen} onClick=${onRight} testid="check-enemy" />

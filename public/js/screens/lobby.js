@@ -105,13 +105,15 @@ export function difficultyInfo(roomMode, difficulty) {
   const effects = Array.isArray(m?.effectDescList)
     ? m.effectDescList.map((e) => String(e).replace(/^[·•・･\s]+/, '')).filter(Boolean)
     : fallback.effects.map((e) => t(e));
-  const rounds = Number.isFinite(m?.lastRound) ? m.lastRound : roomMode === 'solo' && difficulty === 'FUNNY' ? 9 : 14;
+  const last = Number.isFinite(m?.lastRound) ? m.lastRound : roomMode === 'solo' && difficulty === 'FUNNY' ? 9 : 14;
+  // 卫戍协议：盟约 · 大逃杀：回合数没有上限（lastRound 只是占位数），显示 ∞；首领环节已删除，不再提示隐秘核心
+  const endless = last > 100;
   return {
     code: typeof m?.code === 'string' ? m.code : fallback.code,
     desc: typeof m?.desc === 'string' ? m.desc : t(fallback.desc),
     effects,
-    rounds,
-    hidden: difficulty !== 'FUNNY',
+    rounds: endless ? '∞' : last,
+    hidden: !endless && difficulty !== 'FUNNY' && Number.isFinite(m?.hiddenRound),
     stageNote: stageNote(Array.isArray(m?.stages) && m.stages.length ? m.stages : STAGE_POOL[difficulty]),
   };
 }

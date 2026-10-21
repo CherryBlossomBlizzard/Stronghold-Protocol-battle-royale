@@ -12,7 +12,7 @@
 
 import { ResumeMatchButton } from '../ui/resumeMatch.js';
 import { useMemo, useState } from '../../vendor/hooks.module.js';
-import { NAME_MAX_LEN, APP_VERSION, DEV_BUILD } from '../../../shared/constants.js';
+import { NAME_MAX_LEN, APP_VERSION, DEV_BUILD, SERVER_NAME } from '../../../shared/constants.js';
 import { html, Button, Icon, MicroLabel, TextField, PingPill } from '../ui/components.js';
 import { GuideButton } from '../ui/guide.js';
 import { AnnouncementButton } from '../ui/announcements.js';
@@ -264,6 +264,7 @@ export function TitleScreen() {
       </div>`}
       <h1 class=${`title-cn${alphabetic ? ' title-cn--latin' : ''}`}>${t('卫戍协议')}<span class="title-cn__colon">${alphabetic ? ': ' : '：'}</span><em>${t('盟约')}</em></h1>
       <p class="title-tag">${t('调配资金与干员，与同伴协同布防，抵御多波次进攻，直至击败敌方领袖。')}</p>
+      <p class="title-br">${SERVER_NAME} · 血量 30 · 无限卡池 · 装备无限 · 无联防 · 无首领 · 无限回合</p>
 
       <div class="title-login">
         ${pendingJoin ? html`<div class="title-invite">

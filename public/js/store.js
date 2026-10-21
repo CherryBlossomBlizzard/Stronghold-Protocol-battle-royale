@@ -71,7 +71,11 @@ export function createStore(initial) {
 }
 
 /** Fresh (empty) match slice. */
-export const emptyMatch = () => ({ public: null, private: null, field: null, result: null, battle: null });
+export const emptyMatch = () => ({
+  public: null, private: null, field: null, result: null, battle: null,
+  // 《卫冕协议·神人派对》: m.party (public view), m.partyPrivate (this player only), m.partyResult
+  party: null, partyPrivate: null, partyResult: null,
+});
 
 /** Initial app state (exported for tests and resets). */
 export const initialState = Object.freeze({

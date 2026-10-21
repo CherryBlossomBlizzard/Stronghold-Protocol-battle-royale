@@ -1,3 +1,25 @@
+# 版权与使用声明（NOTICE）· 本仓库补充
+
+**本仓库（「卫戍协议：盟约 · 大逃杀」）是第三方修改版（fork），由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护，不是任何上游的官方仓库**，与上游作者、上海鹰角网络科技有限公司（Hypergryph）、
+Yostar 及其关联方没有任何关系，未获其授权或认可。它基于**两代上游**：
+
+1. 原作者仓库 **[sganggs/Stronghold-Protocol](https://github.com/sganggs/Stronghold-Protocol)**（v0.2.6）—— 官方规则的实现与整个项目基础；
+2. **[龙千尘 (LongQianChen)/Stronghold-Protocol](https://github.com/LongQianChen/Stronghold-Protocol) 的「20 人版」分支
+   [`feat/IncreasePlayerCapacity`](https://github.com/LongQianChen/Stronghold-Protocol/tree/feat/IncreasePlayerCapacity)** ——
+   最大 20 人房、玩家分组与分组卡池（固定组共享干员池与装备库存）、紧凑 WebSocket 协议与网络优化、素材预缓存与在线补齐、
+   公告与紧急通知、大厅目录与身份恢复、房间管理等。该分支同样以 GPL-3.0-or-later 发布，其开发说明与决定清单随源码保留在本仓库的 `docs/development/`。
+
+- 本仓库相对上游 v0.2.6 的改动（出怪掷骰子、怪物倍率曲线、第 20 回合十亿血限时首领战、血量 30、卡池与装备无限、
+  删除联防、扣血加钱按钮、4040 端口与启动脚本等）**同样以 GPL-3.0-or-later 发布**，完整声明见 [MODIFICATIONS.md](MODIFICATIONS.md)。
+- 本仓库源码**不包含**任何美术与音频素材；Release 中的完整包附带素材只为方便玩家开服，**请勿用于本项目以外的用途，
+  也不要单独再分发**。
+- 上方的[项目声明](README.md#声明)与下面这份上游原始声明同时有效；两者冲突时，以更严格的表述为准。
+- 权利人如认为本仓库的内容不妥，请提 Issue，我们会**立即删除**相关内容。
+
+---
+
+> 以下为上游项目的原始声明，一字未改。
+
 # 版权与使用声明（NOTICE）
 
 **卫戍协议：盟约 · Stronghold Protocol** 是《明日方舟》限时玩法「卫戍协议：盟约」的**非官方同人复刻**，与上海鹰角网络科技有限公司（Hypergryph）、Yostar 及其关联方**没有任何关联**，也未获得其授权或认可。

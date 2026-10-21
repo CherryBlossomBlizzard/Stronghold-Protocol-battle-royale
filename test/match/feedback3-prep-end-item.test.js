@@ -107,7 +107,9 @@ test('two milestones owed at prep end both wait: no golden before the fight; the
   h.m.dispose();
 });
 
-test('hand and temp full at prep end: the new hammer is destroyed, the equipped one stays, and the next prep does not put a golden in the slot', () => {
+test('hand and temp full at prep end: 维多利亚 keeps the hammer owed — nothing is destroyed, it is paid once there is room (fork fix)', () => {
+  // 晚霞大逃杀比赛服修复：上游的旧行为是「整备区满 → 装备销毁，且里程碑照吃」，玩家会看到「有时不发锤子」。
+  // 现在：一件都没发出去就把这一档退回去，等下一次钩子腾出位置再补发（见 MODIFICATIONS.md）。
   const h = fresh();
   const { ps, carrier, equipped } = arm(h, { layers: 50, fill: true });
   h.m.endPrep();
@@ -115,15 +117,18 @@ test('hand and temp full at prep end: the new hammer is destroyed, the equipped 
   assert.equal(carrier.items[0].uid, equipped.uid);
   assert.equal(carrier.items[0].id, HAMMER);
   assert.equal(copies(ps, GOLDEN), 0);
-  assert.equal(copies(ps, HAMMER), 1);
-  const toasts = h.sent.filter(([, msg]) => msg.t === 'm.toast').map(([, msg]) => msg.text);
-  assert.equal(toasts.filter((t) => t === '整备区已满，获得的装备已销毁').length, 2);
+  assert.equal(copies(ps, HAMMER), 1, 'nothing was granted while the bench was full');
+  assert.equal(ps.counters['bond:victoria:hammers'] || 0, 0, 'the milestones stay owed');
+  const destroyed = h.sent.filter(([, msg]) => msg.t === 'm.toast' && msg.text === '整备区已满，获得的装备已销毁').length;
+  assert.equal(destroyed, 0, 'a missed milestone never destroys a hammer');
   const input = FakeBattle.instances.at(-1).opts.players[0];
   assert.ok(input.units.find((u) => u.uid === carrier.uid).items.includes(HAMMER));
+  const before = copies(ps, HAMMER) + 2 * copies(ps, GOLDEN);
   h.toPrep(2);
-  assert.equal(carrier.items[0].uid, equipped.uid, 'nothing was merged into the slot');
-  assert.equal(copies(ps, GOLDEN), 0);
-  assert.equal(copies(ps, HAMMER), 1);
+  assert.ok(copies(ps, HAMMER) + 2 * copies(ps, GOLDEN) > before, 'the owed hammers are paid once there is room');
+  assert.equal(ps.counters['bond:victoria:hammers'], 2, 'both milestones paid');
+  const landed = [...ps.hand, ...ps.temp].filter((x) => x && x.kind === 'item' && String(x.id).includes('chess_item_2_03')).length;
+  assert.ok(landed >= 1, 'the owed hammers land in the hand (never in the temp that the prep end wipes)');
   h.m.dispose();
 });
 

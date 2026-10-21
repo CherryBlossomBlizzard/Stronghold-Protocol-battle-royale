@@ -45,6 +45,7 @@ import { TitleScreen, sanitizeName } from './screens/title.js';
 import { LobbyScreen, rememberRoom, parseRoomParam } from './screens/lobby.js';
 import { RoomScreen } from './screens/room.js';
 import { GameScreen } from './screens/game.js';
+import { PartyScreen } from './screens/party.js';
 import { audio, installAudio } from './audio.js';
 import { settingsStore } from './ui/settings.js';
 import { GuideHost } from './ui/guide.js';
@@ -70,6 +71,14 @@ const TICKER_KEEP = 20;
 const EMOTE_KEEP = MAX_SEATS * 4; // keep several seconds of messages even when every seat sends together
 
 const SCREENS = { title: TitleScreen, lobby: LobbyScreen, room: RoomScreen, game: GameScreen };
+
+/**
+ * 《卫冕协议·神人派对》: a party match renders its own screen instead of the PvE game screen.
+ * Decided from the room (party mode) and the party frames already on screen.
+ */
+function isPartyOnScreen(s) {
+  return !!(s.match && (s.match.party || s.match.partyResult)) || !!(s.room && s.room.party && s.room.inMatch);
+}
 
 /** Copy of a server message without transport fields. */
 function payload(msg) {
@@ -268,6 +277,10 @@ function wireNet() {
     // replays dedupe by content id inside recordResult (spectator seats' copies build no record at all)
     recordResult(res, { myId: store.get().me.playerId, roomMode: store.get().room?.mode ?? null, now: Date.now() });
   });
+  // 《卫冕协议·神人派对》: the public view, this player's private view and the final result.
+  // The server never sends anyone else's role/objective/hand, so storing them as-is cannot leak anything.
+  net.on('m.party', (msg) => { matchAt = Date.now(); store.patch('match', { party: payload(msg) }); maybeFinishRestore(); });
+  net.on('m.partyPrivate', (msg) => { matchAt = Date.now(); store.patch('match', { partyPrivate: payload(msg) }); });
   net.on('m.toast', (msg) => {
     const kind = ['info', 'success', 'warn', 'error'].includes(msg.kind) ? msg.kind : 'info';
     // msgid + params (server ≥ 0.2.0) or the text itself as a msgid, in the current language
@@ -326,9 +339,11 @@ function ScreenCrashed({ error, reset }) {
 
 function App() {
   const route = useStore(selectRoute);
+  const party = useStore(isPartyOnScreen);
   useLang(); // a language switch re-renders the whole tree in place
   const [error, resetError] = useErrorBoundary((err) => console.error('[ui] screen crashed', err));
-  const Screen = SCREENS[route] || LobbyScreen;
+  // 《卫冕协议·神人派对》: its own screen in place of the PvE game screen
+  const Screen = route === 'game' && party ? PartyScreen : (SCREENS[route] || LobbyScreen);
   return html`<div class="app-root">
     <div class="app-bg" aria-hidden="true"></div>
     ${error ? html`<${ScreenCrashed} error=${error} reset=${resetError} />` : html`<${Screen} key=${route} />`}

@@ -39,6 +39,7 @@
 import { BOSS_ROW_OFFSET, COLS, BOSS_POOL_MIN_HP } from '../sim/constants.js';
 import { mirrorDir, normDir } from '../sim/dir.js';
 import { bossPoolShareOf } from './gamedata.js';
+import { RULES } from './battleRoyaleRules.js';
 import { coopHiddenLayerThreshold } from '../../shared/playerCapacity.js';
 
 /**
@@ -80,6 +81,8 @@ export function pairPlayers(alive, rng, previous = null) {
 
 /** Shared boss HP for a boss id with `aliveCount` alive players (GameData.bossPoolShare / bossPoolShareOf; omitted ⇒ a full team). */
 export function bossPoolHp(gd, bossId, aliveCount) {
+  // 卫戍协议：盟约 · 大逃杀：第 20 回合强制首领战 —— 领袖血量固定十亿（不按存活人数缩放）
+  if (RULES.bossHp > 0) return RULES.bossHp;
   const boss = gd.boss(bossId);
   const diff = gd.difficulty;
   let base = boss && boss.bloodPoint && Number.isFinite(boss.bloodPoint[diff]) ? boss.bloodPoint[diff] : null;

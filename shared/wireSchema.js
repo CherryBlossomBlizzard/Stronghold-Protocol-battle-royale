@@ -108,7 +108,7 @@ export const WIRE_MESSAGES = [
     'stageId', 'setupRevision', ['rerollVote', 'rerollVote'], 'factions', 'disabledBonds', 'drawnDisabledBonds', 'bannedChess',
     'bossId', 'hiddenBossId', 'bossRound', 'hiddenRound', 'spRound', 'playerCount', ['poolGroups', list('poolGroup')],
     ['combatMode', en('combatMode')], 'paused', ['players', list('publicPlayer')], ['fields', list('field')], 'teamLp', 'overtimeAt',
-    ['bossHp', 'hpPool'], ['draft', 'bandDraft'], ['sp', 'spDraft'], ['unite', 'unite'], ['uniteResult', 'uniteResult']]],
+    ['bossHp', 'hpPool'], ['draft', 'bandDraft'], ['sp', 'spDraft'], ['unite', 'unite'], ['uniteResult', 'uniteResult'], 'lpCap']],
   [9, 'm.private', 's2c', ['playerId', 'seat', 'alive', 'lp', 'funds', 'bandId', 'ready', 'canReady', ['personalChoice', 'personalChoice'],
     ['shop', 'shop'], ['hand', list('piece')], ['temp', list('piece')], ['board', list('piece')], 'deployCap', 'deployCount',
     ['bonds', list('bond')], ['effects', list('effect')], ['nextEnemies', list('enemyPreview')], ['loadout', map('loadout')],
@@ -177,6 +177,7 @@ export const WIRE_MESSAGES = [
   [79, 'b.progress', 'c2s', ['battleId', 'gt', 'killed', 'total', 'resolved', 'leaks', 'bossDmg', 'by', 'done', 'left', 'leaksBy']],
   [80, 'b.result', 'c2s', ['battleId', ['result', 'battleResult']]],
   [81, 'b.yield', 'c2s', ['battleId']],
+  [82, 'g.bloodMoney', 'c2s', []],
 ];
 
 // Deep-freeze the registry: mutation of a shared table would silently change the same numeric positions in flight.

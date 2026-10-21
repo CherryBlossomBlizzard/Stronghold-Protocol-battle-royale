@@ -86,6 +86,8 @@ export class MatchViews {
       hiddenBossId: this.hiddenBossId,
       bossRound: this.gd.bossRound,
       hiddenRound: this.gd.hiddenRound,
+      // 卫戍协议：盟约 · 大逃杀：null = 本回合扣血无上限（开关关闭），否则就是这一回合的扣血上限（10）
+      lpCap: this.gd.lpCapOn ? this.gd.lpCapPerRound : null,
       bossPairs: this.bossWaves ? this.bossWaves.map(w => w.players.slice()) : this.bossPairs ? this.bossPairs.map(ids => ids.slice()) : null,
       spRound: this.gd.spRounds().includes(this.round),
       playerCount: this.order.length,

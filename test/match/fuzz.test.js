@@ -8,7 +8,10 @@ import { ERR, EMOTES } from '../../shared/constants.js';
 import { createRng } from '../../server/sim/rng.js';
 import { DATA, makeMatch, checkInvariants } from './harness.js';
 
-const GAME = Object.keys(C2S).filter((t) => t.startsWith('g.') && t !== 'g.leave');
+// 《卫冕协议·神人派对》 has its own engine and its own envelope (g.party { op }); this fuzz runs the PvE Match,
+// so those intents are out of scope here (test/match/party-*.test.js covers them).
+const PARTY_ONLY = new Set(['g.party', 'g.partyChallenge']);
+const GAME = Object.keys(C2S).filter((t) => t.startsWith('g.') && t !== 'g.leave' && !PARTY_ONLY.has(t));
 const BANDS = Object.keys(DATA.bands);
 
 function randomIntent(rng, m, ps) {

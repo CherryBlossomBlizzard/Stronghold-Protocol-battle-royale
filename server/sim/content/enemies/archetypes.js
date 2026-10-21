@@ -43,11 +43,19 @@ const runWhenHit = (v) => ({ taken(c, b, e, a) { if (a.on || !(v > 0)) return; a
  * 终极 R5–R15) comes out again — a 频次 enemy's death spawn inherits the parent's mods, so it travels with them. Whole hits:
  * setHits rounds [ASSUMED: no source says how a fractional count rounds]. Until 0.2.1 the count was the data's whatever
  * the difficulty (PR #272).
+ *
+ * 卫戍协议：盟约 · 大逃杀 (`battle.flags.timesHpBonus === false`): the round's HP multiplier (`mods.hpMul`) does not reach
+ * these units either — their count stays the data's (青铜镜 = 30 hits at every round). Without it 第 14 回合以后 ×2 的
+ * 血量会把「30 次」变成几百上千次（器物是拿来吃伤害次数的，血条不是它的强度）。Death spawns inherit the parent's mods,
+ * so they are covered by the same rule.
  */
 const times = (artsOnly = false) => ({
   spawn(b, e) {
     const s = Number(e.mods && e.mods.supplyHpMul);
-    setHits(e, e.base.maxHp / (Number.isFinite(s) && s > 0 ? s : 1));
+    const supply = Number.isFinite(s) && s > 0 ? s : 1;
+    // 本服：把回合血量倍率再除回去，次数回到数据原值；上游默认（没有这个 flag）按原样吃加成
+    const hpBonus = b && b.flags && b.flags.timesHpBonus === false ? (Number(e.mods && e.mods.hpMul) || 1) : 1;
+    setHits(e, e.base.maxHp / (supply * hpBonus));
     hitCount(b, e, true, artsOnly);
   },
 });

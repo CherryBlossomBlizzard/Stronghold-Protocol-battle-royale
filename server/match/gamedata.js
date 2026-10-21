@@ -15,6 +15,7 @@ import { getConfig, getMode } from '../data.js';
 import { isShopItem } from '../sim/simdata.js';
 import { standInRecord } from '../../shared/standIn.js';
 import { MAX_SEATS } from '../../shared/constants.js';
+import { RULES, lpCapEnabled } from './battleRoyaleRules.js';
 
 const own = (map, id) => (map && typeof map === 'object' && typeof id === 'string' && Object.hasOwn(map, id) && map[id] && typeof map[id] === 'object' ? map[id] : null);
 const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -154,6 +155,8 @@ export class GameData {
    * @returns {number}
    */
   bossPoolHp(bossId, aliveCount) {
+    // 卫戍协议：盟约 · 大逃杀：第 20 回合强制首领战 —— 领袖血量固定十亿，不按存活人数缩放
+    if (RULES.bossHp > 0) return RULES.bossHp;
     const boss = this.boss(bossId);
     const diff = this.difficulty;
     let base = boss && boss.bloodPoint && Number.isFinite(boss.bloodPoint[diff]) ? boss.bloodPoint[diff] : null;
@@ -306,11 +309,16 @@ export class GameData {
     const base = Number.isInteger(v) && v >= 0 ? v : (DEFAULTS.poolCopies[tier] ?? 10);
     // The measured doubled pool is shared by the whole co-op team, independent of team size. DIY is private stock.
     const multiplier = this.isSolo || this.chess(baseId)?.isDiy ? 1 : posIntOr(this.economy.coopPoolMultiplier, 1);
-    return base * multiplier;
+    // 卫戍协议：盟约 · 大逃杀：卡池角色统一无限张 —— 把每名干员的上限放大 poolCapMultiplier 倍，而不是改成等概率，
+    // 所以 pool.js 里「按剩余份数加权」的抽卡概率与上游完全一致，只是再也抽不空。
+    const stock = RULES.infinitePool ? RULES.poolCapMultiplier : 1;
+    return base * multiplier * stock;
   }
 
   /** Normal equipment copies in the shared pool; effect-only items have no shop stock limit. */
   itemPoolCopies(id) {
+    // 卫戍协议：盟约 · 大逃杀：删除装备拥有上限，装备无限量供应（null = 无库存上限，见 pool.js SharedItemPool）。
+    if (RULES.infiniteItems) return null;
     const base = this.baseIdOf(id), rec = this.item(base);
     if (!rec || !isShopItem(rec)) return null;
     const count = this.economy.itemPoolCopiesOverrides?.[base] ?? this.economy.itemPoolCopies?.[rec.tier];
@@ -345,9 +353,44 @@ export class GameData {
   get hiddenRound() { return Number.isInteger(this.mode.hiddenRound) && this.mode.hiddenRound > 0 ? this.mode.hiddenRound : null; }
   get maxShopLevel() { return posIntOr(this.mode.maxShopLevel, DEFAULTS.maxShopLevel); }
 
+  /** 最后一个「正常」回合（数据里带非首领波次模板的最大回合；本服 = 13）。 */
+  get normalRoundMax() {
+    if (this._normalRoundMax === undefined) {
+      const rounds = this.mode.rounds && typeof this.mode.rounds === 'object' ? this.mode.rounds : {};
+      let max = 0;
+      for (const [k, v] of Object.entries(rounds)) {
+        // brGenerated = 本服续写的无限回合（第 14 回合起），不算「正常回合」
+        if (!/^\d+$/.test(k) || !v || typeof v !== 'object' || typeof v.template !== 'string' || v.brGenerated) continue;
+        max = Math.max(max, Number(k));
+      }
+      this._normalRoundMax = max || RULES.normalRoundMax;
+    }
+    return this._normalRoundMax;
+  }
+
+  /**
+   * 回合配置。卫戍协议：盟约 · 大逃杀：数据把第 1–40 回合都写好了（首领回合已删除），更远的回合在这里续写 ——
+   * 沿用最后一个正常回合的波次模板，休整期与作战时限继续往上加（+10 秒/回合，分别封顶 300 / 240 秒）。
+   */
   roundCfg(r) {
     const rounds = this.mode.rounds;
-    return rounds && typeof rounds === 'object' && rounds[String(r)] && typeof rounds[String(r)] === 'object' ? rounds[String(r)] : null;
+    const direct = rounds && typeof rounds === 'object' ? rounds[String(r)] : null;
+    if (direct && typeof direct === 'object') return direct;
+    if (!this.endless || r <= this.normalRoundMax) return null;
+    const nm = this.normalRoundMax;
+    const base = rounds && typeof rounds === 'object' && rounds[String(nm)] && typeof rounds[String(nm)] === 'object' ? rounds[String(nm)] : {};
+    const steps = r - nm;
+    const basePrep = posIntOr(base.prepTime, 150);
+    const baseCombat = posIntOr(base.combatTimeLimit, 60);
+    const combat = Math.min(RULES.combatTimeCap, baseCombat + RULES.combatTimeStep * steps);
+    return {
+      ...base,
+      template: typeof base.template === 'string' ? base.template : null,
+      bossTemplates: null,
+      isSpPrepare: false, isBoss: false, isHidden: false, bossOvertimeAfter: null,
+      prepTime: Math.min(RULES.prepTimeCap, basePrep + RULES.prepTimeStep * steps), prepTimeData: Math.min(RULES.prepTimeCap, basePrep + RULES.prepTimeStep * steps),
+      combatTimeLimit: combat, levelMaxPlayTime: combat,
+    };
   }
 
   spRounds() { return Array.isArray(this.mode.spRounds) ? this.mode.spRounds.filter((n) => Number.isInteger(n)) : []; }
@@ -435,17 +478,50 @@ export class GameData {
     };
   }
 
-  /** Enemy multipliers of round r = the official table (baseEnemyScale; no custom multiplier). */
+  /**
+   * Enemy multipliers of round r = the official table (baseEnemyScale), and for the endless rounds beyond
+   * 卫戍协议：盟约 · 大逃杀's last normal round (13) the same ratio the first 13 rounds grew by: 生命 ×1.095445、
+   * 攻击 ×1.048809 每回合（官方绝境表 1→13 的几何平均；数据本身已续写到第 40 回合，这里兜更远的回合）。
+   */
   enemyScale(r) {
-    return this.baseEnemyScale(r);
+    const base = this.baseEnemyScale(r);
+    if (!this.endless) return base;
+    const nm = this.normalRoundMax;
+    if (r <= nm) return base;
+    const last = this.baseEnemyScale(nm);
+    // 第 14 回合起：血量在上一回合数值的基础上翻倍（复合）；攻击仍按前 13 回合的比例递增
+    const hp = last.hpMul * Math.pow(RULES.hpDoubleMul, r - (RULES.hpDoubleFrom - 1));
+    return {
+      hpMul: Math.max(0.01, hp),
+      atkMul: Math.max(0, last.atkMul * Math.pow(RULES.atkGrowth, r - nm)),
+      speedMul: last.speedMul,
+      ...(last.supplyHpMul != null ? { supplyHpMul: last.supplyHpMul } : {}),
+    };
   }
+
+  /** 卫戍协议：盟约 · 大逃杀：出怪掷骰子（waves.js 从「全部怪物」里随机抽）。 */
+  get rollWaves() { return !!RULES.rollWaves; }
+
+  /** 卫戍协议：盟约 · 大逃杀：首领战固定血量（十亿）；0 = 用官方按存活人数缩放的算法。 */
+  get bossFixedHp() { return RULES.bossHp > 0 ? RULES.bossHp : null; }
 
   timer(key) {
     const t = this.config.timers && this.config.timers[key];
     return typeof t === 'number' && Number.isFinite(t) && t > 0 ? t : DEFAULTS.timers[key] ?? 10;
   }
 
-  get lpCapPerRound() { return posIntOr(this.config.lpCapPerRound, DEFAULTS.lpCapPerRound); }
+  /**
+   * 卫戍协议：盟约 · 大逃杀：一回合的扣血上限。开关关闭时返回一个极大值 —— settle.js / views.js 里的
+   * `Math.min(cap, 漏怪数)` 随之变成「扣血无限制」；前端从 m.public.lpCap = null 认出这个状态。
+   */
+  get lpCapPerRound() {
+    if (!lpCapEnabled()) return Number.MAX_SAFE_INTEGER;
+    return posIntOr(this.config.lpCapPerRound, DEFAULTS.lpCapPerRound);
+  }
+  /** 扣血上限开关（true = 一回合最多扣 10 点血）。 */
+  get lpCapOn() { return lpCapEnabled(); }
+  /** 本服是否无限回合（卫戍协议：盟约 · 大逃杀：只要还有人存活就一直进行下去）。 */
+  get endless() { return RULES.endless; }
   /**
    * Boss overtime (`bossTurnHpReduceTime` 150 / 1 LP per second): a server turn timer of turnInfoDataDict like
    * prepPhaseTime, so REAL seconds on the same clock as the boss level's 120 s maxPlayTime (combat limits are real
@@ -471,6 +547,22 @@ export class GameData {
   get dp() {
     const d = this.config.dp && typeof this.config.dp === 'object' ? this.config.dp : {};
     return { dpInit: numOr(d.init, 10), dpPerSec: numOr(d.perSec, 1), dpMax: numOr(d.max, 99) };
+  }
+
+  /**
+   * 卫戍协议：盟约 · 大逃杀：这一局每一块战场都要带的 `battle.flags` —— DP 经济值 + 本服的两条规则开关：
+   *   * `bossHitLimit: false` 关掉官方的限伤（打十亿血的首领用，server/sim/damage.js leaderHitCancelled）；
+   *   * `timesHpBonus: false` 让次数怪（频次器物）不吃回合血量加成，次数用数据原值
+   *     （server/sim/content/enemies/archetypes.js `times`）。
+   * 两个开关都从 RULES 读，规格里带过去，所以服务端和浏览器跑同一份战斗时行为一致；工具与 golden 不经过这里，
+   * 保持上游默认（限伤开、次数吃加成）。
+   */
+  get battleFlags() {
+    return {
+      ...this.dp,
+      ...(RULES.bossHitLimit ? {} : { bossHitLimit: false }),
+      ...(RULES.timesHpBonus ? {} : { timesHpBonus: false }),
+    };
   }
   get unite() {
     const u = this.config.unite && typeof this.config.unite === 'object' ? this.config.unite : {};
@@ -523,6 +615,8 @@ export class GameData {
   }
 
   startLp(bandId) {
+    // 卫戍协议：盟约 · 大逃杀：所有玩家血量上限统一 30（data/bands.json 的 totalHp 也已同步为 30，前端策略卡同步显示）。
+    if (RULES.startLp > 0) return RULES.startLp;
     const b = this.band(bandId);
     return b && Number.isInteger(b.totalHp) && b.totalHp > 0 ? b.totalHp : this.defaultStartLp;
   }

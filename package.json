@@ -61,5 +61,10 @@
     "globals": "^17.13.0",
     "puppeteer-core": "^25.12.0",
     "typescript": "^5.9.2"
-  }
+  },
+  "author": "CherryBlossomBlizzard",
+  "contributors": [
+    "sganggs (原作者 · Stronghold-Protocol)",
+    "LongQianChen / 龙千尘 (20 人版分支 feat/IncreasePlayerCapacity)"
+  ]
 }

@@ -18,13 +18,14 @@ const nameOf = (f) => typeof f === 'string' ? f : f[0];
 // Fields introduced after v1 was published use its existing extension slot. Keep this allowlist
 // explicit: adding a business field must not silently weaken coverage or renumber the fixed catalog.
 const V1_EXTENSIONS = Object.freeze({
-  'room.create': ['assetCache'], 'room.join': ['assetCache'],
+  'room.create': ['assetCache', 'partyMode'], 'room.join': ['assetCache'],
   'lobby.quickMatch': ['assetCache'], 'room.spectate': ['assetCache'],
 });
 // Published v1 has no new numeric IDs: these post-v1 business types deliberately use its JSON fallback.
+// 《卫冕协议·神人派对》 (party mode) is post-v1: its messages ride the JSON fallback like the other post-v1 types.
 const V1_JSON_FALLBACK = Object.freeze({
-  c2s: ['room.chat', 'room.setMatchmaking', 'lobby.join', 'lobby.spectate'],
-  s2c: ['m.chat', 'm.chatState', 'm.emergency', 'm.layer'],
+  c2s: ['room.chat', 'room.setMatchmaking', 'lobby.join', 'lobby.spectate', 'room.party', 'g.party', 'g.partyChallenge'],
+  s2c: ['m.chat', 'm.chatState', 'm.emergency', 'm.layer', 'm.party', 'm.partyPrivate', 'm.partyResult'],
 });
 
 test('v1 complete catalog fingerprint prevents accidental published field or enum renumbering', () => {

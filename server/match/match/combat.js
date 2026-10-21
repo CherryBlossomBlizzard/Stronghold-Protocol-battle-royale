@@ -7,6 +7,7 @@ import { PHASE, GEO } from '../../../shared/constants.js';
 import { deriveSeed } from '../../sim/rng.js';
 import { withBounties } from '../waves.js';
 import { planUnite } from '../unite.js';
+import { RULES } from '../battleRoyaleRules.js';
 import { FieldRunner, DeadBattle } from '../fields.js';
 import { DELAYS } from './common.js';
 
@@ -61,7 +62,7 @@ export class MatchCombat {
       spawns: this._sanitizeSpawns(Array.isArray(ev.spawns) ? ev.spawns : spawns, ps.playerId),
       routes: wave.routes,
       sharedBoss: null,
-      flags: { layerGainsEnabled: true, ...this.gd.dp },
+      flags: { layerGainsEnabled: true, ...this.gd.battleFlags },
       fieldId: `n:${ps.playerId}`,
       enemyOverrides: wave.overrides,
       waveId: wave.templateId,
@@ -161,6 +162,9 @@ export class MatchCombat {
    */
   _afterCombat() {
     if (this.phase !== PHASE.COMBAT) return;
+    // 卫戍协议：盟约 · 大逃杀：删除联防环节 —— 漏怪的人直接扣血（settle 的 min(扣血上限, 漏怪数)），不再有完美作战的队友
+    // 上场拦截。unite.js / unitePhase.js 仍然保留在代码里，只是这条路径永远不会再调用它们。
+    if (RULES.noUnite) { this.settle(null, null); return; }
     const plan = planUnite(this, this.lastResults);
     if (plan) this.startUnite(plan);
     else this.settle(null, null);

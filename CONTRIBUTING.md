@@ -56,22 +56,7 @@ SIM_E2E=1 node --test 'test/sim/*.browser.test.js'               # 浏览器里�
 `test/golden/*.json`；有意改变玩法时运行 `npm run golden:update`，把新文件和改动放在同一个提交里，并在提交说明里写清
 哪些场景变了、为什么。
 
-## 3. 忠实原则
-
-这是官方玩法的复刻，规则以官方为准：
-
-- **出处**：官方数据表（`.cache/gamedata/excel/`：character_table、skill_table、uniequip_table / battle_equip_table、
-  activity_table 的 act2autochess、enemy_database、关卡文件）和 [PRTS](https://prts.wiki/)（干员页、技能和天赋的「备注」、
-  卫戍协议相关页面）。数值尽量取 blackboard，不要凭记忆写数字。官方实测的截图或录像也很有价值，请附在 Issue / PR 里。
-- **查不到出处**的细节按最简单、最接近官方的方式实现，在代码注释和 PR 描述里标 `[ASSUMED]`。维护者拍板的写成
-  “the owner's decision of YYYY-MM-DD”。有意和官方不同的规则只能由维护者决定，并写进设计文档（[docs/DESIGN.md](docs/DESIGN.md)
-  是索引：现行规则在 `docs/design/`，各版本的修订与依据在 `docs/history/`）。
-- **版权**：不要把技能描述、剧情等受版权保护的文本大段复制进代码、文档或 PR，引一小句并注明出处即可。不要提交任何游戏
-  素材文件（`public/assets/` 已被 `.gitignore` 排除）。
-- **数据**：不要手改 `data/*.json`。改 `tools/build-data.mjs`，用 `node tools/build-data.mjs --offline` 重新生成，再比较
-  JSON，确认只变了想改的部分。
-
-## 4. 提交与 PR
+## 3. 提交与 PR
 
 - 一个 PR 只做一件事；干员的 kit 一个 PR 只放一名，便于审阅。
 - 提交信息一行写清改了什么（中文或英文都可以），相关的 Issue 写上编号，例如 `余 S2 casts with an enemy on its x-1 (#32)`。
@@ -89,7 +74,7 @@ SIM_E2E=1 node --test 'test/sim/*.browser.test.js'               # 浏览器里�
   内容包的第一种，格式见 [docs/PACKS.md](docs/PACKS.md)。
 - 提交的代码以 GPL-3.0-or-later 发布。本项目坚持非商业，请不要加入广告、付费、打赏等任何变现功能。
 
-## 5. 添加干员（自选编队）
+## 4. 添加干员（自选编队）
 
 自选编队里的每名 6★ 干员都需要一个自己的战斗文件（kit），写法见
 [server/sim/content/kits/README.md](server/sim/content/kits/README.md) 的「How to add an operator (自选)」。简要步骤：

@@ -37,6 +37,8 @@ export function BriefingScreen() {
   const me = players.find((p) => p.playerId === myId);
   const readyN = players.filter((p) => p.ready).length;
   const mode = gd.config?.modes?.[pub.modeId];
+  // 卫戍协议：盟约 · 大逃杀：本局没有首领环节（数据里没有 bossRound，lastRound 是无限回合的占位数），不画首领预告
+  const endless = !Number.isFinite(mode?.bossRound) && Number(mode?.lastRound) > 100;
   // (+ the own 自选 pieces this match leaves out of the shop: m.private.diyBanned)
   const info = matchInfoModel(pub, { bonds: gd.list('bonds'), chess: gd.chess, mode, priv, diyData: { chess: data.get('chess'), backups: data.get('backups') } });
   const boss = pub.bossId ? gd.boss(pub.bossId) : null;
@@ -62,7 +64,7 @@ export function BriefingScreen() {
       total=${phaseTotalSeconds(pub, gd.config)} onExit=${() => setExit(true)} />
     <main class="brief__main">
       <section class="brief__left">
-        <div class="brief-boss brackets">
+        ${endless ? null : html`<div class="brief-boss brackets">
           <${MicroLabel} tone="gold">${t('ENEMY LEADER // 敌方领袖')}</${MicroLabel}>
           <div class="brief-boss__art">
             <div class="brief-boss__ring" aria-hidden="true"></div>
@@ -76,7 +78,7 @@ export function BriefingScreen() {
               ${boss.abilities.slice(0, 3).map((a, i) => html`<li key=${i}><${RichText} text=${a} /></li>`)}
             </ul>` : null}
           </div>
-        </div>
+        </div>`}
         <div class="brief-stage">
           <span class="brief-stage__k"><${MicroLabel}>BATTLEFIELD</${MicroLabel}>${pool ? html`<span class="brief-stage__pool">${pool}</span>` : null}</span>
           <span class="brief-stage__name"><${Icon} name="rook" />${stage?.name || pub.stageId || '—'}</span>

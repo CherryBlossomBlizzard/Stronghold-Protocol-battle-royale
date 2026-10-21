@@ -35,6 +35,7 @@
 // `lazerd` (else action 0); owner k starts 0.5·k s after the action, units step min(max(W/M, 0.05·W), 5 s) with M the
 // largest owner group (client `_CalculateActionPredelayConsiderUid`, decoded).
 
+import { RULES } from './battleRoyaleRules.js';
 import { createRng, deriveSeed } from '../sim/rng.js';
 
 const ACLOON = 'enemy_9012_acloon';
@@ -215,10 +216,95 @@ export function setupMatchWaves(gd, rng) {
  * factions array (tools, tests) — drawn now: the round's type from the schedule's marginal distribution (each faction
  * 3 of 15 slots, SPECIAL the rest), then its entry.
  */
+/**
+ * 卫戍协议：盟约 · 大逃杀：把 data/enemies.json 里的**全部怪物**编成候选池（按槽位类别分开），
+ * 每一波用骰子抽一个。排除：召唤物 / 部件（tokenOnly、notCountInTotal）、领袖本体（只在首领回合出现）、
+ * 本局禁用敌人。飞行与地面分开，抽出来的怪才能放进对应路线。
+ */
+const MONSTER_POOLS = new WeakMap();
+/** 怪物强度：优先用数据里的 attrPower，缺失时用 生命 × 攻击 兜底（排序用，不参与战斗）。 */
+function enemyPower(rec) {
+  const p = Number(rec.attrPower);
+  if (Number.isFinite(p) && p >= 0) return p;
+  const st = rec.stats || {};
+  return (Number(st.maxHp) || 0) * Math.max(1, Number(st.atk) || 0);
+}
+
+function monsterPools(gd) {
+  const hit = MONSTER_POOLS.get(gd);
+  if (hit) return hit;
+  const leaders = new Set();
+  for (const id of Object.keys(gd.raw.bosses || {})) {
+    const b = gd.boss(id);
+    if (b && typeof b.enemyKey === 'string') leaders.add(b.enemyKey);
+  }
+  const all = { normal: [], elite: [], flyNormal: [], flyElite: [], special: [] };
+  const powers = [];
+  for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
+    if (!rec || typeof rec !== 'object') continue;
+    if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || gd.inactiveEnemies.has(key)) continue;
+    const rank = String(rec.rank || 'NORMAL');
+    if (rank === 'BOSS') continue;                       // 领袖本体
+    const fly = isFlyKey(gd, key);
+    const elite = rank === 'ELITE';
+    const power = enemyPower(rec);
+    powers.push(power);
+    (fly ? (elite ? all.flyElite : all.flyNormal) : (elite ? all.elite : all.normal)).push({ key, power });
+    all.special.push({ key, power });
+  }
+  // 第 1–13 回合完全走官方规则，这里只给「第 14 回合起」的骰子用：**全部怪物**都进池子，不做难度分档。
+  const pools = { from: RULES.rollWaveFrom, total: powers.length };
+  for (const cls of Object.keys(all)) {
+    const asc = all[cls].slice().sort((a, b) => a.power - b.power || (a.key < b.key ? -1 : 1));
+    pools[cls] = { all: asc.map((x) => x.key), maxPower: asc.length ? asc[asc.length - 1].power : 0 };
+  }
+  MONSTER_POOLS.set(gd, pools);
+  return pools;
+}
+
+/** 这一回合的候选池：第 1–N 回合只给「中等及以下」（该类别为空时退回整组）。 */
+/** 骰子候选池：只从第 14 回合起使用，对全部怪物开放。 */
+function diceList(pools, cls) {
+  const slot = pools[cls] || { all: [] };
+  return slot.all;
+}
+
+/** 骰子：从候选池里随机抽一个 key（空池返回 null）。 */
+function rollOne(rng, list) {
+  if (!list || !list.length) return null;
+  return list[Math.floor(rng() * list.length)] || list[0];
+}
+
+/** 卫戍协议：盟约 · 大逃杀：这一波的敌人组合（形状与官方 pick 一致，另带飞行字段）。 */
+export function rollWavePick(gd, rng, round) {
+  const p = monsterPools(gd);
+  const draw = (cls) => rollOne(rng, diceList(p, cls));
+  const half = round <= firstHalfMax(gd);
+  return {
+    round, type: 'DICE', firstHalf: half,
+    key: draw('special') || draw('normal') || draw('elite'),
+    normal: draw('normal') || draw('special'),
+    elite: draw('elite') || draw('special'),
+    flyNormal: draw('flyNormal') || draw('special'),
+    flyElite: draw('flyElite') || draw('special'),
+    fly: false, dice: true, diceFrom: p.from,
+  };
+}
+
 export function roundPick(gd, rng, factionsOrSetup, round) {
+  // 卫戍协议：盟约 · 大逃杀：出怪掷骰子 —— 不从官方的派系/回合表里挑，而是从全部怪物里随机抽
+  // 晚霞大逃杀比赛服：第 1–13 回合走官方那套（派系 / 回合表原样），第 RULES.rollWaveFrom 回合起才掷骰子
+  if (gd.rollWaves && round >= RULES.rollWaveFrom) return rollWavePick(gd, rng, round);
   const src = factionsOrSetup;
   const picks = src && !Array.isArray(src) && Array.isArray(src.picks) ? src.picks : (src && src.schedule && Array.isArray(src.schedule.picks) ? src.schedule.picks : null);
-  if (picks) return picks[round] ?? null;
+  if (picks) {
+    if (picks[round]) return picks[round];
+    // 卫戍协议：盟约 · 大逃杀：回合数没有上限 —— 官方 15 格的排期用完之后，循环它的类型表，为这一回合现抽一个敌人组合
+    // （pick 的类型 / 前半后半按真实回合算），所以第 16 回合以后照常出兵。
+    const slots = src && src.schedule && Array.isArray(src.schedule.typeSlots) ? src.schedule.typeSlots : null;
+    if (slots && slots.length && gd.endless) return pickRoundEntry(gd, rng, slots[(round - 1) % slots.length], round);
+    return null;
+  }
   const factions = Array.isArray(src) ? src : (src && Array.isArray(src.factions) ? src.factions : []);
   const g = gen(gd);
   const types = gd.factions.types && typeof gd.factions.types === 'object' ? gd.factions.types : {};
@@ -312,7 +398,10 @@ function templateSpawns(gd, tpl, round, pick) {
     let step = interval;
     const p = !isBoss && !isPart ? ph[key0] : null;
     if (p && pick) {
-      const newKey = p.cls === 'special' ? pick.key : p.cls === 'elite' ? pick.elite : pick.normal;
+      // 卫戍协议：盟约 · 大逃杀：飞行槽位用飞行怪（骰子池按类别分开），地面槽位用地面怪
+      const newKey = p.cls === 'special' ? pick.key
+        : p.cls === 'elite' ? (p.fly ? pick.flyElite : pick.elite)
+          : (p.fly ? pick.flyNormal : pick.normal);
       if (typeof newKey === 'string' && gd.enemy(newKey)) {
         if (isFlyKey(gd, newKey) !== !!p.fly) {
           // the other movement class: not spawned, not sent, not previewed (isValid = false)
@@ -341,7 +430,11 @@ function templateSpawns(gd, tpl, round, pick) {
       preview: previewInfo(gd, key, routes[routeIndex], isBoss, leader),
     };
     if (tag) spec.tag = tag;
-    if (s.unharmful || isPart) spec.countInTotal = false;
+    // 卫戍协议：盟约 · 大逃杀：**正常回合里刷出来的 boss / 领袖漏掉不扣玩家血量** —— `countInTotal: false` 让这次
+    // 漏怪不计入扣血（也不破坏「完美作战」），战斗本身照常（血量 / 攻击仍按本回合倍率）。首领战（领袖模板）的 LP 走
+    // 首领池 / b.progress 那条路，不受这里影响；`fields.js` 的客户端校验也只要求这种漏怪出现在 uncountedKeys 里。
+    const leaderLike = isBoss || (() => { const rec = gd.enemy(key); return !!rec && (rec.rank === 'BOSS' || !!gd.boss(key)); })();
+    if (s.unharmful || isPart || leaderLike) spec.countInTotal = false;
     spawns.push(spec);
     // client ShouldActionUpToServer: valid, not the leader, no randomSpawnGroupKey — only those units are in the list a
     // bounty is inserted into (the others spawn locally on their own timing)
