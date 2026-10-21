@@ -3,9 +3,11 @@
 // (onPrepEnd, PlayerState.endPrep, then COMBAT or the Final Assault / Hidden Core).
 // Installed on Match.prototype by server/match/Match.js (a method container: never instantiated; `this` is the match).
 
-import { PHASE } from '../../../shared/constants.js';
+import { PHASE, ERR } from '../../../shared/constants.js';
 import { botPrepBeginSteps, botPrepEndSteps } from '../bot.js';
-import { DELAYS } from './common.js';
+import { OK, fail, FLOW_TICKER_PRIORITY, DELAYS } from './common.js';
+import { RULES } from '../battleRoyaleRules.js';
+import { msg } from '../../../shared/i18n.js';
 
 export class MatchPrep {
   enterPrep() {
@@ -154,6 +156,32 @@ export class MatchPrep {
       ps.dirty();
     }
     this.endPrep();
+  }
+
+  /**
+   * 卫戍协议：盟约 · 大逃杀：扣血加钱（g.bloodMoney）——3 滴目标生命值换 1 资金。
+   * 低于 3 滴不能用；刚好 3 滴可以使用，但用完之后目标生命值归零、当场淘汰。
+   * 只在休整期、且自己还活着时可用；淘汰走与结算相同的路径（eliminate + 通告）。
+   */
+  bloodMoney(ps) {
+    if (this.phase !== PHASE.PREP) return fail(ERR.WRONG_PHASE);
+    if (!ps.alive || ps.left) return fail(ERR.ELIMINATED);
+    if (!(ps.lp >= RULES.bloodMoneyCost)) return fail(ERR.BAD_TARGET, '目标生命值不足 3 点');
+    ps.lp -= RULES.bloodMoneyCost;
+    ps.funds += RULES.bloodMoneyGain;
+    ps.stats.lpLost += RULES.bloodMoneyCost;
+    ps.stats.fundsGained += RULES.bloodMoneyGain;
+    if (ps.lp <= 0) {
+      ps.lp = 0;
+      ps.eliminate(this.round);
+      this.toast(ps, 'error', '你的目标生命值耗尽，已被淘汰');
+      this.tickerText(msg('{name}博士的目标生命值已耗尽', { name: ps.name }), FLOW_TICKER_PRIORITY);
+    }
+    ps.recompute();
+    ps.dirty();
+    this.markPrivate(ps);
+    this.markPublic();
+    return OK;
   }
 
   endPrep() {

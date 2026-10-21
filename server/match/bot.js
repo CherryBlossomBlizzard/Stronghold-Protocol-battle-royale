@@ -1233,7 +1233,7 @@ export function* createRehearsalSteps(m, ps, chosen, plans, { delegate = false }
   const battles = [];
   for (const plan of cands) {
     try {
-      const opts = candidateOpts(m, ps, byUid, plan);
+const opts = candidateOpts(m, ps, byUid, plan);
       inputs.push(opts);
       // The default path builds now, in this generator step, as 0.3.0 did. Delegation builds nothing: the host
       // simulates the specs, and a takeover builds these same inputs later.

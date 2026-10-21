@@ -34,6 +34,7 @@ import { hasScriptConsent, rememberScriptConsent } from '../content.js';
 import { net } from '../net.js';
 import { store, useStore, shallowEqual, emptyMatch, isSpectating } from '../store.js';
 import { difficultyInfo } from './lobby.js';
+import { PartyRoomSettings } from './party.js';
 import { t, tc } from '../../../shared/i18n.js';
 
 /**
@@ -423,6 +424,7 @@ export function RoomScreen() {
         <div class="room-bar__opts">
           <${DifficultyPicker} room=${room} isHost=${facts.isHost} busy=${busy} onPick=${setDifficulty} />
           <${AiLastRule} option=${aiLastOption(room)} />
+          <${PartyRoomSettings} room=${room} isHost=${facts.isHost} />
         </div>
       </div>
       <div class="room-bar__center">

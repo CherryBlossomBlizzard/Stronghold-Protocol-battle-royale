@@ -294,7 +294,7 @@ function MatchScreen() {
   const localLeft = leaker && uniteLocal ? (uniteLocal[myId] ?? 0) : undefined;
   const liveLpNow = liveLp(lpBaseRef.current, {
     phase, round: pub?.round, lp: priv?.lp, statsLeaks: priv?.stats?.leaks, alive,
-    leaks: ownLeaks(localLeaks, meP?.pendingLp), cap: gd.config?.lpCapPerRound,
+    leaks: ownLeaks(localLeaks, meP?.pendingLp), cap: pub?.lpCap === null ? Infinity : Number(pub?.lpCap) > 0 ? Number(pub.lpCap) : gd.config?.lpCapPerRound,
     uniteLeft: leaker ? uniteRemaining(localLeft, meP?.uniteLeft) : null,
   });
   lpBaseRef.current = liveLpNow.base;
@@ -311,7 +311,7 @@ function MatchScreen() {
     roundLossRef.current = {
       round: pub?.round,
       leaks: same ? Math.max(prev.leaks, leaks) : leaks,
-      cap: gd.config?.lpCapPerRound,
+      cap: pub?.lpCap === null ? Infinity : Number(pub?.lpCap) > 0 ? Number(pub.lpCap) : gd.config?.lpCapPerRound,
       unite: phase === PHASE.UNITE || (same && prev.unite),
     };
   }
@@ -1584,7 +1584,8 @@ function MatchScreen() {
         pen=${pen} penAvail=${penAvail} onPen=${togglePen} config=${gd.config} frozenAt=${frozenAt}
         pause=${canPause || paused ? { show: canPause, paused, busy: pauseBusy, onToggle: () => togglePause(!paused) } : null}
         live=${liveLpNow} spectator=${spectator}
-          spectators=${specFacts.list} myId=${myId} isHost=${specFacts.isHost} onRemoveSpectator=${removeSpectator} room=${modRoom} onUniteSkipVote=${actions.uniteSkipVote} />
+spectators=${specFacts.list} myId=${myId} isHost=${specFacts.isHost} onRemoveSpectator=${removeSpectator} room=${modRoom}
+        onUniteSkipVote=${actions.uniteSkipVote} onBloodMoney=${actions.bloodMoney} />
 
       <div class="gm__bonds">
         <button type="button" class="bonds-toggle" aria-expanded=${!bondsCollapsed} aria-controls="match-bond-strip"
@@ -1604,7 +1605,7 @@ function MatchScreen() {
       </div>
 
       <${TeamPanel} pub=${pub} myId=${myId} watching=${watchingNow} bubbles=${bubbles} emotes=${emotes} emoteNow=${emoteNow} emoteTtl=${bubbleMs}
-        onWatch=${watchPlayer} cap=${gd.config?.lpCapPerRound ?? 10} uniteLocal=${uniteLocal}
+        onWatch=${watchPlayer} cap=${pub?.lpCap === null ? Infinity : Number(pub?.lpCap) > 0 ? Number(pub.lpCap) : gd.config?.lpCapPerRound ?? 10} uniteLocal=${uniteLocal}
         self=${Number.isFinite(priv?.lp) ? { lp: priv.lp, pending: liveLpNow.pending, unite: liveLpNow.unite, left: liveLpNow.left } : null}
         observe=${cc ? { canObserve: (p) => observeTarget(p, pub, myId, { observing: watchingOther, ownDone: localDone }), observing: watchingOther, onBack: backHome } : null} />
 

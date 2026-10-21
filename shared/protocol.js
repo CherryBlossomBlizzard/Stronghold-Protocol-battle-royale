@@ -2,6 +2,13 @@
 // Every client→server message is `{ t, rid?, ...fields }`. Unknown `t` or invalid fields ⇒ ERR.BAD_MSG.
 
 import { DIFFICULTIES, NAME_MAX_LEN, ROOM_CODE_LEN, MAX_SEATS, ROOM_CAPACITIES, MAX_DRAFT_CARDS, EMOTES, GEO } from './constants.js';
+import { SPLIT_KNOWLEDGE } from './partyRules.js';
+
+/** 《神人派对》的 g.party 操作名（与 server/match/party/PartyMatch.js 的 _intent 一一对应）。 */
+export const PARTY_OPS = Object.freeze([
+  'ready', 'draw', 'buy', 'bid', 'tradeOffer', 'tradeAccept', 'tradeCancel',
+  'play', 'respond', 'pass', 'sponsor', 'accuse',
+]);
 import { isDroppableChess } from './standIn.js';
 import { diySlotIds, validateDiyPicks } from './diy.js';
 import { cultivatedStats, isPotential, isCultivate, POTENTIAL_DEFAULT, CULTIVATE_DEFAULT, hasPotentialData } from './potential.js';
@@ -430,7 +437,7 @@ export const C2S = {
   'lobby.spectate': { roomId: isRoomId,
     assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
   'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v),
-    assetCache: isAssetCacheReadiness, $optional: ['capacity', 'assetCache'] },
+    partyMode: isBool, assetCache: isAssetCacheReadiness, $optional: ['capacity', 'partyMode', 'assetCache'] },
   'room.join': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v), assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
   'room.leave': {},
   'room.ready': { ready: isBool },
@@ -462,6 +469,21 @@ export const C2S = {
   // in its lobby or while its match runs — never a player seat; the host frees one by playerId (the spectator gets
   // room.closed { reason: 'kicked' }). room.leave / g.leave leave a spectator seat like a player seat.
   'room.spectate': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v), assetCache: isAssetCacheReadiness, $optional: ['assetCache'] },
+  // 《卫冕协议·神人派对》: the host's pre-match settings (party mode only; locked once the match starts)
+  'room.party': { partyMode: isBool, splitKnowledge: (v) => Object.values(SPLIT_KNOWLEDGE).includes(v),
+    extraChanceCost: (v) => isInt(v, 1, 10), rounds: (v) => isInt(v, 4, 30),
+    $optional: ['partyMode', 'splitKnowledge', 'extraChanceCost', 'rounds'] },
+  // Party intents, one envelope with an `op` (see server/match/party/PartyMatch.js `_intent`)
+  'g.party': { op: (v) => typeof v === 'string' && PARTY_OPS.includes(v),
+    requestId: (v) => v == null || isStr(v, 64),
+    slot: (v) => isInt(v, 0, 15), amount: (v) => isInt(v, 0, 99), uid: (v) => isStr(v, 32),
+    targetId: isId, playerId: isId, tradeId: isId, againstActionId: isId,
+    give: (v) => Array.isArray(v) && v.length <= 6, want: (v) => Array.isArray(v) && v.length <= 6,
+    extra: (v) => v == null || typeof v === 'string' || typeof v === 'object',
+    $optional: ['requestId', 'slot', 'amount', 'uid', 'targetId', 'playerId', 'tradeId', 'againstActionId', 'give', 'want', 'extra'] },
+  'g.partyChallenge': { op: (v) => v === 'start' || v === 'answer' || v === 'finish',
+    index: (v) => isInt(v, 0, 64), choice: (v) => isInt(v, 0, 15),
+    $optional: ['index', 'choice'] },
   'room.removeSpectator': { playerId: isId },
   // the room's plugins (DESIGN §32, P1a; host, before the match — like a difficulty change it un-readies the others):
   // the plugins of this server the room switches on, in any order (the server closes the set over their requirements
@@ -513,6 +535,9 @@ export const C2S = {
   // solo pause (official PauseUp / ResumeUp, DESIGN §14): freezes the running battle (field clock, deadlines, the
   // browser's local runner) — solo matches only (co-op ⇒ WRONG_PHASE), only while a battle runs; m.public.paused
   'g.pause': { on: isBool },
+  // 卫戍协议：盟约 · 大逃杀：扣血加钱 —— 花 3 点目标生命值换 1 资金。低于 3 滴不能用；刚好 3 滴可以用，
+  // 但用完之后目标生命值归零、当场淘汰（休整期可用）
+  'g.bloodMoney': {},
   'g.uniteSkipVote': { voteId: isId, $optional: ['voteId'] },
   // the stats the own board's units start their next battle with (user playtest #4 item 7; prep phases): answered by
   // the push m.unitStats { seq, round, units: [unitStatsEntry] }; `seq` is echoed so the client keeps the newest answer
@@ -560,6 +585,8 @@ export const S2C = [
   'lobby.state',
   'room.state', 'room.closed',
   'm.public', 'm.private', 'm.field', 'm.toast', 'm.ticker', 'm.emote', 'm.result',
+  // 《卫冕协议·神人派对》 (party mode only)
+  'm.party', 'm.partyPrivate', 'm.partyResult',
   // Post-v1 JSON fallback; repeated in welcome.emergency and match public freeze extensions.
   'm.emergency',
   'm.chat', 'm.chatState', // bounded ephemeral history; new types use v1's readable JSON fallback

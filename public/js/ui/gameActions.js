@@ -112,6 +112,8 @@ export const actions = {
   uniteSkipVote: ({ voteId } = {}) => act('g.uniteSkipVote', voteId == null ? {} : { voteId }, { sfx: 'confirm' }),
   // solo battles only (ui/matchStatus.js pauseAvailable): m.public.paused follows
   pause: (on) => act('g.pause', { on: !!on }, { sfx: on ? 'click' : 'confirm' }),
+  // 卫戍协议：盟约 · 大逃杀：扣血加钱 —— 3 滴目标生命值换 1 资金（刚好 3 滴可以用，用完当场淘汰）
+  bloodMoney: () => act('g.bloodMoney', {}, { sfx: 'confirm' }),
   // room-level intent (NOT g.*): the host frees a spectator seat while the match runs — the server takes room.removeSpectator at
   // any time (server/lobby.js removeSpectator), the game screen had no entry for it (ui/hud.js SpectatorPill; GitHub #120)
   removeSpectator: (playerId) => act('room.removeSpectator', { playerId }, { sfx: 'back' }),

@@ -299,12 +299,25 @@ function modsWithoutBounty(mods) {
   return copy;
 }
 
+/**
+ * 去掉「血量增强」这一项（保留攻击 / 速度等其它增强）：亡语产物的血量按数据原值算。
+ * @param {object|null} mods SpawnSpec.mods
+ * @returns {object|null}
+ */
+function dropHpScale(mods) {
+  if (!mods || typeof mods !== 'object') return mods;
+  if (typeof mods.hpMul !== 'number' || mods.hpMul === 1) return mods;
+  return { ...mods, hpMul: 1 };
+}
+
 /** Spawn `n` enemies at the parent's position that continue its route. Returns the spawned units. */
 export function spawnChildren(b, parent, key, n, opts = {}) {
   const out = [];
   const route = opts.route ?? remainingRoute(parent);
   const cnt = Math.max(0, Math.min(20, Math.floor(n)));
-  const mods = modsWithoutBounty(opts.mods ?? parent.mods ?? null);
+  // 卫戍协议：盟约 · 大逃杀 —— 亡语（击杀后召唤 / 分裂）出来的孩子**不继承本回合的血量增强**：
+  // 血量增强只作用于本轮直接刷新出的敌人，亡语产物按数据原值（否则后期「次数怪」的孩子血量离谱）。攻击等其它增强照旧继承。
+  const mods = dropHpScale(modsWithoutBounty(opts.mods ?? parent.mods ?? null));
   for (let i = 0; i < cnt; i++) {
     const off = cnt > 1 ? (i - (cnt - 1) / 2) * 0.2 : 0;
     const pos = opts.pos ?? [parent.y, parent.x + off];

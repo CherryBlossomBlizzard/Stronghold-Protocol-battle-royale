@@ -12,6 +12,7 @@ import { buildBossWave, bountySpawns } from '../waves.js';
 import { pairPlayers, bossPoolHp, SharedBossPool, CreditPool, hiddenEligible, BOSS_HIT_STEPS } from '../finalAssault.js';
 import { FieldRunner, HeadlessPacer, syntheticResult, BOSS_SILENCE_MS, CATCHUP_TICKS_PER_INTERVAL } from '../fields.js';
 import { FLOW_TICKER_PRIORITY, BOSS_CLOCK_MS, DELAYS } from './common.js';
+import { RULES } from '../battleRoyaleRules.js';
 
 /** b.pool broadcasts at most this often (ms). */
 const POOL_MIN_GAP_MS = 250;
@@ -51,6 +52,20 @@ export class MatchBoss {
     // the pool's own per-player tally, one pool per boss round. stats.bossDamage (the result's 领袖伤害) adds up both
     // rounds, so it would credit the Final Assault's damage to the hidden leader ("隐藏boss还没打就出了50%播报").
     const hitSteps = new Map();
+    // 卫戍协议：盟约 · 大逃杀：首领战限时（默认 120 秒）——时间到就收尾这一把（不再"超时后继续打"）。
+    // 走既有判定：先把全队目标生命值清空（客户端战斗模式由 _checkFinalEnd 正常收尾），
+    // 万一那条路没结束（服务器直跑等），再直接 finish，保证"首领战后结束这一把"。
+    if (!hidden && RULES.bossTimeLimitSec > 0) {
+      this.later(this.scaled(RULES.bossTimeLimitSec * 1000), () => {
+        if (this.phase !== PHASE.FINAL_ASSAULT && this.phase !== PHASE.HIDDEN_CORE) return;
+        if (this.teamLp != null && this.teamLp > 0) this._teamLpLoss(this.teamLp);
+        try { this._checkFinalEnd(); } catch (e) { this.reportError('boss deadline', e); }
+        if (this.phase === PHASE.FINAL_ASSAULT || this.phase === PHASE.HIDDEN_CORE) {
+          this.tickerText('首领战限时已到，本局结束', FLOW_TICKER_PRIORITY);
+          this.finish({ victory: false, reason: 'timeout' });
+        }
+      });
+    }
     const pool = new SharedBossPool(bossPoolHp(this.gd, bossId, alive.length), {
       onHit: (pid, dmg) => {
         const ps = this.players.get(pid);
@@ -102,7 +117,7 @@ export class MatchBoss {
         routes: wave.routes,
         sharedBoss: this.bossPool,
         // the round's enemy effects for the leaders' mid-fight summons (server/sim/content/bosses.js summonMods)
-        flags: { layerGainsEnabled: false, ...this.gd.dp, enemyScale: this.gd.enemyScale(this.round) },
+        flags: { layerGainsEnabled: false, ...this.gd.battleFlags, enemyScale: this.gd.enemyScale(this.round) },
         fieldId,
         enemyOverrides: wave.overrides,
         waveId: wave.templateId,

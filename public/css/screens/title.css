@@ -326,3 +326,13 @@ html[data-script="alphabetic"] .title-login .btn--xl { letter-spacing: .3em; }
   border: 1px solid rgba(255, 159, 67, .5); color: #ffb066; background: rgba(255, 159, 67, .08); font-size: inherit;
 }
 .title-plugins .icon { width: .15rem; height: .15rem; }
+
+/* 卫戍协议：盟约 · 大逃杀：本服名称副标题（部署在 4040 端口的那一份） */
+.title-br {
+  margin: 8px 0 0;
+  color: #e9c37a;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-align: center;
+}

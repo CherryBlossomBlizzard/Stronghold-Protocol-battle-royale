@@ -1,0 +1,176 @@
+/* public/css/party.css — 《卫冕协议·神人派对》界面（public/js/screens/party.js）。
+   只新增类名（全部以 .party 开头），不改动任何既有组件样式。 */
+
+.screen.party {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 100%;
+}
+
+.party-loading { display: flex; align-items: center; justify-content: center; min-height: 40vh; }
+
+/* ── 顶部 ───────────────────────────────────────────────────────────── */
+.party-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(18, 28, 48, .72);
+  border: 1px solid rgba(120, 170, 255, .22);
+}
+.party-title { display: flex; flex-direction: column; gap: 2px; }
+.party-title b { font-size: 15px; letter-spacing: .04em; }
+.party-phase { display: flex; align-items: center; gap: 8px; }
+.party-phase-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(90, 150, 255, .18);
+  border: 1px solid rgba(120, 170, 255, .35);
+}
+.party-phase-badge.phase-party_gulag { background: rgba(255, 110, 90, .2); border-color: rgba(255, 120, 100, .5); }
+.party-phase-badge.phase-party_ended { background: rgba(120, 120, 140, .25); }
+.party-countdown { font-variant-numeric: tabular-nums; font-size: 12px; opacity: .8; }
+.party-countdown.hot { color: #ff8a7a; opacity: 1; font-weight: 600; }
+
+.party-resources { display: flex; gap: 12px; font-variant-numeric: tabular-nums; font-size: 13px; }
+
+/* ── 角色卡 ─────────────────────────────────────────────────────────── */
+.party-role {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(40, 30, 70, .5);
+  border: 1px solid rgba(180, 140, 255, .3);
+  font-size: 13px;
+}
+.party-role h3 { margin: 0 0 6px; font-size: 14px; }
+.party-role p { margin: 4px 0; }
+.faction.LOYAL { color: #7fd8a8; }
+.faction.SPLIT { color: #ff9a8a; }
+.faction.OPPORTUNIST { color: #ffd479; }
+
+/* ── 主体 ───────────────────────────────────────────────────────────── */
+.party-body { display: flex; flex-direction: column; gap: 12px; }
+.party-section {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(16, 24, 42, .66);
+  border: 1px solid rgba(120, 170, 255, .18);
+}
+.party-section h3 { margin: 0 0 8px; font-size: 14px; }
+.party-section h4 { margin: 12px 0 6px; font-size: 13px; opacity: .9; }
+.party-section .dim, .party .dim { opacity: .62; font-size: 12px; }
+
+.party-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.party-log li { padding: 3px 0; border-bottom: 1px dashed rgba(120, 170, 255, .12); }
+.party-log li:last-child { border-bottom: none; }
+
+/* ── 玩家表 ─────────────────────────────────────────────────────────── */
+.party-players { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.party-players th, .party-players td { padding: 5px 8px; text-align: left; border-bottom: 1px solid rgba(120, 170, 255, .12); }
+.party-players th { font-weight: 600; opacity: .7; }
+.party-players tr.me { background: rgba(90, 150, 255, .1); }
+.party-players tr.gone { opacity: .45; }
+
+/* ── 卡牌 ───────────────────────────────────────────────────────────── */
+.party-hand { display: flex; flex-wrap: wrap; gap: 8px; }
+.party-hand-item { display: flex; flex-direction: column; gap: 6px; }
+.party-card {
+  width: 168px;
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: linear-gradient(160deg, rgba(30, 44, 74, .95), rgba(20, 28, 48, .95));
+  border: 1px solid rgba(120, 170, 255, .3);
+  font-size: 12px;
+}
+.party-card.kind-prank { border-color: rgba(255, 150, 120, .45); }
+.party-card.kind-social { border-color: rgba(140, 220, 255, .45); }
+.party-card.kind-counter { border-color: rgba(160, 255, 190, .45); }
+.party-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.party-card-name { font-weight: 600; font-size: 13px; }
+.party-card-text { flex: 1; line-height: 1.45; opacity: .86; }
+.party-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.party-cost { font-size: 11px; opacity: .8; }
+.party-cost.free { color: #7fd8a8; }
+
+/* ── 市场 ───────────────────────────────────────────────────────────── */
+.party-market { display: flex; flex-wrap: wrap; gap: 10px; }
+.party-market-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(10, 18, 34, .6);
+}
+.party-market-meta { font-size: 11px; opacity: .78; }
+.party-bid { display: flex; gap: 6px; align-items: center; }
+.party-bid input { width: 62px; }
+
+/* ── 交易 ───────────────────────────────────────────────────────────── */
+.party-trade-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; }
+.party-trade-form input { width: 62px; }
+.party-target-row { display: flex; gap: 8px; align-items: center; font-size: 12px; margin-bottom: 8px; }
+
+/* ── 古拉格 ─────────────────────────────────────────────────────────── */
+.party-gulag { border-color: rgba(255, 140, 110, .35); }
+.gulag-state { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 170, 90, .18); }
+.gulag-state.closed { background: rgba(255, 90, 90, .22); color: #ffb4a4; }
+.party-minigame { margin-top: 10px; padding: 10px; border-radius: 9px; background: rgba(40, 26, 24, .55); }
+.party-minigame ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.party-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.party-choice {
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(160, 200, 255, .3);
+  background: rgba(30, 44, 74, .8);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.party-choice.picked { background: rgba(90, 150, 255, .45); border-color: rgba(160, 200, 255, .8); }
+.party-mini-result { margin-top: 8px; font-weight: 600; }
+.party-mini-result.win { color: #7fd8a8; }
+.party-mini-result.lose { color: #ff9a8a; }
+.party-sponsor { margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255, 140, 110, .3); }
+
+/* ── 动作 ───────────────────────────────────────────────────────────── */
+.party-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── 房间设置 ───────────────────────────────────────────────────────── */
+.party-room-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(24, 20, 44, .6);
+  border: 1px solid rgba(180, 140, 255, .28);
+  font-size: 13px;
+}
+.party-room-settings.readonly { opacity: .85; }
+.party-toggle { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.party-settings-grid { display: flex; flex-wrap: wrap; gap: 14px; }
+.party-settings-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.party-settings-grid input { width: 84px; }
+.party-errors { margin: 0; padding-left: 18px; color: #ff9a8a; font-size: 12px; }
+
+/* 窄屏 */
+@media (max-width: 720px) {
+  .screen.party { padding: 10px; gap: 8px; }
+  .party-card { width: 100%; min-height: 0; }
+  .party-hand { flex-direction: column; }
+  .party-hand-item { width: 100%; }
+  .party-players { font-size: 11px; }
+  .party-players th, .party-players td { padding: 4px 5px; }
+}

@@ -160,6 +160,9 @@ import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, check
 import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
 import { getData as defaultGetData, lookup } from './data.js';
 import { Match as DefaultMatch } from './match/Match.js';
+import { PartyMatch, partyMatchOptions } from './match/party/PartyMatchAdapter.js';
+import { PARTY_MIN_PLAYERS, PARTY_MAX_PLAYERS, SPLIT_KNOWLEDGE } from '../shared/partyRules.js';
+import { MatchChat } from './matchChat.js';
 import { KITTED_CHARS } from './sim/content/kits/index.js';
 
 const VANILLA_KITTED = new Set(KITTED_CHARS);
@@ -247,7 +250,18 @@ export class Room {
      * 「AI 队友最后选择」 (room.setAiPicksLast, GitHub #338; co-op only, off by default): the match's strategy and 机变 drafts
      * put every human seat before every AI seat (Match opts.aiPicksLast). Kept across the room's matches.
      */
-    this.aiPicksLast = false;
+this.aiPicksLast = false;
+    /** 公开招募（room.setMatchmaking）：房间是否允许被「最快匹配」和观战发现；房主可改，对局中不可改。 */
+    this.allowMatchmaking = true;
+    /**
+     * 《卫冕协议·神人派对》(party mode): the room plays the party ruleset instead of the co-op PvE match.
+     * Host-set before the match (room.party); locked once it starts.
+     */
+    this.partyMode = false;
+    /** @type {object} the host's party settings (normalized by shared/partyRules.js when the match starts) */
+    this.partyConfig = {};
+    /** main-battlefield rounds of a party match */
+    this.partyRounds = 12;
     /** @type {string | null} */
     this.hostId = null;
     /** @type {(Seat | null)[]} */
@@ -315,6 +329,16 @@ export class Room {
       mode: this.mode,
       difficulty: this.difficulty,
       aiPicksLast: this.aiPicksLast,
+aiPicksLast: this.aiPicksLast,
+      allowMatchmaking: this.allowMatchmaking,
+      // 《卫冕协议·神人派对》 settings (party rooms only; null for the PvE modes)
+      party: this.partyMode ? {
+        partyMode: true,
+        splitKnowledge: this.partyConfig.splitKnowledge ?? null,
+        extraChanceCost: this.partyConfig.extraChanceCost ?? null,
+        rounds: this.partyRounds,
+        minPlayers: 4, maxPlayers: 20,
+      } : null,
       inMatch: !!this.match,
       seats: this.seats.map((s) => (s
         ? { seat: s.seat, playerId: s.playerId, name: s.name, isBot: s.isBot, ready: s.ready, connected: s.connected && !s.left,
@@ -581,6 +605,7 @@ export class Lobby {
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
+      case 'room.party': return this.setPartySettings(session, msg);
       case 'room.addBot': return this.addBot(session);
       case 'room.removeBot': return this.removeBot(session, msg);
       case 'room.kick': return this.kick(session, msg);
@@ -897,7 +922,7 @@ case 'room.setPlugins': return this.setPlugins(session, msg);
     return OK;
   }
 
-  setEmergency(state) {
+setEmergency(state) {
     this.emergency = { active: !!state.active, reason: state.reason || 'bandwidth',
       since: state.startedAt || state.since || this.now(), retryAt: state.retryAt || 0 };
     for (const room of this.rooms.values()) if (room.match) {
@@ -906,7 +931,45 @@ case 'room.setPlugins': return this.setPlugins(session, msg);
     this.discovery.changed();
   }
 
-  setMatchmaking(session, { allowed }) {
+/**
+   * 《卫冕协议·神人派对》房间设置（房主，开局前）。字段全部可选：
+   *   partyMode        是否启用派对规则（false = 回到普通合作 PvE）
+   *   splitKnowledge   裂盟派互认：ALL / PARTIAL / NONE
+   *   extraChanceCost  古拉格额外挑战机会价格（调度券，测试值默认 3）
+   *   rounds           主战场回合数
+   * 非法值一律整条拒绝（BAD_MSG），不静默改写；开局后整条拒绝（ROOM_STARTED）。
+   */
+  setPartySettings(session, msg) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (room.mode === 'solo') return fail(ERR.BAD_TARGET, 'party mode needs a co-op room');
+    const changingMode = typeof msg.partyMode === 'boolean' && msg.partyMode !== room.partyMode;
+    if (typeof msg.partyMode === 'boolean') room.partyMode = msg.partyMode;
+    if (msg.splitKnowledge !== undefined) {
+      if (!Object.values(SPLIT_KNOWLEDGE).includes(msg.splitKnowledge)) return fail(ERR.BAD_MSG, 'bad splitKnowledge');
+      room.partyConfig.splitKnowledge = msg.splitKnowledge;
+    }
+    if (msg.extraChanceCost !== undefined) {
+      if (!(Number.isInteger(msg.extraChanceCost) && msg.extraChanceCost >= 1 && msg.extraChanceCost <= 10)) {
+        return fail(ERR.BAD_MSG, 'bad extraChanceCost');
+      }
+      room.partyConfig.extraChanceCost = msg.extraChanceCost;
+    }
+    if (msg.rounds !== undefined) {
+      if (!(Number.isInteger(msg.rounds) && msg.rounds >= 4 && msg.rounds <= 30)) return fail(ERR.BAD_MSG, 'bad rounds');
+      room.partyRounds = msg.rounds;
+    }
+    if (room.partyMode) room.difficulty = room.difficulty || 'NORMAL';
+    // 切换模式会让其他真人的"准备"失效（房间规则变了）
+    if (changingMode) for (const s of room.seats) if (s && !s.isBot && s.playerId !== room.hostId) s.ready = false;
+    this.broadcastState(room);
+    return OK;
+  }
+
+  /** Only a co-op waiting-room host controls public admission; invitations and observation stay available. */
+setMatchmaking(session, { allowed }) {
     const room = this.roomOf(session);
     if (!room) return fail(ERR.NOT_IN_ROOM);
     if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
@@ -1171,6 +1234,13 @@ case 'room.setPlugins': return this.setPlugins(session, msg);
     if (humans.length < 1 || (room.mode === 'solo' && (humans.length !== 1 || bots.length > 0))) {
       return fail(ERR.BAD_MSG, 'invalid seat configuration');
     }
+    // 《卫冕协议·神人派对》：首发 8–12 人，允许 4–20 人；人数在服务端、协议与前端座位界面保持一致
+    if (room.partyMode) {
+      const seated = room.seats.filter(Boolean).length;
+      if (seated < PARTY_MIN_PLAYERS) return fail(ERR.PARTY_TOO_FEW, `神人派对至少需要 ${PARTY_MIN_PLAYERS} 名玩家（含 AI）`);
+      if (seated > PARTY_MAX_PLAYERS) return fail(ERR.PARTY_TOO_MANY, `神人派对最多 ${PARTY_MAX_PLAYERS} 名玩家`);
+      if (room.mode === 'solo') return fail(ERR.BAD_TARGET, '神人派对不能在单人房间开始');
+    }
     const key = session.limitKey || null;
     if (key && this.opts.maxMatchesPerAddr > 0 && this.countRooms((r) => !!r.match && r.matchKey === key) >= this.opts.maxMatchesPerAddr) {
       this.limitWarn(`match limit (${this.opts.maxMatchesPerAddr}) reached for ${session.addr}`);
@@ -1372,10 +1442,16 @@ case 'room.setPlugins': return this.setPlugins(session, msg);
       };
     });
     // lastPublic / results: the latest m.public broadcast and the m.result frames (encoded), kept for the replay.
-    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null, results: new Map() };
+    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null, results: new Map(), chat: new MatchChat({ now: this.now }) };
     let seed = 0;
     try { seed = this.seedFn() >>> 0; } catch { seed = randomInt(2 ** 32); }
-    const modded = room.modded;
+const modded = room.modded;
+    // the platform callbacks every match implementation receives (Match and PartyMatch share this contract)
+    const platform = {
+      send: (playerId, msg) => (ctx.live ? this.matchSend(room, ctx, playerId, msg) : false),
+      broadcast: (msg) => { if (ctx.live) this.matchBroadcast(room, ctx, msg); },
+      onEnd: (summary) => this.onMatchEnd(room, ctx, summary),
+    };
     try {
       const opts = {
         roomCode: room.code,
@@ -1402,21 +1478,25 @@ case 'room.setPlugins': return this.setPlugins(session, msg);
         data,
         log: this.log,
         now: this.now,
-        send: (playerId, msg) => (ctx.live ? this.matchSend(room, ctx, playerId, msg) : false),
-        broadcast: (msg) => { if (ctx.live) this.matchBroadcast(room, ctx, msg); },
-        onEnd: (summary) => this.onMatchEnd(room, ctx, summary),
+...platform,
       };
+      // 《卫冕协议·神人派对》: a party room runs PartyMatch instead of the PvE Match, on the same rooms/network/reconnect;
       // a room with gameplay plugins plays in its content set's match host; every other room here, as always
-      const match = modded && this.hosts ? this.hosts.create(room.content.cs, opts) : new this.MatchClass(opts);
+      const match = room.partyMode
+        ? new PartyMatch(partyMatchOptions({
+          room, seats, data: this.safeData(), log: this.log, now: this.now, seed, matchNo: room.matchCount + 1, ...platform,
+        }))
+        : (modded && this.hosts ? this.hosts.create(room.content.cs, opts) : new this.MatchClass(opts));
       ctx.match = match;
       room.match = match;
       room.matchCtx = ctx;
       room.matchKey = key;
       room.replay = null;
       room.matchCount++;
-      this.log.info(`[lobby] ${room.code} match #${room.matchCount} starting (${room.mode}/${room.difficulty}, ${seats.length} seats, seed ${seed}${modded ? `, content ${room.content.cs.slice(0, 8)}${match.hosted ? ' in its match host' : ''}` : ''})`);
+this.log.info(`[lobby] ${room.code} match #${room.matchCount} starting (${room.partyMode ? 'party' : room.mode}/${room.difficulty}, ${seats.length} seats, seed ${seed}${modded ? `, content ${room.content.cs.slice(0, 8)}${match.hosted ? ' in its match host' : ''}` : ''})`);
       this.broadcastState(room);
       match.start();
+      if (room.matchCtx === ctx && ctx.chat && !ctx.chat.closed) this.broadcastRoom(room, ctx.chat.snapshot());
     } catch (e) {
       this.log.error(`[lobby] ${room.code} match failed to start`, e);
       if (room.matchCtx === ctx) { room.match = null; room.matchCtx = null; room.matchKey = null; }

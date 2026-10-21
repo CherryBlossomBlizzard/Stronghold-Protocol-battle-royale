@@ -93,7 +93,8 @@ export function ownRoundLoss(cost) {
   if (!cost) return null;
   const leaks = Number.isFinite(cost.leaks) ? Math.max(0, Math.trunc(cost.leaks)) : null;
   if (leaks == null) return null;
-  const cap = Number.isFinite(cost.cap) && cost.cap > 0 ? Math.trunc(cost.cap) : 10; // no cap known → the official 10
+  // 卫戍协议：盟约 · 大逃杀：cap = Infinity 表示这一局关闭了回合扣血上限（settle 全额扣除），否则按这一回合的上限截断
+  const cap = Number(cost.cap) > 0 ? Math.trunc(Number(cost.cap)) : 10; // no cap known → the official 10
   return Math.min(cap, leaks);
 }
 
