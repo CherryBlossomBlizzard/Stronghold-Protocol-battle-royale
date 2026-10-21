@@ -228,6 +228,44 @@ export function setupMatchWaves(gd, rng) {
  * 本局禁用敌人。飞行与地面分开，抽出来的怪才能放进对应路线。
  */
 const MONSTER_POOLS = new WeakMap();
+/** 亡语 / 召唤产物（某个敌人的 `*.enemy_key` 黑板或 `summons` 数组指向的怪），按 GameData 缓存。 */
+const SPAWN_PRODUCTS = new WeakMap();
+
+/**
+ * 卫戍协议：盟约 · 大逃杀：**亡语 / 召唤产物不进骰子池**（`data/enemies.json` 里的 `DeadSpawn.enemy_key` /
+ * `Summon.enemy_key` / `DeathRattle.enemy_key` / `1.enemy_key` 等黑板与 `summons` 数组指向的 key）。
+ *
+ * 上游数据没有用 `tokenOnly` / `notCountInTotal` 标出这些「别人的孩子」（全库只有 1 个），所以第 14 回合起的骰子
+ * 会把它们当成普通怪**直接刷进怪海** —— 典型就是次数怪（频次器物）的亡语产物：木制瑞印、小说卷轴、青铜镜、
+ * 铜矛头、铜灯盘、青瓷茶器 …（`times.js` 的 14 个器物 key）本该只在召唤者被击杀时出现。这里按数据把这一族排除。
+ */
+function spawnProducts(gd) {
+  const hit = SPAWN_PRODUCTS.get(gd);
+  if (hit) return hit;
+  const set = new Set();
+  const scan = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const v of node) scan(v); return; }
+    for (const [k, v] of Object.entries(node)) {
+      if (/enemy_key$/i.test(k)) { if (typeof v === 'string') set.add(v); } else scan(v);
+    }
+  };
+  for (const rec of Object.values(gd.raw.enemies || {})) {
+    if (!rec || typeof rec !== 'object') continue;
+    if (Array.isArray(rec.summons)) for (const s of rec.summons) { if (typeof s === 'string') set.add(s); else if (s && typeof s.key === 'string') set.add(s.key); }
+    scan(rec);
+  }
+  // 频次器物（「次数怪」本身）：数据的 maxHp 就是它需要的伤害次数，attrPower 也正好等于它
+  // （`archetypes.js times`: setHits(e, e.base.maxHp …)）—— 正常怪的 attrPower 是攻/血/防/抗的加权和，不会相等。
+  // 它们同样该只在召唤者被击杀时出现，不能自己刷进怪海。
+  for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
+    const hp = Number(rec && rec.stats && rec.stats.maxHp), ap = Number(rec && rec.attrPower);
+    if (Number.isFinite(hp) && Number.isFinite(ap) && hp > 0 && hp === ap) set.add(key);
+  }
+  SPAWN_PRODUCTS.set(gd, set);
+  return set;
+}
+
 /** 怪物强度：优先用数据里的 attrPower，缺失时用 生命 × 攻击 兜底（排序用，不参与战斗）。 */
 function enemyPower(rec) {
   const p = Number(rec.attrPower);
@@ -246,9 +284,12 @@ function monsterPools(gd) {
   }
   const all = { normal: [], elite: [], flyNormal: [], flyElite: [], special: [] };
   const powers = [];
+  const products = spawnProducts(gd);
   for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
     if (!rec || typeof rec !== 'object') continue;
     if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || gd.inactiveEnemies.has(key)) continue;
+    // 亡语 / 召唤产物（次数怪的亡语产物等）：只在召唤者被击杀时出现，不直接刷进怪海
+    if (products.has(key)) continue;
     const rank = String(rec.rank || 'NORMAL');
     if (rank === 'BOSS') continue;                       // 领袖本体
     const fly = isFlyKey(gd, key);
@@ -285,14 +326,22 @@ function rollOne(rng, list) {
 export function rollWavePick(gd, rng, round) {
   const p = monsterPools(gd);
   const draw = (cls) => rollOne(rng, diceList(p, cls));
+  // 卫戍协议：盟约 · 大逃杀：**整体降低飞行怪频率** —— 飞行槽位只有 `flySpawnChance` 的概率真抽一只飞行怪；
+  // 其余情况抽一只地面怪，那次刷新会因「槽位类别不符」在 templateSpawns 里被直接跳过（不刷、不预告）。
+  // 第 1–13 回合走官方表，不读这个开关。
+  const flyChance = Number.isFinite(RULES.flySpawnChance) ? Math.min(1, Math.max(0, RULES.flySpawnChance)) : 1;
+  const groundFallback = () => draw('normal') || draw('elite') || draw('special');
+  const flyDraw = (flyCls, groundCls) => (flyChance >= 1 || rng() < flyChance
+    ? (draw(flyCls) || draw('special'))
+    : (draw(groundCls) || groundFallback()));
   const half = round <= firstHalfMax(gd);
   return {
     round, type: 'DICE', firstHalf: half,
     key: draw('special') || draw('normal') || draw('elite'),
     normal: draw('normal') || draw('special'),
     elite: draw('elite') || draw('special'),
-    flyNormal: draw('flyNormal') || draw('special'),
-    flyElite: draw('flyElite') || draw('special'),
+    flyNormal: flyDraw('flyNormal', 'normal'),
+    flyElite: flyDraw('flyElite', 'elite'),
     fly: false, dice: true, diceFrom: p.from,
   };
 }
