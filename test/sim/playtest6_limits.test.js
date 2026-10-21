@@ -290,8 +290,16 @@ const PAIR = [
   { playerId: 'p_0', seat: 0, side: 'L', colOffset: 0, units: [], bonds: {}, playerEffects: [] },
   { playerId: 'p_1', seat: 1, side: 'R', colOffset: 8, units: [], bonds: {}, playerEffects: [] },
 ];
+/**
+ * 卫戍协议：盟约 · 大逃杀：本分支把首领战挪到第 RULES.bossRound（20）回合，roundCfg(14/15) 走的是合成逻辑。
+ * 这几条是**官方限伤**的机制测试（与对局流程无关），所以用一份「只看官方模式数据」的代理拿到 14 / 15 那两格的
+ * 首领配置，等价于上游的 buildBossWave(gd, ..., 14/15)。
+ */
+const officialGd = Object.create(gd);
+officialGd.roundCfg = (r) => (gd.mode && gd.mode.rounds && gd.mode.rounds[String(r)]) || null;
+
 function realBossField(bossId, hidden, pool, players = PAIR) {
-  const wave = buildBossWave(gd, createRng(1), setup.factions, hidden ? 15 : 14, { bossId, solo: false });
+  const wave = buildBossWave(officialGd, createRng(1), setup.factions, hidden ? 15 : 14, { bossId, solo: false });
   const spec = buildBattleSpec({
     battleId: `lim.${bossId}`, fieldId: 'b1', kind: hidden ? 'hidden' : 'boss', seed: 5, modeId: 'mode_multi_hard', round: hidden ? 15 : 14,
     stageId: 'act2autochess_m01', rect: { ...GEO.BOSS_RECT }, timeLimit: null, players,

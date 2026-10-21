@@ -16,6 +16,7 @@ import { isShopItem } from '../sim/simdata.js';
 import { mergeData } from '../../shared/plugins/dataUtils.js';
 import { standInRecord } from '../../shared/standIn.js';
 import { MAX_OFFER_SLOTS } from './player/common.js';
+import { RULES } from './battleRoyaleRules.js';
 
 const own = (map, id) => (map && typeof map === 'object' && typeof id === 'string' && Object.hasOwn(map, id) && map[id] && typeof map[id] === 'object' ? map[id] : null);
 const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -159,6 +160,8 @@ export class GameData {
    * @returns {number}
    */
   bossPoolHp(bossId, aliveCount) {
+    // 卫戍协议：盟约 · 大逃杀：首领战血量固定（RULES.bossHp = 十亿），不再按存活人数缩放。
+    if (this.bossFixedHp) return this.bossFixedHp;
     const boss = this.boss(bossId);
     const diff = this.difficulty;
     let base = boss && boss.bloodPoint && Number.isFinite(boss.bloodPoint[diff]) ? boss.bloodPoint[diff] : null;
@@ -357,13 +360,72 @@ export class GameData {
     if (Number.isInteger(this.mode.lastRound) && this.mode.lastRound > 0) return this.mode.lastRound;
     return this.modeId === 'mode_single_funny' ? 9 : 14;
   }
-  get bossRound() { return Number.isInteger(this.mode.bossRound) && this.mode.bossRound > 0 ? this.mode.bossRound : this.lastRound; }
-  get hiddenRound() { return Number.isInteger(this.mode.hiddenRound) && this.mode.hiddenRound > 0 ? this.mode.hiddenRound : null; }
+  /**
+   * 卫戍协议：盟约 · 大逃杀：最后一回合 = 强制首领战的回合（RULES.bossRound，20）；回合数没有上限，
+   * 只要还有人存活就一直进行（数据只写到官方回合数，更远的回合见 roundCfg / bossRoundCfg）。
+   */
+  get bossRound() { return RULES.bossRound > 0 ? RULES.bossRound : (Number.isInteger(this.mode.bossRound) && this.mode.bossRound > 0 ? this.mode.bossRound : this.lastRound); }
+  /** 大逃杀没有隐秘核心：首领战（第 20 回合）结束就是这一把的结束。 */
+  get hiddenRound() { return null; }
   get maxShopLevel() { return posIntOr(this.mode.maxShopLevel, DEFAULTS.maxShopLevel); }
 
+  /**
+   * 卫戍协议：盟约 · 大逃杀：官方数据只写到「首领战」那一回合（多人 R14 / 单人标准 R9），本服第 `normalRoundMax`（13）
+   * 回合之后还要继续打普通回合，第 `bossRound`（20）回合才进首领战。所以：
+   *   * 第 1–13 回合：官方配置，原样返回；
+   *   * 第 20 回合：官方的首领配置（`bossTemplates` 等，见 bossRoundCfg）；
+   *   * 第 14–19 回合（以及官方那几格首领配置以外的任何回合）：没有官方配置，在这里合成 —— 沿用最后一个普通回合的
+   *     波次模板（敌人由骰子决定，waves.js），休整期 / 作战时限按 RULES 每回合递增并封顶。
+   * 小工具 / 测试自己构造的 GameData 也走这里（RULES 是固定值，没有额外输入），与上游的差别就是「第 14 回合起继续出怪」。
+   */
   roundCfg(r) {
     const rounds = this.mode.rounds;
-    return rounds && typeof rounds === 'object' && rounds[String(r)] && typeof rounds[String(r)] === 'object' ? rounds[String(r)] : null;
+    const rc = rounds && typeof rounds === 'object' && rounds[String(r)] && typeof rounds[String(r)] === 'object' ? rounds[String(r)] : null;
+    if (rc && r <= RULES.normalRoundMax) return rc;
+    if (r === this.bossRound) return rc || this.bossRoundCfg();
+    const officialBoss = !!rc && (rc.isBoss === true || rc.isHidden === true || (rc.bossTemplates && Object.keys(rc.bossTemplates).length > 0));
+    if (rc && !officialBoss) return rc;
+    if (!RULES.endless || r < 1 || r > RULES.generatedRounds) return null;
+    // 基准 = 最后一个带普通波次模板的官方回合（单人标准是 R8，多人绝境是 R13）；它之后的官方配置全是首领战
+    let last = null;
+    for (let k = 1; k <= Math.max(RULES.normalRoundMax, this.lastRound); k++) {
+      const c = rounds && typeof rounds === 'object' ? rounds[String(k)] : null;
+      if (c && typeof c.template === 'string' && c.isBoss !== true && c.isHidden !== true) last = c;
+    }
+    if (!last && rounds && typeof rounds === 'object' && rounds[String(RULES.normalRoundMax)]) last = rounds[String(RULES.normalRoundMax)];
+    const template = last && typeof last.template === 'string' ? last.template : null;
+    if (!template) return null;
+    const over = r - RULES.normalRoundMax;
+    const basePrep = last && Number.isFinite(last.prepTime) ? last.prepTime : 0;
+    const prep = Math.min(RULES.prepTimeCap, basePrep + over * RULES.prepTimeStep);
+    const combat = Math.min(RULES.combatTimeCap, (last && Number.isFinite(last.combatTimeLimit) ? last.combatTimeLimit : 115) + over * RULES.combatTimeStep);
+    return {
+      template, bossTemplates: null, combatTimeLimit: combat, levelMaxPlayTime: combat,
+      prepTime: this.isSolo ? null : prep, prepTimeData: prep, isSpPrepare: false,
+      isBoss: false, isHidden: false, bossOvertimeAfter: null, brGenerated: true,
+    };
+  }
+
+  /**
+   * 卫戍协议：盟约 · 大逃杀：第 `bossRound`（20）回合的首领战配置。数据里每个模式只在官方那一回合写了首领配置，
+   * 本模式里没有那一格（比如官方首领在 R14、本服首领在 R20）时就沿用本模式官方的首领配置（`bossTemplates` 那一格，
+   * 绝境 / 终极 / 标准都有），仍取不到才用其他模式的。首领模板里的 `_s` 后缀由 buildBossWave 按人数自动选。
+   */
+  bossRoundCfg() {
+    const rounds = this.mode.rounds;
+    if (!rounds || typeof rounds !== 'object') return null;
+    const isBossCfg = (c) => !!c && (c.isBoss === true || c.isHidden === true || (c.bossTemplates && Object.keys(c.bossTemplates).length > 0));
+    let best = null;
+    let bestIdx = -1;
+    for (const key of Object.keys(rounds)) {
+      const c = rounds[key];
+      if (!isBossCfg(c)) continue;
+      const idx = Number(key);
+      if (!Number.isInteger(idx)) continue;
+      if (idx === this.mode.bossRound) return { ...c, brGenerated: true };
+      if (idx > bestIdx) { best = c; bestIdx = idx; }
+    }
+    return best ? { ...best, brGenerated: true } : null;
   }
 
   spRounds() { return Array.isArray(this.mode.spRounds) ? this.mode.spRounds.filter((n) => Number.isInteger(n)) : []; }
@@ -451,9 +513,26 @@ export class GameData {
     };
   }
 
-  /** Enemy multipliers of round r = the official table (baseEnemyScale; no custom multiplier). */
+  /**
+   * Enemy multipliers of round r. 卫戍协议：盟约 · 大逃杀（server/match/battleRoyaleRules.js）:
+   *   * 第 1–`normalRoundMax`（13）回合用官方表（baseEnemyScale），一点不改；
+   *   * 第 `hpDoubleFrom`（14）回合起，血量在**上一回合的数值上再翻 `hpDoubleMul`（2）倍**（复合：
+   *     第 14 回合 = 第 13 回合 ×2、第 15 回合 = 第 14 回合 ×2 …），攻击仍按前 13 回合的等比递增；
+   *   * 数据本身已续写到第 20 回合，这里兜更远的回合。
+   */
   enemyScale(r) {
-    return this.baseEnemyScale(r);
+    const base = this.baseEnemyScale(r);
+    if (!RULES.endless) return base;
+    const nm = RULES.normalRoundMax;
+    if (r <= nm) return base;
+    const last = this.baseEnemyScale(nm);
+    const hp = last.hpMul * Math.pow(RULES.hpDoubleMul, r - (RULES.hpDoubleFrom - 1));
+    return {
+      hpMul: Math.max(0.01, hp),
+      atkMul: Math.max(0, last.atkMul * Math.pow(RULES.atkGrowth, r - nm)),
+      speedMul: last.speedMul,
+      ...(last.supplyHpMul != null ? { supplyHpMul: last.supplyHpMul } : {}),
+    };
   }
 
   timer(key) {
@@ -487,6 +566,33 @@ export class GameData {
   get dp() {
     const d = this.config.dp && typeof this.config.dp === 'object' ? this.config.dp : {};
     return { dpInit: numOr(d.init, 10), dpPerSec: numOr(d.perSec, 1), dpMax: numOr(d.max, 99) };
+  }
+  /** 卫戍协议：盟约 · 大逃杀：第 `rollWaveFrom` 回合起出怪掷骰子（waves.js，从全部怪物里随机抽）。 */
+  get rollWaves() { return RULES.rollWaveFrom > 0; }
+
+  /** 掷骰子从第几回合开始：之前的回合按官方派系 / 波次表出怪（本服 = 第 14 回合起）。 */
+  get rollWaveFrom() { return RULES.rollWaveFrom; }
+
+  /** 卫戍协议：盟约 · 大逃杀：首领战固定血量（十亿）；0 = 用官方按存活人数缩放的算法。 */
+  get bossFixedHp() { return RULES.bossHp > 0 ? RULES.bossHp : null; }
+
+  /** 卫戍协议：盟约 · 大逃杀：回合数没有上限（第 13 回合之后继续普通回合，第 20 回合才进首领战）。 */
+  get endless() { return !!RULES.endless; }
+
+  /**
+   * 卫戍协议：盟约 · 大逃杀：这一局每一块战场都要带的 `battle.flags` —— DP 经济值 + 本服的两条规则开关：
+   *   * `bossHitLimit: false` 关掉官方的限伤（打十亿血的首领用，server/sim/damage.js leaderHitCancelled）；
+   *   * `timesHpBonus: false` 让次数怪（频次器物）不吃回合血量加成，次数用数据原值
+   *     （server/sim/content/enemies/archetypes.js `times`）。
+   * 两个开关都从 RULES 读，随规格一起发给浏览器，所以服务端和浏览器跑同一份战斗时行为一致；
+   * 工具与 golden 不经过这里，保持上游默认（限伤开、次数吃加成）。
+   */
+  get battleFlags() {
+    return {
+      ...this.dp,
+      ...(RULES.bossHitLimit ? {} : { bossHitLimit: false }),
+      ...(RULES.timesHpBonus ? {} : { timesHpBonus: false }),
+    };
   }
   get unite() {
     const u = this.config.unite && typeof this.config.unite === 'object' ? this.config.unite : {};

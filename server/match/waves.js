@@ -37,6 +37,7 @@
 
 import { createRng, deriveSeed } from '../sim/rng.js';
 import { PLUGIN_ACTION_UNITS } from '../../shared/plugins/limits.js';
+import { RULES } from './battleRoyaleRules.js';
 
 const ACLOON = 'enemy_9012_acloon';
 const DEFAULT_PLACEHOLDERS = Object.freeze({
@@ -205,7 +206,10 @@ export function setupMatchWaves(gd, rng) {
   const bw = gd.bossWeights(false);
   const bossId = bw.length ? weightedPick(rng, bw) : null;
   const hw = gd.bossWeights(true);
-  const hiddenBossId = hw.length && gd.hiddenRound ? weightedPick(rng, hw) : null;
+  // 卫戍协议：盟约 · 大逃杀：出怪排期与上游 seed 一致（前 13 回合按官方），所以这里按**数据里**的隐秘核心回合抽取
+  // （gd.mode.hiddenRound），而不是按本分支的 gd.hiddenRound（恒 null）—— 后者会让 rng 流错位，整局的派系与回合表都变。
+  const modeHiddenRound = Number.isInteger(gd.mode && gd.mode.hiddenRound) && gd.mode.hiddenRound > 0 ? gd.mode.hiddenRound : null;
+  const hiddenBossId = hw.length && modeHiddenRound ? weightedPick(rng, hw) : null;
   // the 15-round schedule and picks (own rng stream derived from the setup rng's state: the draws above and whatever
   // the caller draws next from `rng` are unchanged)
   const srng = scheduleRng(rng);
@@ -217,11 +221,106 @@ export function setupMatchWaves(gd, rng) {
 }
 
 /**
+ * 卫戍协议：盟约 · 大逃杀：把 data/enemies.json 里的**全部怪物**编成候选池（按槽位类别分开），
+ * 第 `RULES.rollWaveFrom`（14）回合起每一波用骰子抽一个。排除：召唤物 / 部件（tokenOnly、notCountInTotal）、
+ * 领袖本体（只在首领回合出现）、本局禁用敌人。飞行与地面分开，抽出来的怪才能放进对应路线。
+ */
+const MONSTER_POOLS = new WeakMap();
+/** 怪物类别属性：attr 里 TIMES = 频次器物（次数怪）。 */
+const TIMES = 'TIMES';
+/** 数据里标注「频次器物」的方式（acType / acTypes）。 */
+const isTimes = (rec) => !!rec && (rec.acType === TIMES || (Array.isArray(rec.acTypes) && rec.acTypes.includes(TIMES)));
+/** 这一回合是否处在「次数怪只以亡语形态出现」的区间（RULES.timesDropFrom 起）。 */
+export function timesDropped(round) { return RULES.timesDropFrom > 0 && round >= RULES.timesDropFrom; }
+/** 这一回合是否处在「首领本体不进普通波次」的区间（RULES.bossDropFrom 起）。 */
+export function bossDropped(round) { return RULES.bossDropFrom > 0 && round >= RULES.bossDropFrom; }
+
+/** 怪物强度：优先用数据里的 attrPower，缺失时用 生命 × 攻击 兜底（只用来排序，不参与战斗）。 */
+function enemyPower(rec) {
+  const p = Number(rec.attrPower);
+  if (Number.isFinite(p) && p >= 0) return p;
+  const st = rec.stats || {};
+  return (Number(st.maxHp) || 0) * Math.max(1, Number(st.atk) || 0);
+}
+
+function monsterPools(gd) {
+  const hit = MONSTER_POOLS.get(gd);
+  if (hit) return hit;
+  const leaders = new Set();
+  for (const id of Object.keys(gd.raw.bosses || {})) {
+    const b = gd.boss(id);
+    if (b && typeof b.enemyKey === 'string') leaders.add(b.enemyKey);
+  }
+  const all = { normal: [], elite: [], flyNormal: [], flyElite: [], groundSpecial: [], flySpecial: [] };
+  for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
+    if (!rec || typeof rec !== 'object') continue;
+    if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || gd.inactiveEnemies.has(key)) continue;
+    const rank = String(rec.rank || 'NORMAL');
+    if (rank === 'BOSS') continue;                       // 领袖本体：只在首领战出现
+    // 卫戍协议：盟约 · 大逃杀：次数怪（频次器物）从 RULES.timesDropFrom 起不进波次，只以亡语形态（击杀后召唤 /
+    // 分裂）出现；官方模板里抽到它们时同样跳过（见 templateSpawns）。
+    if (RULES.timesDropFrom > 0 && isTimes(rec)) continue;
+    const fly = isFlyKey(gd, key);
+    const elite = rank === 'ELITE';
+    const power = enemyPower(rec);
+    (fly ? (elite ? all.flyElite : all.flyNormal) : (elite ? all.elite : all.normal)).push({ key, power });
+    // 特殊槽（S / SF）从「全部怪物」里抽：地面槽地面怪、飞行槽飞行怪，两边的池子都保证行动方式对得上
+    (fly ? all.flySpecial : all.groundSpecial).push({ key, power });
+  }
+  // 第 14 回合起「全部怪物」都出：池子不按属性强度分低 / 中难度档，每类就是该类别的全部怪物
+  const pools = { from: RULES.rollWaveFrom, total: all.groundSpecial.length + all.flySpecial.length };
+  for (const cls of Object.keys(all)) {
+    const asc = all[cls].slice().sort((a, b) => a.power - b.power || (a.key < b.key ? -1 : 1));
+    pools[cls] = { all: asc.map((x) => x.key), maxPower: asc.length ? asc[asc.length - 1].power : 0 };
+  }
+  MONSTER_POOLS.set(gd, pools);
+  return pools;
+}
+
+/** 这一回合某个类别的候选池（第 `from` 回合起全开：就是该类别的全部怪物）。 */
+function diceList(pools, cls) {
+  const slot = pools[cls];
+  return slot && Array.isArray(slot.all) ? slot.all : [];
+}
+
+/** 骰子：从候选池里随机抽一个 key（空池返回 null）。 */
+function rollOne(rng, list) {
+  if (!list || !list.length) return null;
+  return list[Math.floor(rng() * list.length)] || list[0];
+}
+
+/**
+ * 卫戍协议：盟约 · 大逃杀：这一波的敌人组合。形状与官方 pick 一致（`key` / `elite` / `normal`，供 templateSpawns
+ * 替换占位槽），另带飞行槽的 `flyNormal` / `flyElite` / `flyKey`，所以地面槽与飞行槽都能抽到行动方式对得上的怪。
+ */
+export function rollWavePick(gd, rng, round) {
+  const p = monsterPools(gd);
+  // 槽位 -> 候选池：地面槽只抽地面怪、飞行槽只抽飞行怪（两边都不会退回对方那一档，
+  // 否则抽到行动方式不对的怪就会被模板的类别检查跳过，一波里少一批怪）。
+  const draw = (primary, fallback) => rollOne(rng, diceList(p, primary)) || rollOne(rng, diceList(p, fallback)) || null;
+  const half = round <= firstHalfMax(gd);
+  return {
+    round, type: 'DICE', firstHalf: half,
+    // `key` = 地面特殊槽（S），`flyKey` = 飞行特殊槽（SF）
+    key: draw('groundSpecial', 'normal'),
+    flyKey: draw('flySpecial', 'flyNormal'),
+    normal: draw('normal', 'groundSpecial'),
+    elite: draw('elite', 'groundSpecial'),
+    flyNormal: draw('flyNormal', 'flySpecial'),
+    flyElite: draw('flyElite', 'flySpecial'),
+    fly: false, dice: true, diceFrom: p.from,
+  };
+}
+
+/**
  * The pick of round r: from a setup object ({ picks }), a factions array carrying the hidden schedule, or — for a plain
  * factions array (tools, tests) — drawn now: the round's type from the schedule's marginal distribution (each faction
  * 3 of 15 slots, SPECIAL the rest), then its entry.
+ * 卫戍协议：盟约 · 大逃杀：第 1–13 回合照官方（上面的 picks / 类型表），第 `gd.rollWaveFrom` 回合起才掷骰子（全部怪物）。
  */
 export function roundPick(gd, rng, factionsOrSetup, round) {
+  // 上层测试 / 工具自己构造的 GameData 没有 rollWaveFrom，就不会走骰子这一段，行为与上游一致。
+  if (gd.rollWaves && gd.rollWaveFrom > 0 && round >= gd.rollWaveFrom) return rollWavePick(gd, rng, round);
   const src = factionsOrSetup;
   const picks = src && !Array.isArray(src) && Array.isArray(src.picks) ? src.picks : (src && src.schedule && Array.isArray(src.schedule.picks) ? src.schedule.picks : null);
   if (picks) return picks[round] ?? null;
@@ -316,12 +415,28 @@ function templateSpawns(gd, tpl, round, pick) {
     let key = key0;
     let count = n;
     let step = interval;
+    // 卫戍协议：盟约 · 大逃杀：正常回合里刷出来的首领 / 领袖（骰子抽到、模板 literal）漏掉不扣玩家血量 ——
+    // `countInTotal: false` 让这次漏怪不计入扣血（也不破坏「完美作战」），战斗本身照常（血量 / 攻击仍按本回合倍率）。
+    // 首领战（领袖模板）的 LP 走首领池 / b.progress 那条路，不受这里影响。
+    const leaderLike = !!key0 && (() => { const rec = gd.enemy(key0); return !!rec && (rec.rank === 'BOSS' || !!gd.boss(key0)); })();
     const p = !isBoss && !isPart ? ph[key0] : null;
     if (p && pick) {
-      const newKey = p.cls === 'special' ? pick.key : p.cls === 'elite' ? pick.elite : pick.normal;
+      // 卫戍协议：盟约 · 大逃杀：骰子 pick 按槽位类别各抽一只（地面 normal / elite、飞行 flyNormal / flyElite、
+      // 地面特殊 key、飞行特殊 flyKey），所以飞行槽要用飞行那一档；官方 pick 没有这些字段时退回它自己的 key / elite / normal。
+      const newKey = p.cls === 'special'
+        ? (p.fly && typeof pick.flyKey === 'string' ? pick.flyKey : pick.key)
+        : p.cls === 'elite'
+          ? (p.fly && typeof pick.flyElite === 'string' ? pick.flyElite : (p.fly && typeof pick.flyKey === 'string' ? pick.flyKey : pick.elite))
+          : (p.fly && typeof pick.flyNormal === 'string' ? pick.flyNormal : (p.fly && typeof pick.flyKey === 'string' ? pick.flyKey : pick.normal));
       if (typeof newKey === 'string' && gd.enemy(newKey)) {
         if (isFlyKey(gd, newKey) !== !!p.fly) {
           // the other movement class: not spawned, not sent, not previewed (isValid = false)
+          actions.push({ index: i, key: null, tplKey: key0, slot: p.slot ?? s.slot ?? null, time, count: 0, tplCount: n, window, routeIndex, valid: false, server: false });
+          continue;
+        }
+        // 卫戍协议：盟约 · 大逃杀：第 RULES.timesDropFrom 回合起，官方排期抽到次数怪（频次器物）时这一格不出 ——
+        // 它们只以亡语形态（击杀后召唤 / 分裂）出现。
+        if (!isBoss && timesDropped(round) && isTimes(gd.enemy(newKey))) {
           actions.push({ index: i, key: null, tplKey: key0, slot: p.slot ?? s.slot ?? null, time, count: 0, tplCount: n, window, routeIndex, valid: false, server: false });
           continue;
         }
@@ -331,6 +446,10 @@ function templateSpawns(gd, tpl, round, pick) {
       }
     }
     if (!gd.enemy(key)) continue;
+    // 卫戍协议：盟约 · 大逃杀：第 RULES.bossDropFrom 回合起，模板里 literal 写的首领本体也不出现在普通波次里
+    // （首领只在 bossRound 回合的首领战登场）；次数怪同理只留亡语形态。
+    if (!isBoss && bossDropped(round) && (gd.enemy(key)?.rank === 'BOSS' || !!gd.boss(key))) continue;
+    if (!isBoss && timesDropped(round) && isTimes(gd.enemy(key))) continue;
     const slot = s.slot || classOf(gd, key);
     const spec = {
       time,
@@ -347,7 +466,8 @@ function templateSpawns(gd, tpl, round, pick) {
       preview: previewInfo(gd, key, routes[routeIndex], isBoss, leader),
     };
     if (tag) spec.tag = tag;
-    if (s.unharmful || isPart) spec.countInTotal = false;
+    // 卫戍协议：盟约 · 大逃杀：正常回合里刷出来的首领 / 领袖漏掉不扣血（见上面 leaderLike）。
+    if (s.unharmful || isPart || (leaderLike && !isBoss)) spec.countInTotal = false;
     spawns.push(spec);
     // client ShouldActionUpToServer: valid, not the leader, no randomSpawnGroupKey — only those units are in the list a
     // bounty is inserted into (the others spawn locally on their own timing)
@@ -371,6 +491,8 @@ function entriesView(gd, pick) {
  *   overrides: object, pick: object|null, entries: { ground: object|null, fly: object|null }, actions: object[] }}
  */
 export function buildNormalWave(gd, rng, factions, round) {
+  // 卫戍协议：盟约 · 大逃杀：首领战在第 RULES.bossRound（20）回合，那一格的配置是合成的（gamedata.roundCfg →
+  // bossRoundCfg）；其他回合没有 bossTemplates（合成的普通回合），同样取首领回合的那张首领模板表做兜底。
   const rc = gd.roundCfg(round);
   const templateId = rc && typeof rc.template === 'string' ? rc.template : null;
   const tpl = templateId ? gd.wave(templateId) : null;
@@ -397,7 +519,12 @@ export function buildNormalWave(gd, rng, factions, round) {
  */
 export function buildBossWave(gd, rng, factions, round, { bossId, solo }) {
   const rc = gd.roundCfg(round);
-  const map = rc && rc.bossTemplates && typeof rc.bossTemplates === 'object' ? rc.bossTemplates : {};
+  // 卫戍协议：盟约 · 大逃杀：首领战的配置挂在第 bossRound 回合（合成的那一格）；这里再兜一次，落在别的回合时
+  // 也拿首领回合的模板表，而不是空战场。
+  const rcBoss = rc && rc.bossTemplates && Object.keys(rc.bossTemplates).length
+    ? rc
+    : (typeof gd.bossRoundCfg === 'function' ? gd.bossRoundCfg() : null) || rc;
+  const map = rcBoss && rcBoss.bossTemplates && typeof rcBoss.bossTemplates === 'object' ? rcBoss.bossTemplates : {};
   let templateId = typeof map[bossId] === 'string' ? map[bossId] : null;
   if (!templateId) {
     const first = Object.values(map).find((v) => typeof v === 'string');

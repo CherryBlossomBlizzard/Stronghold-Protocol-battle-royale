@@ -172,7 +172,9 @@ test('Boss 召唤物 (假想敌：管的余音) 出生 / 被击倒 / 漏掉都�
   // and everything 管 summons are outside it. 会召唤的 Boss 关胶囊 therefore fills up now (the old `total++` of a runtime
   // spawn left it short forever).
   const scheduled = wave.spawns.filter((s) => s.tag !== 'boss' && s.countInTotal !== false).reduce((n, s) => n + s.count, 0);
-  assert.equal(scheduled, 6);
+  // 卫戍协议：盟约 · 大逃杀：首领战在第 RULES.bossRound（20）回合，随行出怪走骰子，数量随种子变 —— 分母就等于
+  // 「本关排定且该计入」的数量，这里按它自身核对（上游固定 6 的断言依赖 R14 的官方随行）。
+  assert.ok(scheduled >= 1, `the wave schedules counted enemies (${scheduled})`);
   assert.equal(h.b.total, scheduled, `分母 = 本关排定且该计入的 ${scheduled} 个敌人`);
   h.run(3);   // the 领袖 comes in at t = 1 s, the wave's first 余音 at t = 0
   const leader = h.b.enemies.find((e) => e.defId === 'enemy_9021_acduml');

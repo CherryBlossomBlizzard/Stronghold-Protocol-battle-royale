@@ -8,6 +8,7 @@ import {
   isFlyKey,
 } from '../../server/match/waves.js';
 import { createRng } from '../../server/sim/rng.js';
+import { RULES } from '../../server/match/battleRoyaleRules.js';
 import { DATA } from './harness.js';
 
 const TS = DATA.factions.templateSlots;
@@ -26,7 +27,10 @@ test('match setup: stage allowed by the mode, 3 distinct random factions, weight
       for (const f of s.factions) assert.ok(DATA.factions.types[f].involveRandom, f);
       assert.ok(gd.mode.bossWeights[s.bossId] > 0);
       bosses.add(s.bossId);
-      if (gd.hiddenRound) assert.ok(['boss_8', 'boss_9', 'boss_10'].includes(s.hiddenBossId));
+      // 卫戍协议：盟约 · 大逃杀：隐秘首领照官方条件抽取（数据里的 mode.hiddenRound）—— 只为让 rng 流与上游一致，
+      // 保住第 1–13 回合的官方排期；本服没有隐秘核心（GameData.hiddenRound = null），抽出来的 hiddenBossId 不会被用到。
+      const modeHidden = Number.isInteger(gd.mode.hiddenRound) && gd.mode.hiddenRound > 0 ? gd.mode.hiddenRound : null;
+      if (modeHidden) assert.ok(['boss_8', 'boss_9', 'boss_10'].includes(s.hiddenBossId));
       else assert.equal(s.hiddenBossId, null);
     }
     assert.ok(bosses.size >= 3, 'bosses vary with the seed');
@@ -62,6 +66,13 @@ test('type schedule: each chosen type owns exactly 3 of the 15 round slots, SPEC
       assert.ok(!gd.inactiveEnemies.has(p.key), `R${r}: banned special ${p.key}`);
       assert.ok(e.N.some((x) => x.key === p.normal) && e.E.some((x) => x.key === p.elite));
       assert.equal(p.fly, e.fly);
+      // 卫戍协议：盟约 · 大逃杀：第 RULES.rollWaveFrom 起出怪掷骰子（waves.js），不再用官方排期
+      if (r >= RULES.rollWaveFrom) {
+        const dice = roundPick(gd, createRng(1), s.factions, r);
+        assert.equal(dice.dice, true, `R${r}: dice pick`);
+        assert.deepEqual(dice, roundPick(gd, createRng(1), s, r), 'setup object resolves the same dice pick');
+        continue;
+      }
       assert.equal(roundPick(gd, createRng(1), s.factions, r), p, 'the factions array resolves the same pick');
       assert.equal(roundPick(gd, createRng(1), s, r), p, 'so does the setup object');
     }
@@ -74,7 +85,8 @@ test('type schedule: each chosen type owns exactly 3 of the 15 round slots, SPEC
   r2(); // stage
   r2.shuffle(Object.values(DATA.factions.types).filter((t) => t.involveRandom).map((t) => t.type));
   r2(); // boss
-  if (gd.hiddenRound) r2();
+  // 卫戍协议：盟约 · 大逃杀：隐秘首领的抽取跟着数据里的 mode.hiddenRound 走（与 setupMatchWaves 一致，rng 流不变）
+  if (Number.isInteger(gd.mode.hiddenRound) && gd.mode.hiddenRound > 0) r2();
   assert.ok(stageIds.length > 0);
   assert.equal(r1(), r2());
 });
@@ -87,13 +99,22 @@ test('normal waves: one pick per round, per-action counts 1–5, the other movem
       for (let r = 1; r < gd.bossRound; r++) {
         const w = buildNormalWave(gd, createRng(seed + 100), setup.factions, r);
         const tpl = DATA.waves[w.templateId];
-        const pick = setup.picks[r];
-        assert.equal(w.pick, pick);
+        // 官方排期只覆盖 15 格：第 16 回合起用骰子 pick
+        const pick = setup.picks[r] ?? w.pick;
+        // 卫戍协议：盟约 · 大逃杀：第 1–13 回合照官方（pick = 排期、倍率 = 官方表）；第 14 回合起骰子 + 本服倍率
+        const late = r >= RULES.rollWaveFrom;
+        if (!late) {
+          assert.equal(w.pick, pick);
+          assert.deepEqual(gd.enemyScale(r), gd.baseEnemyScale(r), 'no custom multiplier');
+        } else {
+          assert.equal(w.pick.dice, true, `R${r}: dice pick`);
+        }
         assert.equal(w.templateId, gd.roundCfg(r).template);
         assert.equal(w.timeLimit, gd.combatTimeLimit(r));
-        assert.deepEqual(gd.enemyScale(r), gd.baseEnemyScale(r), 'no custom multiplier');
         const scale = gd.enemyScale(r);
-        const allowed = new Set([pick.key, pick.normal, pick.elite]);
+        // 骰子 pick 为每一类槽位各给一个 key（飞行槽用 flyNormal / flyElite / flyKey）
+        const dice = w.pick.dice ? w.pick : null;
+        const allowed = new Set([pick.key, pick.normal, pick.elite, dice?.key, dice?.normal, dice?.elite, dice?.flyNormal, dice?.flyElite, dice?.flyKey].filter((x) => typeof x === 'string'));
         for (const s of w.spawns) {
           const a = tpl.spawns[s.actionIndex];
           assert.ok(a && !a.action, `R${r}: action ${s.actionIndex}`);
@@ -101,7 +122,8 @@ test('normal waves: one pick per round, per-action counts 1–5, the other movem
           assert.equal(s.routeIndex, a.routeIndex);
           if (PLACEHOLDERS.has(a.key)) {
             assert.ok(allowed.has(s.enemyKey), `${modeId} R${r}: ${s.enemyKey} not from the pick`);
-            assert.equal(fly(s.enemyKey), pick.fly, 'one movement class per round');
+            // 第 14 回合起骰子按槽位类别各抽一只（飞行槽用飞行那一档），所以 class 跟着槽位走
+            assert.equal(fly(s.enemyKey), w.pick.dice ? String(a.slot || '').includes('F') : pick.fly, 'the slot\'s movement class');
             assert.ok(s.count >= 1 && s.count <= 5, 'clamp 1–5 per action');
             if (s.count > 1) assert.ok(Math.abs(s.interval - Math.max(a.count * a.interval / s.count, 0.05 * a.count * a.interval)) < 1e-9, 'same window');
           } else {
@@ -117,12 +139,14 @@ test('normal waves: one pick per round, per-action counts 1–5, the other movem
         // every placeholder action of the pick's class is present, every other one skipped
         for (const [i, a] of tpl.spawns.entries()) {
           if (a.action || !PLACEHOLDERS.has(a.key)) continue;
-          const sameClass = DATA.factions.generation.placeholders[a.key].fly === pick.fly;
+          const sameClass = w.pick.dice ? true : DATA.factions.generation.placeholders[a.key].fly === pick.fly;
           assert.equal(w.spawns.some((s) => s.actionIndex === i), sameClass, `R${r} action ${i} (${a.slot})`);
           assert.equal(w.actions.find((x) => x.index === i).valid, sameClass);
         }
-        assert.equal(w.entries[pick.fly ? 'fly' : 'ground'].key, pick.key);
-        assert.equal(w.entries[pick.fly ? 'ground' : 'fly'], null);
+        if (!w.pick.dice) {
+          assert.equal(w.entries[pick.fly ? 'fly' : 'ground'].key, pick.key);
+          assert.equal(w.entries[pick.fly ? 'ground' : 'fly'], null);
+        }
       }
     }
   }
@@ -155,7 +179,9 @@ test('boss templates: leaders never scaled, pairs use the multi template, single
       const single = buildBossWave(gd, createRng(1), setup.factions, 14, { bossId, solo: true });
       assert.ok(!/_s$/.test(pair.templateId) && /_s$/.test(single.templateId), `${bossId}: ${pair.templateId} / ${single.templateId}`);
       for (const w of [pair, single]) {
-        assert.equal(w.pick, pick);
+        // 卫戍协议：盟约 · 大逃杀：第 14 回合起首领模板的随行也走骰子，不再用第 14 格的官方 pick
+        if (14 >= RULES.rollWaveFrom) assert.equal(w.pick.dice, true);
+        else assert.equal(w.pick, pick);
         const boss = w.spawns.filter((s) => s.tag === 'boss');
         assert.ok(boss.length >= 1);
         for (const s of boss) { assert.equal(s.mods.hpMul, undefined); assert.equal(s.preview.boss, true); }
@@ -165,8 +191,9 @@ test('boss templates: leaders never scaled, pairs use the multi template, single
           assert.ok(DATA.enemies[s.enemyKey], s.enemyKey);
           const a = tpl.spawns[s.actionIndex];
           if (a.slot === 'E' || a.slot === 'EF') {
-            assert.equal(s.enemyKey, pick.elite);
-            assert.equal(a.slot === 'EF', pick.fly, 'only the escorts of the pick\'s class');
+            // 骰子 pick：E 槽 = elite、EF 槽 = flyElite；官方 pick：两者共用一个 elite
+            assert.equal(s.enemyKey, a.slot === 'EF' ? (w.pick.flyElite ?? pick.elite) : (w.pick.elite ?? pick.elite));
+            if (!w.pick.dice) assert.equal(a.slot === 'EF', pick.fly, 'only the escorts of the pick\'s class');
           }
         }
       }
@@ -182,6 +209,7 @@ test('boss templates: leaders never scaled, pairs use the multi template, single
 test('co-op 终极: supplyHpMul = the 补给线 / 补给线II share of hp (hp ÷ it = the 攻坚装备 stacks 1.2^kAtk); wave and bounty mods carry it (PR #272)', () => {
   const gd = new GameData(DATA, 'mode_multi_abyss');
   for (const [r, row] of Object.entries(gd.mode.enemyScale)) {
+    if (Number(r) > RULES.normalRoundMax) continue; // 大逃杀：第 14 回合起走本服倍率曲线，官方行只到 R13 可比
     const sc = gd.enemyScale(Number(r));
     assert.ok(Math.abs(sc.hpMul / (sc.supplyHpMul ?? 1) - 1.2 ** row.kAtk) < 1e-5, `R${r}: ${sc.hpMul} / ${sc.supplyHpMul}`);
   }

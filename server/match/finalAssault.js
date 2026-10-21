@@ -78,6 +78,9 @@ export function pairPlayers(alive, rng, previous = null) {
 
 /** Shared boss HP for a boss id with `aliveCount` alive players (GameData.bossPoolShare / bossPoolShareOf; omitted ⇒ a full team). */
 export function bossPoolHp(gd, bossId, aliveCount) {
+  // 卫戍协议：盟约 · 大逃杀：首领战血量固定（RULES.bossHp = 十亿），不再按存活人数缩放、也不吃难度调优倍率。
+  const fixed = gd && typeof gd.bossFixedHp === 'number' ? gd.bossFixedHp : null;
+  if (fixed > 0) return fixed;
   const boss = gd.boss(bossId);
   const diff = gd.difficulty;
   let base = boss && boss.bloodPoint && Number.isFinite(boss.bloodPoint[diff]) ? boss.bloodPoint[diff] : null;

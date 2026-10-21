@@ -17,6 +17,7 @@ import { bondBb } from '../../server/sim/content/bonds/addon/battle.js';
 import { DataSource } from '../../server/sim/simdata.js';
 import { createBattleFromSpec } from '../../server/sim/spec.js';
 import { SharedBossPool } from '../../server/match/finalAssault.js';
+import { RULES } from '../../server/match/battleRoyaleRules.js';
 
 /** 4 AI seats, co-op, LP 400 (they reach R14), +`layers` on every active bond at the boss round's prep. */
 function toFinalAssault({ difficulty, seed, bossId, layers = 0 }) {
@@ -72,7 +73,8 @@ test('终极 Final Assault (+200 layers per active bond): one pool (bloodPoint �
   const m = h.m;
   const pool = m.bossPool;
   assert.equal(m.alivePlayers().length, 4);
-  assert.equal(pool.maxHp, DATA.bosses.boss_1.bloodPoint.ABYSS * 4, 'four alive: 4 × the data value (14 400 000)');
+  // 卫戍协议：盟约 · 大逃杀：首领血量固定十亿（不再按存活人数缩放）
+  assert.equal(pool.maxHp, RULES.bossHp, 'the fixed ten-billion pool');
   const fields = m.fields.filter((f) => f.battle);
   assert.equal(fields.length, 2, 'two pair fields');
   // one second into the fight: every operator's stats
@@ -101,8 +103,8 @@ test('终极 Final Assault (+200 layers per active bond): one pool (bloodPoint �
 test('绝境 Final Assault: both pair fields drain the one pool, every hit exactly once', () => {
   const h = toFinalAssault({ difficulty: 'HARD', seed: 3, bossId: 'boss_5' });
   const m = h.m;
-  assert.equal(m.bossPool.maxHp, DATA.bosses.boss_5.bloodPoint.HARD * 4, 'four alive: 4 × the data value');
-  assert.equal(m.gd.bossPoolHp('boss_5', 2), DATA.bosses.boss_5.bloodPoint.HARD * 2, 'two alive: 2 × the data value');
+  assert.equal(m.bossPool.maxHp, RULES.bossHp, 'the fixed ten-billion pool');
+  assert.equal(m.gd.bossPoolHp('boss_5', 2), RULES.bossHp, 'the same pool whatever the count');
   const pool = m.bossPool;
   const fields = m.fields.filter((f) => f.battle);
   assert.equal(fields.length, 2);
@@ -163,56 +165,24 @@ test('终极 Final Assault vs 假想敌：胄 (seeded bot match): both players\'
     }
   }
   assert.ok(withArcane > 100, `the leader carried 奥术 (${withArcane} samples)`);
-  assert.ok(links.length >= 1, 'drones were shot down');
+  // 卫戍协议：盟约 · 大逃杀：第 bossRound 回合的怪物倍率极高（十亿血首领所在的回合），死亡集群在 40 游戏秒里打不下来，
+  // 所以这里不要求「已经打掉过无人机」；只要真发生了转伤，就一直按 2 % × 池子核对（池子固定十亿）。
   for (const x of links) assert.equal(x, m.bossPool.maxHp * 0.02, 'drone link = 2 % × the pool');
-  assert.equal(m.bossPool.maxHp, DATA.bosses.boss_1.bloodPoint.ABYSS * 4, 'the 14 400 000 pool of 4 alive players');
+  assert.equal(m.bossPool.maxHp, RULES.bossHp, 'the fixed ten-billion pool');
   m.dispose();
 });
 
-test('绝境 Hidden Core vs 假想敌：铳 (隐秘核心): a 碎铳之簧 passes every damage it takes to the pool 1:1, 无来源, credited', () => {
-  // DESIGN §20.10: PRTS 碎铳之簧 "受到伤害时令…假想敌：铳受到等量的无来源生命流失" (v2.5: half); real match → Hidden Core specs
-  const seats = [0, 1, 2, 3].map((i) => ({ seat: i, playerId: `ai_${i}`, name: `AI${i}`, isBot: true, connected: true }));
-  const h = makeMatch({ mode: 'coop', difficulty: 'HARD', seats, seed: 7, captureFrames: false, instant: false, clientCombat: true });
+test('卫戍协议 · 大逃杀：没有隐秘核心 —— 对局在第 bossRound 回合的首领战后就结束', () => {
+  // 隐秘核心的「碎铳之簧把受到的伤害 1:1（等量、无来源）转给铳」本身是 sim 机制，仍由
+  // test/content/enemies_bosses.test.js 的 bossArena 用例覆盖（不经过对局流程）；本分支只是不再进入隐秘核心。
+  const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 2, seed: 7, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;
-  m.bossId = 'boss_5';
-  m.hiddenBossId = 'boss_9';
-  const specs = [];
-  const orig = m._ccField.bind(m);
-  m._ccField = (o) => { const f = orig(o); if (f.kind === 'hidden') specs.push(f.spec); return f; };
-  m.start();
-  let last = '';
-  h.run(() => {
-    const k = `${m.phase}:${m.round}`;
-    if (k !== last) {
-      last = k;
-      if (m.phase === PHASE.PREP && m.round === 1) for (const ps of m.players.values()) ps.lp = 400;
-      if (m.phase === PHASE.PREP && m.round === m.gd.bossRound) {
-        for (const ps of m.alivePlayers()) {
-          for (const id of m.gd.bondIds) if (ps.bonds[id] && ps.bonds[id].active) ps.layers[id] = (ps.layers[id] || 0) + 100;
-          ps.recompute();
-        }
-      }
-    }
-    return h.ended != null || m.phase === PHASE.HIDDEN_CORE;
-  }, { maxSteps: 8e6 });
-  assert.equal(m.phase, PHASE.HIDDEN_CORE, 'reached the Hidden Core');
-  assert.ok(specs.length >= 1);
-  const pool = new SharedBossPool(m.bossPool.maxHp);
-  assert.equal(pool.maxHp, DATA.bosses.boss_9.bloodPoint.HARD * m.alivePlayers().length, 'the hidden 铳 pool = bloodPoint × the players alive at its start');
-  const b = createBattleFromSpec(specs[0], new DataSource(DATA, null), { sharedBoss: pool, recordEvents: false, quiet: true });
-  // the springs stand from the start, 铳 enters ≈ 10 game s later
-  for (let i = 0; i < 1200 && !b.enemies.some((e) => e.alive && e.isBoss); i++) b.step();
-  const springs = b.enemies.filter((e) => e.alive && /enemy_90(18|19|20)_actrp/.test(e.defId));
-  const gun = b.enemies.find((e) => e.alive && e.isBoss);
-  const op = b.allyUnits.find((u) => u.kind === 'op' && u.alive);
-  assert.ok(springs.length >= 1 && gun && op, 'springs, 铳 and an operator on the field');
-  const seen = [];
-  b.on('damaged', (c) => { if (c.target === gun) seen.push(c); }, { priority: -1e9 });
-  const sp = springs.find((x) => x.defId === 'enemy_9019_actrpb') || springs[0];
-  const pool0 = pool.hp;
-  const dealt = b.dealDamage(op, sp, { amount: 50000, type: 'true', canDodge: false });
-  assert.ok(dealt > 0, 'the spring took damage');
-  assert.ok(Math.abs((pool0 - pool.hp) - dealt) < 1e-6, `the pool lost exactly what the spring took (${pool0 - pool.hp} vs ${dealt})`);
-  assert.ok(seen.length === 1 && seen[0].source === null && seen[0].credit === op, '无来源, credited to the operator');
+  assert.equal(m.gd.hiddenRound, null, 'no hidden core');
+  assert.equal(m.gd.bossRound, RULES.bossRound, 'the final assault is on the branch\'s round');
+  h.drive(() => m.phase === PHASE.PREP && m.round === RULES.bossRound);
+  const end = h.runToEnd();
+  assert.equal(end.victory, true);
+  assert.equal(end.hiddenReached, false);
+  assert.equal(end.roundsPassed, RULES.bossRound);
   m.dispose();
 });

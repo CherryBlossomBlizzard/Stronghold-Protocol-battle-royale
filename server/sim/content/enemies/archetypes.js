@@ -47,7 +47,11 @@ const runWhenHit = (v) => ({ taken(c, b, e, a) { if (a.on || !(v > 0)) return; a
 const times = (artsOnly = false) => ({
   spawn(b, e) {
     const s = Number(e.mods && e.mods.supplyHpMul);
-    setHits(e, e.base.maxHp / (Number.isFinite(s) && s > 0 ? s : 1));
+    const supply = Number.isFinite(s) && s > 0 ? s : 1;
+    // 卫戍协议：盟约 · 大逃杀（specs.flags.timesHpBonus === false）：频次器物的「生命值」就是它需要的伤害次数，
+    // 回合血量倍率（mods.hpMul）对它不生效，次数固定用数据原值；攻击倍率照常。上游默认（没有这个 flag）照旧吃加成。
+    const hpBonus = b && b.flags && b.flags.timesHpBonus === false ? (Number(e.mods && e.mods.hpMul) || 1) : 1;
+    setHits(e, e.base.maxHp / (supply * hpBonus));
     hitCount(b, e, true, artsOnly);
   },
 });
