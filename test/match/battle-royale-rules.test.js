@@ -256,3 +256,27 @@ test('亡语/召唤产物不进骰子池：身观的青铜镜（enemy_1200_msfji
   // 骰子池本身仍有足够多的候选（不是空池）
   assert.ok(seen.size >= 30, `dice pool still rich (${seen.size} distinct keys)`);
 });
+
+test('首领的部件（data/bosses.json 的 parts，如「破胄之锤」）不直接刷进普通怪海', () => {
+  // 部件的 rank 是 ELITE，只按 rank === BOSS 排除会漏掉它们；它们只该作为首领的一部分出现。
+  const PARTS = new Set();
+  for (const id of Object.keys(GAME.bosses || {})) {
+    const rec = (GAME.bosses || {})[id];
+    if (rec && Array.isArray(rec.parts)) for (const p of rec.parts) if (typeof p === 'string') PARTS.add(p);
+  }
+  assert.ok(PARTS.size >= 6, `the data lists the leaders' parts (${PARTS.size})`);
+  assert.ok(PARTS.has('enemy_9015_acstmb'), '“破胄之锤” is boss_8’s part');
+  // 它的 rank 不是 BOSS —— 正是「只按 rank 排除」会漏掉的那一类
+  assert.notEqual(DATA.enemy_9015_acstmb.rank, 'BOSS');
+
+  const gd = new GameData(GAME, 'mode_multi_normal');
+  for (let seed = 1; seed <= 60; seed++) {
+    const setup = setupMatchWaves(gd, createRng(seed));
+    for (const r of [14, 15, 16, 17, 18, 19]) {
+      const w = buildNormalWave(gd, createRng(seed + 950), setup.factions, r);
+      for (const s of w.spawns) {
+        assert.ok(!PARTS.has(s.enemyKey), `R${r}: 首领部件 ${s.enemyKey} 直接出现在怪海里`);
+      }
+    }
+  }
+});

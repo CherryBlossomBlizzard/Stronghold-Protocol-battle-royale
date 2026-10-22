@@ -285,15 +285,21 @@ function monsterPools(gd) {
   const hit = MONSTER_POOLS.get(gd);
   if (hit) return hit;
   const leaders = new Set();
+  // 卫戍协议：盟约 · 大逃杀：首领的**部件**（data/bosses.json 的 parts，例如「破胄之锤」enemy_9015_acstmb、
+  // 「破胄之剑」「御4」）与领袖本体一样，只该在首领战里作为首领的一部分出现 —— 它们的 rank 是 ELITE，
+  // 不排除的话第 14 回合起的骰子会把它们当成普通精英怪直接刷进怪海。这里和领袖本体一起排除。
+  const bossParts = new Set();
   for (const id of Object.keys(gd.raw.bosses || {})) {
     const b = gd.boss(id);
     if (b && typeof b.enemyKey === 'string') leaders.add(b.enemyKey);
+    const raw = (gd.raw.bosses || {})[id];
+    if (raw && Array.isArray(raw.parts)) for (const p of raw.parts) if (typeof p === 'string') bossParts.add(p);
   }
   const all = { normal: [], elite: [], flyNormal: [], flyElite: [], groundSpecial: [], flySpecial: [] };
   const products = spawnProducts(gd);
   for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
     if (!rec || typeof rec !== 'object') continue;
-    if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || gd.inactiveEnemies.has(key)) continue;
+    if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || bossParts.has(key) || gd.inactiveEnemies.has(key)) continue;
     // 亡语 / 召唤产物（次数怪的亡语产物等）：只在召唤者被击杀时出现，不直接刷进怪海
     if (products.has(key)) continue;
     const rank = String(rec.rank || 'NORMAL');
