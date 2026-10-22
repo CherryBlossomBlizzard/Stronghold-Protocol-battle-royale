@@ -20,7 +20,7 @@ const tick = () => new Promise((res) => setImmediate(res));
 
 /** A real authoritative b.start of round 2 (a board with operators) from a client-combat match. */
 const START = (() => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 1, bots: 1, seed: 7301, captureFrames: false, clientCombat: true, clients: false });
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 1, bots: 1, seed: 7301, captureFrames: false, clientCombat: true, clients: false });
   h.autoHumans();
   h.m.start();
   h.run(() => h.m.phase === PHASE.COMBAT && h.m.round === 2, { maxSteps: 3e6 });
@@ -34,7 +34,7 @@ let bossStart = null;
 /** A real b.start of a Final Assault field (a shared boss pool). */
 function realBossStart() {
   if (bossStart) return bossStart;
-  const h = makeMatch({ mode: 'solo', difficulty: 'FUNNY', humans: 1, seed: 7304, captureFrames: false, clientCombat: true, clients: false });
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'solo', difficulty: 'FUNNY', humans: 1, seed: 7304, captureFrames: false, clientCombat: true, clients: false });
   h.autoHumans();
   h.m.start();
   // 卫戍协议：盟约 · 大逃杀：首领战固定在 R20（官方是 R14），第 14 回合起怪物血量每回合翻倍，

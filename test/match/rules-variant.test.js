@@ -32,12 +32,12 @@ test('规则变体：同一服务器上官方与大逃杀并存，房主选哪�
 });
 
 test('规则变体：真实对局里两边的开局数值', () => {
-  const h1 = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71 }).start();
+  const h1 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71 }).start();
   h1.toPrep(1);
   assert.equal(h1.m.gd.rulesVariant, 'battle-royale');
   assert.equal(h1.ps('p_0').lp, 30);
   h1.m.dispose();
-  const h2 = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71, rulesVariant: 'official' }).start();
+  const h2 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71, rulesVariant: 'official' }).start();
   h2.toPrep(1);
   assert.equal(h2.m.gd.rulesVariant, 'official');
   assert.equal(h2.ps('p_0').lp, DATA.bands[h2.ps('p_0').bandId].totalHp);

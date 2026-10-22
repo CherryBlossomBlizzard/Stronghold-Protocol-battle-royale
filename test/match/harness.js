@@ -33,6 +33,11 @@ import { morphSlotPolicy, ruleOption } from '../../shared/plugins/rules.js';
 
 export const DATA = getData({ log: { warn() {}, error() {}, info() {} } });
 
+// 卫戍协议：盟约 · 大逃杀：测试夹具的默认规则变体。绝大多数测试写于官方规则下（依赖联防、
+// 按策略血量、官方回合表），所以夹具默认走【官方】变体；测大逃杀规则本身的用例
+//（battle-royale-rules / rules-variant 等）显式传 rulesVariant: 'battle-royale'。
+export const DEFAULT_RULES_VARIANT = 'official';
+
 export function makeMatch(o = {}) {
   const mode = o.mode ?? 'coop';
   const difficulty = o.difficulty ?? 'NORMAL';
@@ -85,7 +90,7 @@ export function makeMatch(o = {}) {
     headlessSliceMs: o.headlessSliceMs,
     aiPicksLast: o.aiPicksLast,
     // 卫戍协议：盟约 · 大逃杀：本局规则变体（'battle-royale' 默认 | 'official' 官方）
-    rulesVariant: o.rulesVariant,
+    rulesVariant: o.rulesVariant ?? DEFAULT_RULES_VARIANT,
     // a bot prep's layout rehearsal delegated to the room's host (DESIGN §14; test/match/rehearsal-delegate.test.js):
     // `hostId` is the executor a task is sent to, `botRehearsalDelegateMs` its answer window
     hostId: o.hostId !== undefined ? o.hostId : (o.test === true ? (seats.find((s) => s && !s.isBot)?.playerId ?? null) : undefined),

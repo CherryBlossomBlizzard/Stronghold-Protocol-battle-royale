@@ -42,7 +42,7 @@ const BR = RULES.bossRound;
 const BOSS_HP = RULES.bossHp;
 
 test('boss preview, actual fields retain one per-match draw (no Hidden Core in this branch)', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 4, seed: 31, fake: true,
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'HARD', humans: 4, seed: 31, fake: true,
     script: b => ['boss', 'hidden'].includes(b.kind) ? { bossDps: 1e9 } : {} }).start();
   try {
     h.drive(() => h.m.phase === PHASE.PREP && h.m.round === BR);
@@ -87,7 +87,7 @@ test('boss pool = bloodPoint[difficulty] × the players alive at the fight\'s st
 
 for (const n of [1, 2, 3, 4]) {
   test(`Final Assault with ${n} player(s): fields, sides, templates, merged LP, shared pool, victory`, () => {
-    const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: n, seed: 40 + n, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
+    const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'FUNNY', humans: n, seed: 40 + n, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
     const m = h.m;
     h.drive(() => m.phase === PHASE.PREP && m.round === BR);
     const lps = [...m.players.values()].map((p) => p.lp);
@@ -135,7 +135,7 @@ for (const n of [1, 2, 3, 4]) {
 }
 
 test('all-human overtime: −1 team LP per REAL second after 120 real s (240 game s at 2×); team LP 0 ends every field → defeat (13 rounds passed)', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 50, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 50, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1 } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === BR);
   for (const p of m.players.values()) p.lp = 10;
@@ -151,7 +151,7 @@ test('all-human overtime: −1 team LP per REAL second after 120 real s (240 gam
 });
 
 test('Final Assault leaks cost their lpr from the merged LP', () => {
-  const h = makeMatch({ mode: 'solo', difficulty: 'FUNNY', seed: 51, fake: true, instant: false, script: (b) => (b.kind === 'boss' ? { bossDps: 1, leakEvents: [{ at: 5, lpr: 1 }, { at: 10, lpr: 30, boss: true }] } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'solo', difficulty: 'FUNNY', seed: 51, fake: true, instant: false, script: (b) => (b.kind === 'boss' ? { bossDps: 1, leakEvents: [{ at: 5, lpr: 1 }, { at: 10, lpr: 30, boss: true }] } : {}) }).start();
   const m = h.m;
   // 大逃杀：所有模式统一在第 BR 回合打首领
   assert.equal(m.gd.bossRound, BR, 'the boss fight on the branch\'s round');
@@ -170,7 +170,7 @@ test('Final Assault leaks cost their lpr from the merged LP', () => {
 });
 
 test('大逃杀：没有隐秘核心 —— 首领战胜利后这局直接结束（hiddenRound = null）', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 57, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 57, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;
   assert.equal(m.gd.hiddenRound, null);
   h.drive(() => m.phase === PHASE.PREP && m.round === BR);
@@ -190,7 +190,7 @@ test('Hidden Core: Σ activated layers (end of the boss prep) > 1200 and team LP
 });
 
 test('Hidden Core eligibility threshold (upstream rule, still exported)', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 52, fake: true, script: (b) => (b.kind === 'boss' || b.kind === 'hidden' ? { bossDps: 1e9 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 52, fake: true, script: (b) => (b.kind === 'boss' || b.kind === 'hidden' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;
   assert.ok(m.hiddenBossId == null || ['boss_8', 'boss_9', 'boss_10'].includes(m.hiddenBossId));
   h.drive(() => m.phase === PHASE.PREP && m.round === BR);
@@ -216,7 +216,7 @@ test('Hidden Core is skipped at Σ layers ≤ threshold, on FUNNY, or with team 
   assert.equal(hiddenEligible(new GameData(DATA, 'mode_multi_funny'), { layerSum: 9999, teamLp: 99 }), false);
   // 卫戍协议：盟约 · 大逃杀：本分支没有隐秘核心 → 无论层数多高都不会进入（hiddenEligible 恒 false）
   assert.equal(hiddenEligible(new GameData(DATA, 'mode_single_hard'), { layerSum: 9999, teamLp: 99 }), false);
-  const h = makeMatch({ mode: 'solo', difficulty: 'HARD', seed: 53, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : b.kind === 'hidden' ? { bossDps: 0 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'solo', difficulty: 'HARD', seed: 53, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : b.kind === 'hidden' ? { bossDps: 0 } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === BR);
   const ps = h.ps('p_0');
@@ -231,7 +231,7 @@ test('Hidden Core is skipped at Σ layers ≤ threshold, on FUNNY, or with team 
 });
 
 test('Final Assault: a fighting player may only watch its own boss field; eliminated players spectate any field', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 4, seed: 54, fake: true, instant: false, script: (b) => (b.kind === 'boss' ? { bossDps: 1 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'FUNNY', humans: 4, seed: 54, fake: true, instant: false, script: (b) => (b.kind === 'boss' ? { bossDps: 1 } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
   h.ps('p_3').eliminate(13);
@@ -258,7 +258,7 @@ test('Final Assault: a fighting player may only watch its own boss field; elimin
 });
 
 test('Final Assault: stats reach m.private at the end; leader "扣除目标生命" effects (lpLoss) hit the team LP', () => {
-  const h = makeMatch({
+  const h = makeMatch({ rulesVariant: 'battle-royale',
     mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 56, fake: true,
     script: (b) => (b.kind === 'boss' ? { bossDps: b.sharedBoss.maxHp / 10, damage: { p_0: 5000, p_1: 7000 }, lpLossEvents: [{ at: 2, amount: 7 }] } : {}),
   }).start();

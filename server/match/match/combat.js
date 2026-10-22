@@ -167,6 +167,9 @@ export class MatchCombat {
    */
   _afterCombat() {
     if (this.phase !== PHASE.COMBAT) return;
+    // 卫戍协议：盟约 · 大逃杀：删除联防环节（RULES.noUnite）—— 漏怪直接在结算扣血，不进联防战场。
+    // 官方变体（rulesVariant = 'official'）保留上游联防。
+    if (this.gd.RULES.noUnite) { this.settle(null, null); return; }
     const plan = planUnite(this, this.lastResults);
     if (plan) this.startUnite(plan);
     else this.settle(null, null);

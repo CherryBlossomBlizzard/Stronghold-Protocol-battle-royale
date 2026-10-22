@@ -9,7 +9,7 @@ import { BAND_TURN_SECONDS } from '../../server/match/Match.js';
 const TURN_MS = BAND_TURN_SECONDS * 1000;
 
 test('INFO_CHECK: ends when every human confirmed (bots/departed count as ready) or at the 25 s deadline', () => {
-  const h = makeMatch({ mode: 'coop', humans: 2, bots: 1, seed: 1 }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 2, bots: 1, seed: 1 }).start();
   const m = h.m;
   assert.equal(m.phase, PHASE.INFO_CHECK);
   const pub = h.lastBc('m.public');
@@ -24,7 +24,7 @@ test('INFO_CHECK: ends when every human confirmed (bots/departed count as ready)
   assert.equal(m.phase, PHASE.BAND_DRAFT, 'departed human counts as ready');
   assert.deepEqual(m.handle('p_0', { t: 'g.infoReady' }), { error: ERR.WRONG_PHASE });
   m.dispose();
-  const h2 = makeMatch({ mode: 'coop', humans: 2, seed: 1 }).start();
+  const h2 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 2, seed: 1 }).start();
   h2.sched.advance(24999);
   assert.equal(h2.m.phase, PHASE.INFO_CHECK);
   h2.sched.advance(2);
@@ -34,7 +34,7 @@ test('INFO_CHECK: ends when every human confirmed (bots/departed count as ready)
 
 test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one skip each (moves to the end), 队友已选 refused', () => {
   // find a seed where both humans are not first... just use the order the match chose
-  const h = makeMatch({ mode: 'coop', humans: 3, seed: 5 }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 3, seed: 5 }).start();
   const m = h.m;
   for (const id of ['p_0', 'p_1', 'p_2']) m.handle(id, { t: 'g.infoReady' });
   h.sched.advance(1);
@@ -67,7 +67,7 @@ test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one sk
 });
 
 test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SECONDS per turn → the highlighted band or 华法琳; AI seats pick at once; no step cap', () => {
-  const h = makeMatch({ mode: 'coop', humans: 2, bots: 2, seed: 9 }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 2, bots: 2, seed: 9 }).start();
   const m = h.m;
   m.handle('p_0', { t: 'g.infoReady' });
   m.handle('p_1', { t: 'g.infoReady' });
@@ -101,7 +101,7 @@ test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SE
   assert.equal(new Set(Object.values(m.draft.picks)).size, 4, 'no duplicate strategies');
   m.dispose();
   // 4 humans idle: 4 whole turns (the old 50 s step cap would have cut the last ones short)
-  const h2 = makeMatch({ mode: 'coop', humans: 4, seed: 9 }).start();
+  const h2 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 4, seed: 9 }).start();
   for (const ps of h2.m.players.values()) h2.m.handle(ps.playerId, { t: 'g.infoReady' });
   h2.sched.advance(1);
   const first = h2.m.draft.order[0];
@@ -120,7 +120,7 @@ test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SE
 });
 
 test('band draft (solo): free pick, no timer, no skip; mode-restricted bands rejected', () => {
-  const h = makeMatch({ mode: 'solo', seed: 2 }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'solo', seed: 2 }).start();
   const m = h.m;
   m.handle('p_0', { t: 'g.infoReady' });
   h.sched.advance(1);
@@ -137,13 +137,13 @@ test('band draft (solo): free pick, no timer, no skip; mode-restricted bands rej
 });
 
 test('机变 (co-op): 6 shared cards, random order, 30 s first / 16 s others, timeout auto-assigns, each takes one', () => {
-  const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 14, fake: true }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 14, fake: true }).start();
   const m = h.m;
   assert.deepEqual(m.gd.spRounds(), [3, 6, 9]);
   h.drive(() => m.phase === PHASE.SP_DRAFT || m.round > 3, { ready: true });
   // the harness picks for humans; stop before: re-run with humans passive
   m.dispose();
-  const h2 = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 14, fake: true }).start();
+  const h2 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 14, fake: true }).start();
   const m2 = h2.m;
   h2.drive(() => m2.phase === PHASE.ROUND_START && m2.round === 3);
   h2.run(() => m2.phase === PHASE.SP_DRAFT);
@@ -173,7 +173,7 @@ test('机变 (co-op): 6 shared cards, random order, 30 s first / 16 s others, ti
 
 test('机变 (solo): 3 cards, untimed; supply/shop cards give the item, bounty cards add enemies to the next battle', () => {
   // solo NORMAL: R6 道具补给, R9 战术决策
-  const h = makeMatch({ mode: 'solo', difficulty: 'NORMAL', seed: 3, fake: true }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'solo', difficulty: 'NORMAL', seed: 3, fake: true }).start();
   const m = h.m;
   assert.deepEqual(m.gd.spRounds(), [6, 9]);
   h.drive(() => m.phase === PHASE.ROUND_START && m.round === 6);
@@ -200,7 +200,7 @@ test('机变 (solo): 3 cards, untimed; supply/shop cards give the item, bounty c
 });
 
 test('机变 tactic defaults: team cards reach teammates; layers / funds / free refreshes / next-buy elite', () => {
-  const h = makeMatch({ mode: 'coop', humans: 2, seed: 4, fake: true }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 2, seed: 4, fake: true }).start();
   const m = h.m;
   h.toPrep(1);
   const [a, b] = [h.ps('p_0'), h.ps('p_1')];
@@ -242,7 +242,7 @@ const awaitImport = await import('../../server/match/choices.js');
 
 test('a single human (a 同盟 room started alone or with AI teammates only) is never timed outside battles — user playtest #4 item 3', () => {
   for (const bots of [0, 3]) {
-    const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 1, bots, seed: 12, fake: true, instant: false }).start();
+    const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 1, bots, seed: 12, fake: true, instant: false }).start();
     const m = h.m;
     assert.equal(m.soloUntimed, true);
     assert.equal(m.isSolo, false, 'the co-op mode rules stay');
@@ -271,7 +271,7 @@ test('a single human (a 同盟 room started alone or with AI teammates only) is 
     m.dispose();
   }
   // two humans: the co-op timers stay
-  const h = makeMatch({ mode: 'coop', humans: 2, bots: 1, seed: 12 }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', humans: 2, bots: 1, seed: 12 }).start();
   assert.equal(h.m.soloUntimed, false);
   const pub = h.lastBc('m.public');
   assert.equal(pub.deadline - pub.serverNow, 25000, 'INFO_CHECK 25 s');

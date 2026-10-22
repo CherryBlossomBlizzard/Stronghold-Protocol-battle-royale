@@ -23,7 +23,7 @@ import { RULES } from '../../server/match/battleRoyaleRules.js';
 function toFinalAssault({ difficulty, seed, bossId, layers = 0 }) {
   const seats = [0, 1, 2, 3].map((i) => ({ seat: i, playerId: `ai_${i}`, name: `AI${i}`, isBot: true, connected: true }));
   // instant: false — the boss fields wait for the test to step them (server-run, real sim)
-  const h = makeMatch({ mode: 'coop', difficulty, seats, seed, captureFrames: false, instant: false });
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty, seats, seed, captureFrames: false, instant: false });
   const m = h.m;
   m.bossId = bossId;
   m.start();
@@ -175,7 +175,7 @@ test('终极 Final Assault vs 假想敌：胄 (seeded bot match): both players\'
 test('卫戍协议 · 大逃杀：没有隐秘核心 —— 对局在第 bossRound 回合的首领战后就结束', () => {
   // 隐秘核心的「碎铳之簧把受到的伤害 1:1（等量、无来源）转给铳」本身是 sim 机制，仍由
   // test/content/enemies_bosses.test.js 的 bossArena 用例覆盖（不经过对局流程）；本分支只是不再进入隐秘核心。
-  const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 2, seed: 7, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
+  const h = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'HARD', humans: 2, seed: 7, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;
   assert.equal(m.gd.hiddenRound, null, 'no hidden core');
   assert.equal(m.gd.bossRound, RULES.bossRound, 'the final assault is on the branch\'s round');
