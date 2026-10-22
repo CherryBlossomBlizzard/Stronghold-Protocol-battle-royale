@@ -45,6 +45,7 @@ echo    [6] 手动输入其他端口
 echo    -- 其他操作 --------------------------------------------------
 echo    [7] 切换 回合扣血上限 开 / 关
 echo    [8] 查看当前规则
+echo    [9] 卸载旧版本（升级前清理旧程序文件，保留数据与素材）
 echo    [0] 退出
 echo.
 set "CH="
@@ -57,6 +58,7 @@ if "%CH%"=="5" (set "PORT=8080" & goto check)
 if "%CH%"=="6" goto askport
 if "%CH%"=="7" goto toggle
 if "%CH%"=="8" goto show
+if "%CH%"=="9" goto uninstall
 if "%CH%"=="0" exit /b 0
 goto menu
 
@@ -123,6 +125,11 @@ echo   服务器已退出，退出码 %errorlevel% 。
 echo   端口被别的程序占用时：回菜单换一个端口，或再次启动让它自动清理。
 echo.
 pause
+goto menu
+
+:uninstall
+echo.
+call "%~dp0卸载旧版本.bat"
 goto menu
 
 :toggle
