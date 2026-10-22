@@ -322,3 +322,13 @@
 .trusted-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 90; padding: 5px 16px; background: #9b202b; color: #fff; display: flex; justify-content: space-between; gap: 12px; }
 .trusted-banner button { color: inherit; text-decoration: underline; }
 .trusted-hash { overflow-wrap: anywhere; font-family: monospace; }
+
+/* 卫戍协议：盟约 · 大逃杀：规则模式选择（房主，开局前） */
+.rules-variant { display: flex; align-items: center; gap: .3rem; }
+.rules-variant__opts { display: flex; gap: .12rem; }
+.rules-variant__opt {
+  padding: .1rem .35rem; border: 1px solid var(--line); background: rgba(8, 13, 11, .6);
+  color: var(--text-md); font-size: calc(.15 * var(--t)); cursor: pointer;
+}
+.rules-variant__opt.is-active { border-color: var(--amber); color: var(--text-hi); background: rgba(246, 163, 41, .12); }
+.rules-variant__opt:disabled { opacity: .5; cursor: default; }

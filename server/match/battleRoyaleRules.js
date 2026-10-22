@@ -142,3 +142,35 @@ export function writeLpCap(enabled, root = ROOT) {
   cache = { lpCapEnabled: !!enabled };
   return cache;
 }
+
+/**
+ * 官方变体的规则集（房间规则变体 = 'official' 时 GameData 使用）：每一项都还原成上游 v0.3.1 的官方行为。
+ * 房主开房时选择「官方模式」，这一局就完全不带入本服的大逃杀改动 —— 与大逃杀版同服务器共存，交给房主选。
+ */
+export const OFFICIAL_RULES = Object.freeze({
+  ...RULES,
+  /** 官方：按策略的 bands.json totalHp（22-45 浮动），不固定 30。 */
+  startLp: 0,
+  /** 官方：首领战按数据（多人 R14 / 单人标准 R9），隐秘核心 R15 保留。 */
+  bossRound: 0,
+  bossHp: 0,
+  noHiddenCore: false,
+  /** 官方：不开限伤旁路、次数怪照吃血量加成。 */
+  bossHitLimit: true,
+  timesHpBonus: true,
+  /** 官方：出怪按官方表（多人 R14 / 单人 R9 为首领回合），不掷骰子、不降飞行怪。 */
+  rollWaveFrom: 0,
+  flySpawnChance: 1,
+  timesDropFrom: 0,
+  bossDropFrom: 0,
+  /** 官方：回合数到首领战为止，无「第 14 回合起血量翻倍」。 */
+  hpDoubleFrom: 0,
+  hpDoubleMul: 1,
+  endless: false,
+  generatedRounds: 40,
+  /** 官方：卡池/装备库存与联防按上游。 */
+  infinitePool: false,
+  poolCapMultiplier: 1,
+  infiniteItems: false,
+  noUnite: false,
+});

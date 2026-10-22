@@ -20,11 +20,12 @@ export class MatchPrep {
   bloodMoney(ps) {
     if (this.phase !== PHASE.PREP) return fail(ERR.WRONG_PHASE);
     if (!ps.alive || ps.left) return fail(ERR.ELIMINATED);
-    if (!(ps.lp >= RULES.bloodMoneyCost)) return fail(ERR.BAD_TARGET, '目标生命值不足 3 点');
-    ps.lp -= RULES.bloodMoneyCost;
-    ps.funds += RULES.bloodMoneyGain;
-    ps.stats.lpLost += RULES.bloodMoneyCost;
-    ps.stats.fundsGained += RULES.bloodMoneyGain;
+    const R = this.gd.RULES || RULES;
+    if (!(ps.lp >= R.bloodMoneyCost)) return fail(ERR.BAD_TARGET, '目标生命值不足 3 点');
+    ps.lp -= R.bloodMoneyCost;
+    ps.funds += R.bloodMoneyGain;
+    ps.stats.lpLost += R.bloodMoneyCost;
+    ps.stats.fundsGained += R.bloodMoneyGain;
     if (ps.lp <= 0) {
       // 卫戍协议：盟约 · 大逃杀：血量到 0 → 当场淘汰。收尾与 onLeave 同款（platform.js）：
       // 全员淘汰则对局结束；否则 PREP 里重算 maybeEndPrep（被淘汰者的 ready 已被 eliminate 清掉，

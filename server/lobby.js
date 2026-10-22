@@ -283,6 +283,8 @@ export class Room {
      * put every human seat before every AI seat (Match opts.aiPicksLast). Kept across the room's matches.
      */
     this.aiPicksLast = false;
+    /** 卫戍协议：盟约 · 大逃杀：本房规则变体（房主选；'battle-royale' 默认 | 'official' 官方）。开局前可改。 */
+    this.rulesVariant = 'battle-royale';
     /** @type {string | null} */
     this.hostId = null;
     /** @type {(Seat | null)[]} */
@@ -363,6 +365,7 @@ export class Room {
       aiPicksLast: this.aiPicksLast,
       // 龙千尘 20 人房: the co-op seat count this room holds (a solo room: 1); the seats array below is cut to it
       capacity: this.capacity,
+      rulesVariant: this.rulesVariant,
       inMatch: !!this.match,
       seats: this.seats.slice(0, this.seatLimit()).map((s) => (s
         ? { seat: s.seat, playerId: s.playerId, name: s.name, isBot: s.isBot, ready: s.ready, connected: s.connected && !s.left,
@@ -661,6 +664,8 @@ export class Lobby {
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
+      // 卫戍协议：盟约 · 大逃杀：房主选择本房规则变体（官方 / 大逃杀）
+      case 'room.setRulesVariant': return this.setRulesVariant(session, msg);
       case 'room.setCapacity': return this.setCapacity(session, msg);
       case 'room.addBot': return this.addBot(session);
       case 'room.removeBot': return this.removeBot(session, msg);
@@ -909,6 +914,25 @@ export class Lobby {
       for (const s of room.seats) if (s && !s.isBot && s.playerId !== room.hostId) s.ready = false;
       this.broadcastState(room);
     }
+    return OK;
+  }
+  /**
+   * 卫戍协议：盟约 · 大逃杀：房主选择本房的规则变体（开局前）。
+   *   'battle-royale'  大逃杀（默认）：掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池……
+   *   'official'       官方：上游 v0.3.1 的原版规则（R14 首领战 + R15 隐秘核心、按策略血量、官方出怪表）。
+   * 切换会让其他真人的「准备」失效（房间规则变了）。
+   */
+  setRulesVariant(session, { rulesVariant }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
+    if (room.match) return fail(ERR.ROOM_STARTED);
+    if (rulesVariant !== 'official' && rulesVariant !== 'battle-royale') return fail(ERR.BAD_MSG, 'bad rulesVariant');
+    if (room.rulesVariant === rulesVariant) return OK;
+    this.dropReplay(room, session.playerId);
+    room.rulesVariant = rulesVariant;
+    for (const s of room.seats) if (s && !s.isBot && s.playerId !== room.hostId) s.ready = false;
+    this.broadcastState(room);
     return OK;
   }
 
@@ -1432,6 +1456,8 @@ export class Lobby {
         // a plugin mode the host chose (header "Gameplay plugins"), else the official mode of the difficulty
         modeId: room.content?.modeId || modeIdFor(room.mode, room.difficulty),
         // 「AI 队友最后选择」 (GitHub #338): fixed for the match
+        // 卫戍协议：盟约 · 大逃杀：房主选择的规则变体（官方 / 大逃杀）
+        rulesVariant: room.rulesVariant === 'official' ? 'official' : 'battle-royale',
         aiPicksLast: room.mode !== 'solo' && room.aiPicksLast === true,
         seats,
         // the spectator seats (header): watched like eliminated players, never players

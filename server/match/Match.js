@@ -292,6 +292,8 @@ export class Match {
     if (Array.isArray(opts.kitted)) this.diyKitted = Object.freeze(opts.kitted.filter((id) => typeof id === 'string'));
     // The room's rule switches (DESIGN §34.15). Omitted on a vanilla match, so its own keys stay the same.
     if (opts.rules && typeof opts.rules === 'object' && !Array.isArray(opts.rules)) this.rules = Object.freeze({ ...opts.rules });
+    // 卫戍协议：盟约 · 大逃杀：本局规则变体（房主开房时选择；缺省 = 大逃杀）
+    this.rulesVariant = opts.rulesVariant === 'official' ? 'official' : 'battle-royale';
     /**
      * The interaction windows this match's content set declares (PLUGIN API v2, docs/PLUGINS.md §10b): the normalized
      * `offers` of the plugins the host installed, handed in as `opts.offers` before construction so test journals
@@ -308,7 +310,8 @@ export class Match {
     this._offerResume = null;
     /** window sequence (diagnostics and messages) */
     this.offerSeq = 0;
-    this.gd = new GameData(this.data, this.modeId);
+    // 卫戍协议：盟约 · 大逃杀：房主选择的规则变体（'battle-royale' 默认 | 'official'）随房间进对局
+    this.gd = new GameData(this.data, this.modeId, { variant: this.rulesVariant });
     if (!this.difficulty) this.difficulty = this.gd.difficulty;
     this.isSolo = this.mode === 'solo' || this.gd.isSolo;
     /** 「AI 队友最后选择」 (opts.aiPicksLast, GitHub #338): humans draft before AI seats (MatchPhases.humansFirst) */

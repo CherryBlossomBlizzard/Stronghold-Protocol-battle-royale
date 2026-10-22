@@ -508,6 +508,8 @@ export const C2S = {
   // the co-op room option 「AI 队友最后选择」 (GitHub #338; host, before the match): the strategy and 机变 drafts order every
   // human seat before every AI seat (server/match/match/phases.js humansFirst); room.state.aiPicksLast
   'room.setAiPicksLast': { on: isBool },
+  // 卫戍协议：盟约 · 大逃杀：房主选择本房规则变体（'battle-royale' 大逃杀 | 'official' 官方）
+  'room.setRulesVariant': { rulesVariant: (v) => v === 'battle-royale' || v === 'official' },
   // 龙千尘 20 人房 (host, LOBBY phase): the room's co-op seat count. Shrinking below the occupied seats is refused (the
   // lobby handler says why), so no member loses its seat; joined members keep their ready state.
   'room.setCapacity': { capacity: (v) => ROOM_CAPACITIES.includes(v) },

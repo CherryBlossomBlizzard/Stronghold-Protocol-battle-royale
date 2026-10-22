@@ -16,7 +16,7 @@ import { isShopItem } from '../sim/simdata.js';
 import { mergeData } from '../../shared/plugins/dataUtils.js';
 import { standInRecord } from '../../shared/standIn.js';
 import { MAX_OFFER_SLOTS } from './player/common.js';
-import { RULES } from './battleRoyaleRules.js';
+import { RULES, OFFICIAL_RULES } from './battleRoyaleRules.js';
 
 const own = (map, id) => (map && typeof map === 'object' && typeof id === 'string' && Object.hasOwn(map, id) && map[id] && typeof map[id] === 'object' ? map[id] : null);
 const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -94,7 +94,12 @@ export class GameData {
    * @param {Readonly<Record<string, any>>} data server/data.js getData() (may be partial)
    * @param {string} modeId e.g. 'mode_multi_hard'
    */
-  constructor(data, modeId) {
+  constructor(data, modeId, rulesOverride = null) {
+    // 卫戍协议：盟约 · 大逃杀：本局规则变体（'battle-royale' 默认 | 'official' 官方）。官方变体把所有本服开关还原成官方行为，
+    // 房主开房时选择（room.rulesVariant → Match opts → 这里）。
+    const variant = rulesOverride && rulesOverride.variant === 'official' ? 'official' : 'battle-royale';
+    this.rulesVariant = variant;
+    this.RULES = variant === 'official' ? OFFICIAL_RULES : RULES;
     this.raw = data && typeof data === 'object' ? data : {};
     this.config = getConfig(this.raw) || {};
     this.modeId = modeId;
@@ -160,7 +165,7 @@ export class GameData {
    * @returns {number}
    */
   bossPoolHp(bossId, aliveCount) {
-    // 卫戍协议：盟约 · 大逃杀：首领战血量固定（RULES.bossHp = 五亿），不再按存活人数缩放。
+    // 卫戍协议：盟约 · 大逃杀：首领战血量固定（this.RULES.bossHp = 五亿），不再按存活人数缩放。
     if (this.bossFixedHp) return this.bossFixedHp;
     const boss = this.boss(bossId);
     const diff = this.difficulty;
@@ -361,12 +366,14 @@ export class GameData {
     return this.modeId === 'mode_single_funny' ? 9 : 14;
   }
   /**
-   * 卫戍协议：盟约 · 大逃杀：最后一回合 = 强制首领战的回合（RULES.bossRound，20）；回合数没有上限，
+   * 卫戍协议：盟约 · 大逃杀：最后一回合 = 强制首领战的回合（this.RULES.bossRound，20）；回合数没有上限，
    * 只要还有人存活就一直进行（数据只写到官方回合数，更远的回合见 roundCfg / bossRoundCfg）。
    */
-  get bossRound() { return RULES.bossRound > 0 ? RULES.bossRound : (Number.isInteger(this.mode.bossRound) && this.mode.bossRound > 0 ? this.mode.bossRound : this.lastRound); }
-  /** 大逃杀没有隐秘核心：首领战（第 20 回合）结束就是这一把的结束。 */
-  get hiddenRound() { return null; }
+  get bossRound() { return this.RULES.bossRound > 0 ? this.RULES.bossRound : (Number.isInteger(this.mode.bossRound) && this.mode.bossRound > 0 ? this.mode.bossRound : this.lastRound); }
+  /**
+   * 隐秘核心回合：大逃杀变体没有（首领战结束即这一把的结束）；官方变体保留数据里的 hiddenRound（R15）。
+   */
+  get hiddenRound() { return this.rulesVariant === 'official' ? (Number.isInteger(this.mode.hiddenRound) && this.mode.hiddenRound > 0 ? this.mode.hiddenRound : null) : null; }
   get maxShopLevel() { return posIntOr(this.mode.maxShopLevel, DEFAULTS.maxShopLevel); }
 
   /**
@@ -381,24 +388,26 @@ export class GameData {
   roundCfg(r) {
     const rounds = this.mode.rounds;
     const rc = rounds && typeof rounds === 'object' && rounds[String(r)] && typeof rounds[String(r)] === 'object' ? rounds[String(r)] : null;
-    if (rc && r <= RULES.normalRoundMax) return rc;
+    // 官方变体：完全按数据（数据只写到首领/隐秘回合，之外的回合官方本来就没有）
+    if (this.rulesVariant === 'official') return rc;
+    if (rc && r <= this.RULES.normalRoundMax) return rc;
     if (r === this.bossRound) return rc || this.bossRoundCfg();
     const officialBoss = !!rc && (rc.isBoss === true || rc.isHidden === true || (rc.bossTemplates && Object.keys(rc.bossTemplates).length > 0));
     if (rc && !officialBoss) return rc;
-    if (!RULES.endless || r < 1 || r > RULES.generatedRounds) return null;
+    if (!this.RULES.endless || r < 1 || r > this.RULES.generatedRounds) return null;
     // 基准 = 最后一个带普通波次模板的官方回合（单人标准是 R8，多人绝境是 R13）；它之后的官方配置全是首领战
     let last = null;
-    for (let k = 1; k <= Math.max(RULES.normalRoundMax, this.lastRound); k++) {
+    for (let k = 1; k <= Math.max(this.RULES.normalRoundMax, this.lastRound); k++) {
       const c = rounds && typeof rounds === 'object' ? rounds[String(k)] : null;
       if (c && typeof c.template === 'string' && c.isBoss !== true && c.isHidden !== true) last = c;
     }
-    if (!last && rounds && typeof rounds === 'object' && rounds[String(RULES.normalRoundMax)]) last = rounds[String(RULES.normalRoundMax)];
+    if (!last && rounds && typeof rounds === 'object' && rounds[String(this.RULES.normalRoundMax)]) last = rounds[String(this.RULES.normalRoundMax)];
     const template = last && typeof last.template === 'string' ? last.template : null;
     if (!template) return null;
-    const over = r - RULES.normalRoundMax;
+    const over = r - this.RULES.normalRoundMax;
     const basePrep = last && Number.isFinite(last.prepTime) ? last.prepTime : 0;
-    const prep = Math.min(RULES.prepTimeCap, basePrep + over * RULES.prepTimeStep);
-    const combat = Math.min(RULES.combatTimeCap, (last && Number.isFinite(last.combatTimeLimit) ? last.combatTimeLimit : 115) + over * RULES.combatTimeStep);
+    const prep = Math.min(this.RULES.prepTimeCap, basePrep + over * this.RULES.prepTimeStep);
+    const combat = Math.min(this.RULES.combatTimeCap, (last && Number.isFinite(last.combatTimeLimit) ? last.combatTimeLimit : 115) + over * this.RULES.combatTimeStep);
     return {
       template, bossTemplates: null, combatTimeLimit: combat, levelMaxPlayTime: combat,
       prepTime: this.isSolo ? null : prep, prepTimeData: prep, isSpPrepare: false,
@@ -522,14 +531,14 @@ export class GameData {
    */
   enemyScale(r) {
     const base = this.baseEnemyScale(r);
-    if (!RULES.endless) return base;
-    const nm = RULES.normalRoundMax;
+    if (!this.RULES.endless) return base;
+    const nm = this.RULES.normalRoundMax;
     if (r <= nm) return base;
     const last = this.baseEnemyScale(nm);
-    const hp = last.hpMul * Math.pow(RULES.hpDoubleMul, r - (RULES.hpDoubleFrom - 1));
+    const hp = last.hpMul * Math.pow(this.RULES.hpDoubleMul, r - (this.RULES.hpDoubleFrom - 1));
     return {
       hpMul: Math.max(0.01, hp),
-      atkMul: Math.max(0, last.atkMul * Math.pow(RULES.atkGrowth, r - nm)),
+      atkMul: Math.max(0, last.atkMul * Math.pow(this.RULES.atkGrowth, r - nm)),
       speedMul: last.speedMul,
       ...(last.supplyHpMul != null ? { supplyHpMul: last.supplyHpMul } : {}),
     };
@@ -568,16 +577,16 @@ export class GameData {
     return { dpInit: numOr(d.init, 10), dpPerSec: numOr(d.perSec, 1), dpMax: numOr(d.max, 99) };
   }
   /** 卫戍协议：盟约 · 大逃杀：第 `rollWaveFrom` 回合起出怪掷骰子（waves.js，从全部怪物里随机抽）。 */
-  get rollWaves() { return RULES.rollWaveFrom > 0; }
+  get rollWaves() { return this.RULES.rollWaveFrom > 0; }
 
   /** 掷骰子从第几回合开始：之前的回合按官方派系 / 波次表出怪（本服 = 第 14 回合起）。 */
-  get rollWaveFrom() { return RULES.rollWaveFrom; }
+  get rollWaveFrom() { return this.RULES.rollWaveFrom; }
 
   /** 卫戍协议：盟约 · 大逃杀：首领战固定血量（五亿）；0 = 用官方按存活人数缩放的算法。 */
-  get bossFixedHp() { return RULES.bossHp > 0 ? RULES.bossHp : null; }
+  get bossFixedHp() { return this.RULES.bossHp > 0 ? this.RULES.bossHp : null; }
 
   /** 卫戍协议：盟约 · 大逃杀：回合数没有上限（第 13 回合之后继续普通回合，第 20 回合才进首领战）。 */
-  get endless() { return !!RULES.endless; }
+  get endless() { return !!this.RULES.endless; }
 
   /**
    * 卫戍协议：盟约 · 大逃杀：这一局每一块战场都要带的 `battle.flags` —— DP 经济值 + 本服的两条规则开关：
@@ -590,8 +599,8 @@ export class GameData {
   get battleFlags() {
     return {
       ...this.dp,
-      ...(RULES.bossHitLimit ? {} : { bossHitLimit: false }),
-      ...(RULES.timesHpBonus ? {} : { timesHpBonus: false }),
+      ...(this.RULES.bossHitLimit ? {} : { bossHitLimit: false }),
+      ...(this.RULES.timesHpBonus ? {} : { timesHpBonus: false }),
     };
   }
   get unite() {
@@ -645,9 +654,9 @@ export class GameData {
   }
 
   startLp(bandId) {
-    // 卫戍协议：盟约 · 大逃杀：所有玩家的目标生命值（血量）上限统一固定 30（RULES.startLp），
+    // 卫戍协议：盟约 · 大逃杀：所有玩家的目标生命值（血量）上限统一固定 30（this.RULES.startLp），
     // 不按策略（bands.json totalHp：22-45 不等）区分 —— 这是本服的规则之一。
-    if (RULES.startLp > 0) return RULES.startLp;
+    if (this.RULES.startLp > 0) return this.RULES.startLp;
     const b = this.band(bandId);
     return b && Number.isInteger(b.totalHp) && b.totalHp > 0 ? b.totalHp : this.defaultStartLp;
   }

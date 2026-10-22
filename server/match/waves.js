@@ -269,9 +269,9 @@ const TIMES = 'TIMES';
 /** 数据里标注「频次器物」的方式（acType / acTypes）。 */
 const isTimes = (rec) => !!rec && (rec.acType === TIMES || (Array.isArray(rec.acTypes) && rec.acTypes.includes(TIMES)));
 /** 这一回合是否处在「次数怪只以亡语形态出现」的区间（RULES.timesDropFrom 起）。 */
-export function timesDropped(round) { return RULES.timesDropFrom > 0 && round >= RULES.timesDropFrom; }
+export function timesDropped(gd, round) { const R = gd && gd.RULES ? gd.RULES : RULES; return R.timesDropFrom > 0 && round >= R.timesDropFrom; }
 /** 这一回合是否处在「首领本体不进普通波次」的区间（RULES.bossDropFrom 起）。 */
-export function bossDropped(round) { return RULES.bossDropFrom > 0 && round >= RULES.bossDropFrom; }
+export function bossDropped(gd, round) { const R = gd && gd.RULES ? gd.RULES : RULES; return R.bossDropFrom > 0 && round >= R.bossDropFrom; }
 
 /** 怪物强度：优先用数据里的 attrPower，缺失时用 生命 × 攻击 兜底（只用来排序，不参与战斗）。 */
 function enemyPower(rec) {
@@ -306,7 +306,8 @@ function monsterPools(gd) {
     if (rank === 'BOSS') continue;                       // 领袖本体：只在首领战出现
     // 卫戍协议：盟约 · 大逃杀：次数怪（频次器物）从 RULES.timesDropFrom 起不进波次，只以亡语形态（击杀后召唤 /
     // 分裂）出现；官方模板里抽到它们时同样跳过（见 templateSpawns）。
-    if (RULES.timesDropFrom > 0 && isTimes(rec)) continue;
+    const R = gd.RULES || RULES;
+    if (R.timesDropFrom > 0 && isTimes(rec)) continue;
     const fly = isFlyKey(gd, key);
     const elite = rank === 'ELITE';
     const power = enemyPower(rec);
@@ -315,7 +316,8 @@ function monsterPools(gd) {
     (fly ? all.flySpecial : all.groundSpecial).push({ key, power });
   }
   // 第 14 回合起「全部怪物」都出：池子不按属性强度分低 / 中难度档，每类就是该类别的全部怪物
-  const pools = { from: RULES.rollWaveFrom, total: all.groundSpecial.length + all.flySpecial.length };
+  const R = gd.RULES || RULES;
+  const pools = { from: R.rollWaveFrom, total: all.groundSpecial.length + all.flySpecial.length };
   for (const cls of Object.keys(all)) {
     const asc = all[cls].slice().sort((a, b) => a.power - b.power || (a.key < b.key ? -1 : 1));
     pools[cls] = { all: asc.map((x) => x.key), maxPower: asc.length ? asc[asc.length - 1].power : 0 };
@@ -348,7 +350,8 @@ export function rollWavePick(gd, rng, round) {
   // 卫戍协议：盟约 · 大逃杀：**整体降低飞行怪频率** —— 飞行槽位只有 `flySpawnChance` 的概率真抽一只飞行怪；
   // 其余情况抽一只地面怪，那次刷新会因「槽位类别不符」在 templateSpawns 里被直接跳过（不刷、不预告），
   // 于是整体飞行怪变少。第 1–13 回合走官方表，不读这个开关。
-  const flyChance = Number.isFinite(RULES.flySpawnChance) ? Math.min(1, Math.max(0, RULES.flySpawnChance)) : 1;
+  const R = gd.RULES || RULES;
+  const flyChance = Number.isFinite(R.flySpawnChance) ? Math.min(1, Math.max(0, R.flySpawnChance)) : 1;
   const flyDraw = (flyPrimary, flyFallback, groundPrimary) => (flyChance >= 1 || rng() < flyChance
     ? draw(flyPrimary, flyFallback)
     : (draw(groundPrimary, 'groundSpecial') || draw('normal', 'groundSpecial') || draw('elite', 'groundSpecial')));
@@ -490,7 +493,7 @@ function templateSpawns(gd, tpl, round, pick) {
         }
         // 卫戍协议：盟约 · 大逃杀：第 RULES.timesDropFrom 回合起，官方排期抽到次数怪（频次器物）时这一格不出 ——
         // 它们只以亡语形态（击杀后召唤 / 分裂）出现。
-        if (!isBoss && timesDropped(round) && isTimes(gd.enemy(newKey))) {
+        if (!isBoss && timesDropped(gd, round) && isTimes(gd.enemy(newKey))) {
           actions.push({ index: i, key: null, tplKey: key0, slot: p.slot ?? s.slot ?? null, time, count: 0, tplCount: n, window, routeIndex, valid: false, server: false });
           continue;
         }
@@ -502,8 +505,8 @@ function templateSpawns(gd, tpl, round, pick) {
     if (!gd.enemy(key)) continue;
     // 卫戍协议：盟约 · 大逃杀：第 RULES.bossDropFrom 回合起，模板里 literal 写的首领本体也不出现在普通波次里
     // （首领只在 bossRound 回合的首领战登场）；次数怪同理只留亡语形态。
-    if (!isBoss && bossDropped(round) && (gd.enemy(key)?.rank === 'BOSS' || !!gd.boss(key))) continue;
-    if (!isBoss && timesDropped(round) && isTimes(gd.enemy(key))) continue;
+    if (!isBoss && bossDropped(gd, round) && (gd.enemy(key)?.rank === 'BOSS' || !!gd.boss(key))) continue;
+    if (!isBoss && timesDropped(gd, round) && isTimes(gd.enemy(key))) continue;
     const slot = s.slot || classOf(gd, key);
     const spec = {
       time,

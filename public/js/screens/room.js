@@ -278,6 +278,8 @@ export function RoomScreen() {
     if (ok) run(`kick${seat}`, () => net.request('room.kick', { seat, playerId }));
   };
   const setDifficulty = (difficulty) => run('diff', () => net.request('room.setDifficulty', { difficulty }));
+  // 卫戍协议：盟约 · 大逃杀：房主选择规则变体（大逃杀 / 官方）
+  const setRulesVariant = (rulesVariant) => run('rules', () => net.request('room.setRulesVariant', { rulesVariant }));
   const setAiLast = (on) => run('ailast', () => net.request('room.setAiPicksLast', { on }));
   // spectator seats: the host frees one; a spectator takes a free player seat with room.join of this room
   const removeSpectator = (playerId) => run(`rs${playerId}`, () => net.request('room.removeSpectator', { playerId }));
@@ -366,6 +368,17 @@ export function RoomScreen() {
         <div class="room-bar__opts">
           <${DifficultyPicker} room=${room} isHost=${facts.isHost} busy=${busy} onPick=${setDifficulty} />
           <${AiLastToggle} option=${aiLastOption(room, me.playerId)} busy=${busy} onToggle=${setAiLast} />
+          ${coop && facts.isHost ? html`<div class="rules-variant">
+            <span class="room-bar__label">${t('规则模式')}<${MicroLabel}>RULES<//></span>
+            <div class="rules-variant__opts" role="radiogroup" aria-label=${t('规则模式')}>
+              <button type="button" role="radio" aria-checked=${room.rulesVariant !== 'official' ? 'true' : 'false'}
+                class=${`rules-variant__opt${room.rulesVariant !== 'official' ? ' is-active' : ''}`}
+                disabled=${!!busy} onClick=${() => setRulesVariant('battle-royale')}>${t('大逃杀')}</button>
+              <button type="button" role="radio" aria-checked=${room.rulesVariant === 'official' ? 'true' : 'false'}
+                class=${`rules-variant__opt${room.rulesVariant === 'official' ? ' is-active' : ''}`}
+                disabled=${!!busy} onClick=${() => setRulesVariant('official')}>${t('官方原版')}</button>
+            </div>
+          </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('规则模式：')}${room.rulesVariant === 'official' ? t('官方原版') : t('大逃杀')}</span>` : null}
         </div>
       </div>
       <div class="room-bar__center">

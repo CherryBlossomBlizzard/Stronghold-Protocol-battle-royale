@@ -669,8 +669,9 @@ export function specBounds(spec, gd = null) {
   //   * 第 14 回合起的普通 / 联防战场：怪物血量每回合翻倍（RULES.hpDoubleMul），战斗时长同步暴涨，同一批敌人
   //     的召唤 / 分裂产物自然比官方回合多得多（实测 R19 普通场 301 次击杀，官方公式只给 272）。
   // 因此上界随倍率放宽：普通 / 联防按回合数线性放大，首领战给一个固定的宽余量。
-  const lateRound = Number.isInteger(spec && spec.round) && Number.isInteger(RULES.hpDoubleFrom) && spec.round >= RULES.hpDoubleFrom
-    ? spec.round - RULES.hpDoubleFrom + 1 : 0;
+  const R = (gd && gd.RULES) || RULES;
+  const lateRound = Number.isInteger(spec && spec.round) && Number.isInteger(R.hpDoubleFrom) && spec.round >= R.hpDoubleFrom
+    ? spec.round - R.hpDoubleFrom + 1 : 0;
   const scale = 1 + lateRound * 2; // R14 起每往后一回合，允许的召唤产物再多一倍左右
   const maxTotal = spec && (spec.kind === 'boss' || spec.kind === 'hidden')
     ? Math.max(spawnCount * 4 + 100, 6000)

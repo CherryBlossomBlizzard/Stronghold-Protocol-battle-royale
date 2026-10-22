@@ -8,7 +8,19 @@
    （<https://github.com/LongQianChen/Stronghold-Protocol/tree/feat/IncreasePlayerCapacity>）——
    最大 20 人房（4 / 8 / 10 / 16 / 20 席位）、玩家分组与分组卡池、紧凑 WebSocket 协议与网络优化等。
 
-本仓库（「卫戍协议：盟约 · 大逃杀」）在两者之上**只改一局的节奏与难度曲线**，其余行为保持上游原样。
+本仓库（「卫戍协议：盟约 · 大逃杀」）在两者之上**改一局的节奏与难度曲线**，其余行为保持上游原样。
+
+## 双规则模式：官方原版与大逃杀并存，房主选择
+
+同一台服务器上两种规则**同时存在**，开房的房主在房间设置里选「规则模式」：
+
+* **大逃杀**（默认）：下面的全部改动生效 —— 掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池/装备、无联防……
+* **官方原版**：这一局完全按上游 v0.3.1 的官方规则 —— R14 最终攻势 + R15 隐秘核心、首领按血点缩放、按策略 22-45 浮动血量、官方出怪表、官方卡池库存、联防回归。
+
+切换是**房内设置**（`room.setRulesVariant`，房主操作，开局前可改，切换会让其他真人的准备失效）；
+对局创建时变体随房间进入 `Match`（`opts.rulesVariant`）→ `GameData` 的第三参，整局固定。
+实现：`server/match/battleRoyaleRules.js` 的 `OFFICIAL_RULES`（官方变体规则集）与 `GameData` 的 per-instance `this.RULES`；
+皮肤等外观插件不受规则模式影响，两种模式下都能用。
 
 **本项目是上述两代上游的修改版，由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护并分发，本次修改日期 2026-10-22。**
 它不是上游发布的版本，也未获上游作者或《明日方舟》权利人的授权或认可。
