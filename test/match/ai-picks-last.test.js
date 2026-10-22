@@ -136,7 +136,8 @@ test('band draft, option on: a skip passes the turn to the other humans, ahead o
   const h4 = toBandDraft({ seats: seatsOf(['p_0', 'ai_0', 'p_1', 'ai_1']), seed: 3 });
   h4.run(() => !isAi(h4.m.draftTurn() || 'ai_'));
   const o4 = h4.m.draft.order.slice();
-  const at = h4.m.draft.idx;
+  // 卫戍协议 · 20 人房：轮转状态在 draft.groups[].idx（全房一组时就是唯一的组）
+  const at = h4.m.draft.groups[0].idx;
   const cur = h4.m.draftTurn();
   assert.deepEqual(h4.m.handle(cur, { t: 'g.bandSkip' }), { ok: true });
   assert.deepEqual(h4.m.draft.order, [...o4.slice(0, at), ...o4.slice(at + 1), cur]);

@@ -145,8 +145,10 @@ export class MatchViews {
     if (this.phase === PHASE.BAND_DRAFT && this.draft) {
       const d = this.draft;
       // turnSeconds: the length of a turn (the countdown gauge's total; 0 when untimed) — deadline = turnDeadline
+      // 卫戍协议 · 20 人房：各组并行轮选 —— turn 是第一个未完成组的当前玩家（向后兼容），turns 是每组当前
+      const turns = (d.groups || []).map((g) => (g.idx < g.order.length && !d.picks[g.order[g.idx]] ? g.order[g.idx] : null)).filter(Boolean);
       v.draft = {
-        order: d.order.slice(), turn: this.draftTurn(), picks: { ...d.picks }, skipsLeft: { ...d.skipsLeft }, turnDeadline: d.turnDeadline || 0,
+        order: d.order.slice(), turn: this.draftTurn(), turns, picks: { ...d.picks }, skipsLeft: { ...d.skipsLeft }, turnDeadline: d.turnDeadline || 0,
         turnSeconds: d.untimed ? 0 : this.bandTurnMs() / 1000, untimed: !!d.untimed,
       };
     }

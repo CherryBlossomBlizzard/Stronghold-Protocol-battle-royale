@@ -35,50 +35,64 @@ export class MatchPhases {
   }
 
   /**
-   * The strategy draft (user playtest #4 item 4): ONE countdown — every turn has the same clock, BAND_TURN_SECONDS, and
-   * m.public.deadline is the current turn's end (= draft.turnDeadline; the step header and the turn indicator show the
-   * same number). No separate step cap: the turns bound the step (≤ (seats + skips) × turn). AI seats pick at once. A
-   * turn that runs out takes the strategy the player has highlighted (g.bandFocus) while it is free, else the default
-   * (timeoutBand). Solo, and any single-human match (soloUntimed): untimed. Solo also keeps seat order and has no skip.
+   * The strategy draft (user playtest #4 item 4) — 卫戍协议 · 20 人房（龙千尘）: 按【卡池组】独立轮选。
+   * 4 人一组（Match.poolGroups；≤6 人整房一组），各组独立轮转、独立判重（队友已选只在组内生效）、
+   * 独立卡池（Match.playerPools 本就按组）——20 人房里 8 个策略每组自选自用，跨组可以重复。
+   * ONE countdown per turn still holds: every group's turn shares the same clock (BAND_TURN_SECONDS),
+   * a turn that runs out assigns every still-pending group's current picker at once.
+   * 向后兼容：draft.order / picks / skipsLeft 是全房投影（各组的拼接）；draftTurn() 无参返回第一个
+   * 未完成组的当前玩家（bots / 视图）；d.groups 是轮转的真相。
    */
   enterBandDraft() {
     if (this.phase !== PHASE.INFO_CHECK) return;
     this.phase = PHASE.BAND_DRAFT;
-    let order = this.order.map((p) => p.playerId);
-    if (!this.isSolo) this.rngDraft.shuffle(order);
-    order = this.humansFirst(order);
     const skips = this.isSolo ? 0 : this.gd.bandDraft.skipsPerPlayer;
     const untimed = this.soloUntimed;
+    const bot = (pid) => !!this.players.get(pid)?.isBot;
+    const parts = this.poolGroups?.length ? this.poolGroups.map((g) => g.playerIds.slice()) : [this.order.map((p) => p.playerId)];
+    const groups = parts.map((ids) => {
+      let order = ids.slice();
+      if (!this.isSolo) this.rngDraft.shuffle(order);
+      order = this.humansFirst(order);
+      return {
+        playerIds: new Set(ids), order, idx: 0,
+        picks: {}, skipsLeft: Object.fromEntries(order.map((pid) => [pid, skips])), focus: new Map(), turnDeadline: 0,
+      };
+    });
     this.draft = {
-      order, idx: 0, picks: {}, skipsLeft: Object.fromEntries(order.map((pid) => [pid, skips])), untimed, turnDeadline: 0,
-      /** playerId → the strategy highlighted in the draft screen (g.bandFocus) */
-      focus: new Map(),
+      groups,
+      order: groups.flatMap((g) => g.order),
+      picks: {}, skipsLeft: Object.fromEntries(groups.flatMap((g) => g.order.map((pid) => [pid, skips]))),
+      untimed, turnDeadline: 0, focus: new Map(),
     };
     this.setDeadline(0);
     this.startDraftTurn();
     this.markPublic();
   }
 
-  /**
-   * The co-op room option 「AI 队友最后选择」 (this.aiPicksLast, GitHub #338): every human seat before every AI seat, each
-   * group in the order the draft drew (a stable partition applied AFTER the shuffle — no extra random draw: the order
-   * with the option off is unchanged, and with it on every random stream stands where it would without it; only the
-   * picks made in the new order can differ). A human is any seat that is not an AI seat (room.addBot): under AI 托管,
-   * disconnected or departed it still counts as a human. Used by the strategy draft and the 机变 draft
-   * (MatchSpDraft.enterSpDraft).
-   * @param {string[]} order playerIds in drawn order
-   * @returns {string[]}
-   */
   humansFirst(order) {
     if (!this.aiPicksLast) return order;
     const bot = (pid) => !!this.players.get(pid)?.isBot;
     return [...order.filter((pid) => !bot(pid)), ...order.filter(bot)];
   }
+  /** The pool group a seat drafts in (this.draft.groups), or null. */
+  draftGroupOf(pid) {
+    return this.draft?.groups?.find((g) => g.playerIds.has(pid)) || null;
+  }
 
-  draftTurn() {
+  /**
+   * The current picker. Without `pid`: the first group still to pick (the projection's single turn, what the view
+   * shows). With `pid`: that seat's own group's current picker — the check pickBand / skipBand / bandFocus run.
+   */
+  draftTurn(pid = null) {
     const d = this.draft;
     if (!d) return null;
-    return d.order[d.idx] ?? null;
+    if (pid != null) {
+      const g = this.draftGroupOf(pid);
+      return g ? g.order[g.idx] ?? null : null;
+    }
+    for (const g of d.groups) if (g.idx < g.order.length && !d.picks[g.order[g.idx]]) return g.order[g.idx];
+    return null;
   }
 
   /** Real ms of one strategy-draft turn (BAND_TURN_SECONDS × timerScale). */
@@ -88,9 +102,13 @@ export class MatchPhases {
     const d = this.draft;
     this.cancel(this._turnTimer);
     this._turnTimer = null;
-    if (this.test) this.setDeadline(0);
-    while (d.idx < d.order.length && d.picks[d.order[d.idx]]) d.idx++; // loop-cap: draft order
-    if (d.idx >= d.order.length) {
+    // 推进每组 idx 越过已选座位；记录有没有组还没选完
+    let pending = false;
+    for (const g of d.groups) {
+      while (g.idx < g.order.length && d.picks[g.order[g.idx]]) g.idx++;
+      if (g.idx < g.order.length) pending = true;
+    }
+    if (!pending) {
       d.turnDeadline = 0;
       this.deadline = 0;
       this.later(0, () => this.finishBandDraft(false));
@@ -100,12 +118,14 @@ export class MatchPhases {
     if (!d.untimed) {
       const ms = this.bandTurnMs();
       d.turnDeadline = this.sched.now() + ms;
-      // the step's countdown IS the turn's (one number everywhere)
       this.deadline = d.turnDeadline;
+      // 各组同钟：一轮超时给【每个未完成组的当前玩家】自动分配
       const expire = () => {
         if (this.phase !== PHASE.BAND_DRAFT || token !== this._turnToken) return;
-        const pid = this.draftTurn();
-        if (pid) this._applyBand(this.players.get(pid), this.timeoutBand(pid));
+        for (const g of d.groups) {
+          const pid = g.order[g.idx];
+          if (pid && !d.picks[pid]) this._applyBand(this.players.get(pid), this.timeoutBand(pid));
+        }
       };
       if (this.test) { this.setDeadline(ms / 1000 / (this.timerScale || 1), expire); d.turnDeadline = this.deadline; }
       else this._turnTimer = this.later(ms, expire);
@@ -113,43 +133,47 @@ export class MatchPhases {
       d.turnDeadline = 0;
       this.deadline = 0;
     }
-    const cur = this.players.get(this.draftTurn());
-    if (cur && cur.botControlled) this.scheduleBandBot();
+    for (const g of d.groups) {
+      const pid = g.order[g.idx];
+      const cur = this.players.get(pid);
+      if (cur && cur.botControlled) this.scheduleBandBot();
+    }
     this.markPublic();
   }
 
-  /** An AI seat's (or an AI 托管 seat's) turn: it picks at once (user playtest #4 item 4 — nobody waits on the AI). */
   scheduleBandBot() {
     const token = this._turnToken;
     this.later(0, () => {
       if (this.phase !== PHASE.BAND_DRAFT || token !== this._turnToken) return;
-      const ps = this.players.get(this.draftTurn());
+      const pid = this.draftTurn();
+      const ps = this.players.get(pid);
       if (!ps || !ps.botControlled) return;
-      // a strategy a teammate already took is not selectable (队友已选): the bot re-draws, else the first free one
+      // 组内队友已选：AI 重抽，否则组内第一个空的
       let id = botPickBand(this, ps);
-      for (let k = 0; k < 8 && this.bandTaken(id, ps.playerId); k++) id = botPickBand(this, ps);
-      if (this.bandTaken(id, ps.playerId)) id = this.gd.bandIds().find((b) => !this.bandTaken(b, ps.playerId)) || id;
+      for (let k = 0; k < 8 && this.bandTaken(id, pid); k++) id = botPickBand(this, ps);
+      if (this.bandTaken(id, pid)) id = this.gd.bandIds().find((b) => !this.bandTaken(b, pid)) || id;
       this._applyBand(ps, id, { dedupe: true });
     });
   }
 
   /**
-   * Whether `bandId` was already picked by another player of this draft. Research 09 §5 / DESIGN §14 corrections:
-   * the strategy draft marks a teammate's pick as 队友已选 and it cannot be chosen again (co-op). The automatic
-   * assignments — a turn that runs out and a departing seat — obey the same rule: see timeoutBand / defaultBand.
+   * Whether `bandId` was already picked by another player of `playerId`'s POOL GROUP（组内队友已选 —— 跨组可以重复）.
+   * Research 09 §5 / DESIGN §14 corrections apply within the group; automatic assignments obey the same rule
+   * (timeoutBand / defaultBand).
    */
   bandTaken(bandId, playerId) {
-    const picks = this.draft?.picks || {};
+    const g = this.draftGroupOf(playerId);
+    const picks = g ? g.picks : (this.draft?.picks || {});
     for (const [pid, id] of Object.entries(picks)) if (pid !== playerId && id === bandId) return true;
     return false;
   }
 
   /**
    * The strategy an automatic assignment gives `playerId` (a departing seat; a timed-out turn without a usable
-   * highlight, timeoutBand): the official default 「华法琳」 (bandDraft.timeoutBandId) while no teammate holds it, else the
-   * first strategy of the mode (sortId order, gd.bandIds) that nobody else picked — never a duplicate (队友已选; the
-   * client shows the same choice: public/js/screens/bandDraft.js timeoutBand). Solo drafts have no teammates, so it is
-   * always the default.
+   * highlight, timeoutBand): the official default 「华法琳」 (bandDraft.timeoutBandId) while no group-mate holds it,
+   * else the first strategy of the mode (sortId order, gd.bandIds) that nobody in the group picked — never a
+   * duplicate within the group (组内队友已选; the client shows the same choice). Solo drafts have no teammates, so
+   * it is always the default.
    * @param {string} playerId
    */
   defaultBand(playerId) {
@@ -159,13 +183,14 @@ export class MatchPhases {
   }
 
   /**
-   * What a turn that runs out assigns (user playtest #4 item 4): the strategy the player has highlighted in the draft
-   * screen (g.bandFocus — the detail pane's band, the one 确认选择 would take) while it is allowed and no teammate holds
-   * it, else defaultBand.
+   * What a turn that runs out assigns (user playtest #4 item 4): the strategy the player has highlighted in the
+   * draft screen (g.bandFocus — the detail pane's band, the one 确认选择 would take) while it is allowed and no
+   * group-mate holds it, else defaultBand.
    * @param {string} playerId
    */
   timeoutBand(playerId) {
-    const f = this.draft && this.draft.focus instanceof Map ? this.draft.focus.get(playerId) : null;
+    const g = this.draftGroupOf(playerId);
+    const f = g && g.focus instanceof Map ? g.focus.get(playerId) : null;
     if (typeof f === 'string' && this.gd.bandAllowed(f) && !this.bandTaken(f, playerId)) return f;
     return this.defaultBand(playerId);
   }
@@ -176,19 +201,22 @@ export class MatchPhases {
    */
   bandFocus(ps, bandId) {
     if (this.phase !== PHASE.BAND_DRAFT || !this.draft) return fail(ERR.WRONG_PHASE);
-    const d = this.draft;
-    if (d.picks[ps.playerId]) return fail(ERR.ALREADY);
-    if (!(d.focus instanceof Map)) d.focus = new Map();
-    if (bandId == null) { d.focus.delete(ps.playerId); return OK; }
+    const g = this.draftGroupOf(ps.playerId);
+    if (!g) return fail(ERR.WRONG_PHASE);
+    if (g.picks[ps.playerId] || this.draft.picks[ps.playerId]) return fail(ERR.ALREADY);
+    if (!(g.focus instanceof Map)) g.focus = new Map();
+    if (bandId == null) { g.focus.delete(ps.playerId); return OK; }
     if (typeof bandId !== 'string' || !this.gd.bandAllowed(bandId)) return fail(ERR.BAD_TARGET);
-    d.focus.set(ps.playerId, bandId);
+    g.focus.set(ps.playerId, bandId);
     return OK;
   }
 
   pickBand(ps, bandId) {
     if (this.phase !== PHASE.BAND_DRAFT || !this.draft) return fail(ERR.WRONG_PHASE);
-    if (this.draft.picks[ps.playerId]) return fail(ERR.ALREADY);
-    if (this.draftTurn() !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
+    const g = this.draftGroupOf(ps.playerId);
+    if (!g) return fail(ERR.WRONG_PHASE);
+    if (g.picks[ps.playerId] || this.draft.picks[ps.playerId]) return fail(ERR.ALREADY);
+    if (g.order[g.idx] !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
     if (typeof bandId !== 'string' || !this.gd.bandAllowed(bandId)) return fail(ERR.BAD_TARGET);
     if (this.bandTaken(bandId, ps.playerId)) return fail(ERR.BAD_TARGET, '队友已选'); // i18n-ignore: developer detail (players see ERR_TEXT)
     this._applyBand(ps, bandId);
@@ -198,9 +226,12 @@ export class MatchPhases {
   _applyBand(ps, bandId, { dedupe = false } = {}) {
     const d = this.draft;
     if (!d || !ps || d.picks[ps.playerId]) return;
+    const g = this.draftGroupOf(ps.playerId);
+    if (!g) return;
     let id = this.gd.bandAllowed(bandId) ? bandId : this.defaultBand(ps.playerId);
     if (dedupe && this.bandTaken(id, ps.playerId)) id = this.gd.bandIds().find((b) => !this.bandTaken(b, ps.playerId)) || id;
     d.picks[ps.playerId] = id;
+    g.picks[ps.playerId] = id;
     ps.bandId = id;
     ps.lp = this.gd.startLp(id);
     this.markPrivate(ps);
@@ -212,22 +243,24 @@ export class MatchPhases {
     if (this.phase !== PHASE.BAND_DRAFT || !this.draft) return fail(ERR.WRONG_PHASE);
     const d = this.draft;
     if (this.isSolo) return fail(ERR.WRONG_PHASE, 'no skip in solo');
-    if (d.picks[ps.playerId]) return fail(ERR.ALREADY);
-    if (this.draftTurn() !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
-    if (!(d.skipsLeft[ps.playerId] > 0)) return fail(ERR.ALREADY, 'no skip left');
-    if (d.order.length - d.idx <= 1) return fail(ERR.BAD_TARGET, 'nobody to pass to');
-    d.skipsLeft[ps.playerId]--;
-    d.order.splice(d.idx, 1);
-    // the skipper goes to the end; with 「AI 队友最后选择」 to the end of the humans still to pick — behind them, ahead of
-    // the AI seats — and to the very end only when no other human is left to pass to [ASSUMED: the option's intent,
-    // humans before AI, kept through a skip; no source, a remake option]
-    let at = d.order.length;
+    const g = this.draftGroupOf(ps.playerId);
+    if (!g) return fail(ERR.WRONG_PHASE);
+    if (g.picks[ps.playerId] || d.picks[ps.playerId]) return fail(ERR.ALREADY);
+    if (g.order[g.idx] !== ps.playerId) return fail(ERR.NOT_YOUR_TURN);
+    if (!(g.skipsLeft[ps.playerId] > 0)) return fail(ERR.ALREADY, 'no skip left');
+    if (g.order.length - g.idx <= 1) return fail(ERR.BAD_TARGET, 'nobody to pass to');
+    g.skipsLeft[ps.playerId]--;
+    g.order.splice(g.idx, 1);
+    // the skipper goes to the end of ITS group; with 「AI 队友最后选择」 to the end of the humans still to pick
+    // [ASSUMED: the option's intent, humans before AI, kept through a skip; no source, a remake option]
+    let at = g.order.length;
     if (this.aiPicksLast) {
-      for (let j = d.order.length - 1; j >= d.idx; j--) {
-        if (!this.players.get(d.order[j])?.isBot) { at = j + 1; break; }
+      for (let j = g.order.length - 1; j >= g.idx; j--) {
+        if (!this.players.get(g.order[j])?.isBot) { at = j + 1; break; }
       }
     }
-    d.order.splice(at, 0, ps.playerId);
+    g.order.splice(at, 0, ps.playerId);
+    d.order = d.groups.flatMap((x) => x.order); // 全房投影同步组内顺序
     this.startDraftTurn();
     return OK;
   }
@@ -238,9 +271,11 @@ export class MatchPhases {
     this._turnTimer = null;
     for (const ps of this.order) {
       if (!this.draft.picks[ps.playerId]) {
-        // one after another in seat order, so each default sees the ones assigned before it (no duplicates)
+        // one after another in seat order, so each default sees the ones assigned before it (no duplicates, in-group)
         const id = this.defaultBand(ps.playerId);
         this.draft.picks[ps.playerId] = id;
+        const g = this.draftGroupOf(ps.playerId);
+        if (g) g.picks[ps.playerId] = id;
         ps.bandId = id;
         ps.lp = this.gd.startLp(id);
       }
@@ -249,7 +284,6 @@ export class MatchPhases {
     void timeout;
     this.enterBattleCheck();
   }
-
   enterBattleCheck() {
     this.phase = PHASE.BATTLE_CHECK;
     this.setDeadline(this.gd.timer('battleCheck'), () => this.afterBattleCheck(), { silent: this.soloUntimed });

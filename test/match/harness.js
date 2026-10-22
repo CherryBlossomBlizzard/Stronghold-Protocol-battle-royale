@@ -144,7 +144,8 @@ export function makeMatch(o = {}) {
       for (const ps of m.players.values()) {
         if (ps.isBot || ps.left) continue;
         if (m.phase === 'INFO_CHECK' && !ps.infoReady) m.handle(ps.playerId, { t: 'g.infoReady' });
-        if (m.phase === 'BAND_DRAFT' && m.draftTurn() === ps.playerId) m.handle(ps.playerId, { t: 'g.band', bandId: band });
+        // 卫戍协议 · 20 人房：分组并行轮选 —— 每个座位按【自己组】的当前轮转判断（draftTurn(pid)）
+        if (m.phase === 'BAND_DRAFT' && m.draftTurn(ps.playerId) === ps.playerId) m.handle(ps.playerId, { t: 'g.band', bandId: band });
         if (m.phase === 'SP_DRAFT' && m.spTurn() === ps.playerId) {
           const idx = m.sp.cards.map((c) => c.idx).find((k) => m.sp.taken[k] == null);
           if (idx != null) m.handle(ps.playerId, { t: 'g.choice', idx });

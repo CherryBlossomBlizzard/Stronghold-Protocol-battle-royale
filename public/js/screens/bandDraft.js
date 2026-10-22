@@ -186,7 +186,8 @@ export function BandDraftScreen() {
   const players = sortedPlayers(pub);
   const draft = normalizeDraft(pub?.draft, players);
   const myPick = draft.picks.get(myId) || priv?.bandId || null;
-  const myTurn = !myPick && (solo || draft.turnPid === myId);
+  // 卫戍协议 · 20 人房：各组并行轮选 —— 轮到我 = 我的组当前是我（turns 含我；旧服务器回落 turnPid）
+  const myTurn = !myPick && (solo || (Array.isArray(draft.turns) ? draft.turns.includes(myId) : draft.turnPid === myId));
   const skipsLeft = draft.skipsLeft.has(myId) ? draft.skipsLeft.get(myId) : (skipped ? 0 : 1);
   const canSkip = !solo && myTurn && skipsLeft > 0 && draft.order.filter((pid) => !draft.picks.has(pid)).length > 1;
   const taken = solo ? new Map() : teammateBands(draft.picks, myId);
@@ -214,7 +215,7 @@ export function BandDraftScreen() {
   }, [myTurn]);
   // the 本局信息 dialog never outlives the turn it was opened in: a turn change (a pick, a skip, a turn that ran out, an
   // AI pick) or my pick closes it, so whoever's turn begins sees the draft
-  const turnKey = `${draft.turnPid || ''}|${myPick || ''}`;
+  const turnKey = `${Array.isArray(draft.turns) ? draft.turns.join(',') : (draft.turnPid || '')}|${myPick || ''}`;
   useEffect(() => { setInfoOpen(false); }, [turnKey]);
 
   // one countdown (user playtest #4 item 4): the current turn's — m.public.deadline, the same clock as the picker's row
@@ -247,7 +248,8 @@ export function BandDraftScreen() {
     if (await actions.bandSkip()) setSkipped(true);
     setBusy(null);
   };
-  const turnName = players.find((p) => p.playerId === draft.turnPid)?.name;
+  // 多组并行时不再强调"当前是谁"（各组各有其人）——只在单组（<=6 人）显示
+  const turnName = Array.isArray(draft.turns) && draft.turns.length > 1 ? null : players.find((p) => p.playerId === draft.turnPid)?.name;
   useTicker(clock ? 250 : 0);
   // the picker's row shows the step header's number (both read the one turn deadline)
   const turnSecs = clock ? secondsLeft(clock.deadline) : null;
@@ -266,7 +268,7 @@ export function BandDraftScreen() {
         <h3 class="brief-h"><span>${solo ? t('独立模拟') : t('决策顺序')}</span><${MicroLabel}>${solo ? 'FREE PICK' : 'RANDOM ORDER'}</${MicroLabel}></h3>
         ${(solo ? players.filter((p) => p.playerId === myId) : draft.order.map((pid) => players.find((p) => p.playerId === pid)).filter(Boolean)).map((p, i) => {
           const picked = draft.picks.get(p.playerId) || (p.playerId === myId ? myPick : p.bandId) || null;
-          const cur = !picked && (solo || draft.turnPid === p.playerId);
+          const cur = !picked && (solo || (Array.isArray(draft.turns) ? draft.turns.includes(p.playerId) : draft.turnPid === p.playerId));
           const pband = picked ? gd.band(picked) : null;
           return html`<div key=${p.playerId} class=${cx('dorder', cur && 'is-cur', picked && 'is-done', p.playerId === myId && 'is-self')}>
             ${!solo ? html`<span class="dorder__idx num">${i + 1}</span>` : null}
