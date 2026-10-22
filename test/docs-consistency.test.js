@@ -84,7 +84,8 @@ test('combat limits and the boss overtime are REAL seconds (code) and the docs s
   assert.equal(gd.bossOvertimeDue(300), 0, 'nothing at 150 real s = 300 game s');
   assert.equal(gd.bossOvertimeDue(302), 1, 'the first point at 151 real s');
   assert.equal(gd.bossOvertimeDue(320), 10, '1 LP per real second');
-  assert.equal(gd.bossLevelTime(14), 120, 'the Final Assault countdown (not a hard stop)');
+  // 卫戍协议：盟约 · 大逃杀：首领战固定在 R20（官方是 R14），取本服实际首领回合的时长。
+  assert.equal(gd.bossLevelTime(gd.bossRound), 120, 'the Final Assault countdown (not a hard stop)');
   // DESIGN
   assert.ok(!/overtime −1 LP\/s after 150 s game time/.test(DESIGN), 'DESIGN §6.1: no game-second overtime');
   assert.ok(!/team LP per game second after `bossOvertimeAfter` game s/.test(DESIGN), 'DESIGN §14: no game-second overtime');
