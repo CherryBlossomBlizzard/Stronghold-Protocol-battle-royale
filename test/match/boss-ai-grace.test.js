@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+﻿import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { makeMatch } from './harness.js';
 
@@ -10,7 +11,7 @@ test('a solo bot used for rehearsal has no AI teammate and gets no extra grace',
 });
 
 for (const hidden of [false, true]) for (const bots of [0, 1]) {
-  test(`boss overtime follows the visible clock unless an AI teammate is present (hidden=${hidden}, bots=${bots})`, () => {
+  test(`boss overtime follows the visible clock unless an AI teammate is present (hidden=${hidden}, bots=${bots})`, officialBaseline('本服首领战固定在 R20 且血量固定 5 亿 —— 官方 R14/R15 首领回合用例不适用'), () => {
     const h = makeMatch({ mode: 'coop', humans: 2, bots, fake: true, instant: false }).start();
     const m = h.m;
     m.setDeadline(0);

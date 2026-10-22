@@ -4,6 +4,7 @@
 // field, b.pool, the solo pause and the next prep's clear that arrive meanwhile are applied to that battle, in order,
 // once it exists (PR #266 by @siruimei07). Manual clock and animation frames, a real round-2 b.start.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { createBattleRunner } from '../../public/js/battle/runner.js';
 import { createStore, initialState } from '../../public/js/store.js';
@@ -36,7 +37,12 @@ function realBossStart() {
   const h = makeMatch({ mode: 'solo', difficulty: 'FUNNY', humans: 1, seed: 7304, captureFrames: false, clientCombat: true, clients: false });
   h.autoHumans();
   h.m.start();
-  h.run(() => h.ended != null || h.m.phase === PHASE.FINAL_ASSAULT, { maxSteps: 5e6 });
+  // 卫戍协议：盟约 · 大逃杀：首领战固定在 R20（官方是 R14），第 14 回合起怪物血量每回合翻倍，
+  // 常规血量撑不到 R20 —— 给这局的玩家补足目标生命值，好让这个夹具真的走到首领战。
+  h.run(() => {
+    if (h.m.phase === PHASE.SETTLE) for (const ps of h.m.alivePlayers()) ps.lp = 999999;
+    return h.ended != null || h.m.phase === PHASE.FINAL_ASSAULT;
+  }, { maxSteps: 5e6 });
   bossStart = h.lastTo('p_0', 'b.start');
   h.m.dispose();
   assert.equal(bossStart && bossStart.kind, 'boss');

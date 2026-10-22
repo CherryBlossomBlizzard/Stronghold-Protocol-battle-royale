@@ -1,4 +1,4 @@
-// User playtest #5 item 7 — the Final Assault prep deploys on the player's half of the BOSS field (research 09 §1.2,
+﻿// User playtest #5 item 7 — the Final Assault prep deploys on the player's half of the BOSS field (research 09 §1.2,
 // official ConvertChessPositionInfoToBossMap / player_map_ud_offset 7): placement legality (server deploy map, the
 // client's canPlace + legal-tile highlights, the bot) reads the boss field's tiles, not the normal field's.
 //   User: "这张关底boss图靠右侧由1*3的管子框起来的地块官方原版是能部署干员的" — act2autochess_m01's 1×3 orange-railed
@@ -9,6 +9,7 @@
 // the client mirror equals the server, and nothing legal on the normal board becomes illegal in the boss round.
 
 import { test, describe } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -58,7 +59,7 @@ function clean(ps) {
 }
 
 describe('#7 the Final Assault prep deploys on the boss field', () => {
-  test('repro: act2 m01 R14 — a melee operator may stand on the 1×3 fenced tiles (board col 8, rows 10–12), both sides', () => {
+  test('repro: act2 m01 R14 — a melee operator may stand on the 1×3 fenced tiles (board col 8, rows 10–12), both sides', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方回合表的布阵用例不适用'), () => {
     const h = coopAt(14);
     const m = h.m;
     assert.equal(m.round, m.gd.bossRound);
@@ -107,7 +108,7 @@ describe('#7 the Final Assault prep deploys on the boss field', () => {
     assert.ok(input.units.some((u) => u.uid === r1.uid && u.row === 11 && u.col === 4), 'board coordinates in the battle input');
   });
 
-  test('boss → boss: pieces on the fenced tiles in R14 stay there into the R15 (隐秘核心) prep, no terrain-change toast', () => {
+  test('boss → boss: pieces on the fenced tiles in R14 stay there into the R15 (隐秘核心) prep, no terrain-change toast', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方回合表的布阵用例不适用'), () => {
     // review finding: Match.startRound cleared bossWaves before PlayerState.startRound's recompute, so R15's first
     // legality check read the NORMAL field and withdrew the pieces standing on board (10–12, 8)
     const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 52, fake: true, script: (b) => (b.kind === 'boss' || b.kind === 'hidden' ? { bossDps: 1e9 } : {}) }).start();
@@ -140,7 +141,7 @@ describe('#7 the Final Assault prep deploys on the boss field', () => {
     m.dispose();
   });
 
-  test('re-pairing before the fight (a teammate quits) moves the right player onto the left half', () => {
+  test('re-pairing before the fight (a teammate quits) moves the right player onto the left half', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方回合表的布阵用例不适用'), () => {
     const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 3, seed: 5, fake: true }).start();
     h.setStage(STAGE);
     h.toPrep(14);
@@ -173,7 +174,7 @@ describe('#7 the Final Assault prep deploys on the boss field', () => {
     assert.equal(ps._legalityStale, false);
   });
 
-  test('the bot plans boss-round layouts on the boss field (it may use the fenced tiles)', () => {
+  test('the bot plans boss-round layouts on the boss field (it may use the fenced tiles)', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方回合表的布阵用例不适用'), () => {
     const h = coopAt(14);
     const m = h.m;
     const ps = h.ps('p_0');
@@ -292,7 +293,7 @@ describe('#7 audit: every stage × deploy field (server = official level data = 
     assert.equal(clientCanPlace(ctx, 1, { area: 'board', row: 11, col: 8 }).ok, false);
   });
 
-  test('the DOM fallback board draws the boss half in the boss prep: the fenced tiles are floor, not walls', async () => {
+  test('the DOM fallback board draws the boss half in the boss prep: the fenced tiles are floor, not walls', officialBaseline('本服首领战固定在 R20 —— 官方 R14 首领 prep 的布阵用例不适用'), async () => {
     // integration QA: with ?render=fallback (or no WebGL) the boss prep drew the normal field, whose board (10–12, 8) is
     // '#' — highlighted as legal but drawn as walls
     const { fallbackTileClass } = await import('../../public/js/ui/fallbackField.js');

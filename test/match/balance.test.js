@@ -1,6 +1,7 @@
-// Balance: NO custom balance any more (research 08 §6: the official numbers only; data/tuning.json keeps result titles)
+﻿// Balance: NO custom balance any more (research 08 §6: the official numbers only; data/tuning.json keeps result titles)
 // and the competent-board model of tools/balance.mjs, which now only MEASURES difficulty (docs/BALANCE.md).
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { GameData } from '../../server/match/gamedata.js';
 import { buildNormalWave, setupMatchWaves } from '../../server/match/waves.js';
@@ -13,7 +14,7 @@ import {
 
 const RAW = withoutTuning(DATA);
 
-test('no custom balance: legacy tuning multipliers are ignored; enemy scale = the PRTS table; leader pool = bloodPoint × alive players', () => {
+test('no custom balance: legacy tuning multipliers are ignored; enemy scale = the PRTS table; leader pool = bloodPoint × alive players', officialBaseline('本服首领血量固定 5 亿、第 14 回合起掷骰子 —— 官方数值平衡基线不再适用'), () => {
   const tuning = {
     modes: {
       '*': { enemyHpMul: 0.5, enemyAtkMul: 0.9 },

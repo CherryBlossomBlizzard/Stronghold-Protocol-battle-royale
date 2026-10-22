@@ -6,6 +6,7 @@
 // same window before R3 and before R9 — rounds the official schedule does not treat specially — and an `{ every: 2 }`
 // window that covers even rounds only. No path here may special-case a round, so the assertions are written per round.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { makeMatch } from './harness.js';
 import { validateC2S } from '../../shared/protocol.js';
@@ -400,7 +401,8 @@ test('finishing and a test-console round jump discard old windows and queued con
 });
 
 
-test('g.test hidden-round jumps initialize team LP after blocking battleCheck picks or timeout', () => {
+test('g.test hidden-round jumps initialize team LP after blocking battleCheck picks or timeout',
+  officialBaseline('本分支已移除隐秘核心（MODIFICATIONS.md 第 8 条）：没有 hidden round 可跳转'), () => {
   for (const timeout of [false, true]) {
     const h = matchWith([], { fake: true, test: true, bots: 0 });
     h.start(); h.toPrep(1);

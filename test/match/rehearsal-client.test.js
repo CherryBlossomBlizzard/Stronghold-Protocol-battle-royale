@@ -1,8 +1,9 @@
-// The host's side of the delegated bot layout rehearsal (public/js/battle/rehearsal.js): the page runs the candidates
+﻿// The host's side of the delegated bot layout rehearsal (public/js/battle/rehearsal.js): the page runs the candidates
 // in one module Worker off the main thread (the worker itself is exercised in a real browser by
 // test/sim/rehearsal-worker.browser.test.js) and answers the match — the pick, or `error` when this browser cannot run
 // the task, so the server rehearses at once instead of waiting for its timeout.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { installRehearsal, MAX_PENDING_TASKS } from '../../public/js/battle/rehearsal.js';
 

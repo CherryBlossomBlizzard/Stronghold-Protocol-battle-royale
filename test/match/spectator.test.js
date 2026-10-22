@@ -1,4 +1,4 @@
-// Spectator seats, the match side (community report #26, owner's decision 2026-10-04 — a remake feature: the official
+﻿// Spectator seats, the match side (community report #26, owner's decision 2026-10-04 — a remake feature: the official
 // room has no spectator seat). A spectator (opts.spectators / addSpectator, server/lobby.js spectate) is shown fields like
 // an ELIMINATED player in every phase — the field of the player it follows in each battle (b.start watch: the one it last
 // watched, else the first), any field on g.watch, the 联防 spec, that player's boss field, a prep board on g.watch
@@ -7,6 +7,7 @@
 // is refused (SPECTATOR). The platform half (seats, cap, host removal, reconnect): test/lobby.test.js; over sockets with
 // the real Match: test/match/lobby-integration.test.js.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { ERR, PHASE, EMOTES } from '../../shared/constants.js';
 import { makeMatch } from './harness.js';
@@ -32,7 +33,7 @@ const REFUSED = [
   { t: 'g.band', bandId: 'band_bldsk' }, { t: 'b.progress', battleId: 'x', gt: 1, killed: 0, total: 1 },
 ];
 
-test('a spectator seat watches a whole match (各自行动, 联防, 最终攻势, settlement) like an eliminated player — never a private view', () => {
+test('a spectator seat watches a whole match (各自行动, 联防, 最终攻势, settlement) like an eliminated player — never a private view', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合观战用例不适用'), () => {
   const h = makeMatch({
     mode: 'coop', difficulty: 'FUNNY', humans: 3, seed: 9301, fake: true, clientCombat: true, spectators: [S],
     // round 1: p_0 leaks → p_1 / p_2 (perfect) hold a 联防; the Final Assault falls fast

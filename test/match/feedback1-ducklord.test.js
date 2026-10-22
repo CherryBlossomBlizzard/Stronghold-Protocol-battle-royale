@@ -1,4 +1,4 @@
-// Player feedback after 0.1.0, workstream WE (report #7): the 鸭爵 strategy “神秘顾客” and its four enemies —
+﻿// Player feedback after 0.1.0, workstream WE (report #7): the 鸭爵 strategy “神秘顾客” and its four enemies —
 // "鸭爵策略带来的怪物圆仔错误的能被阻挡，鸭爵带来的其它几个敌人你也都复核下规则，数据对不对".
 // Official: the band's enemylist names the act2 versions (enemy_*_2; enemy_database level 0) and PRTS 卫戍协议：盟约 下半/
 // PRTS盟约记录 §策略 鸭爵 备注: "每回合将有0~2名敌人被替换为上述敌人之一，且上述敌人为特殊版本，相较于原版更弱（鸭爵 6000 生命，
@@ -6,6 +6,7 @@
 // 目标生命值，且在最终回合和隐秘核心回合中仍然生效"; PRTS 圆仔 天赋 "无法攻击/被阻挡".
 // Real match paths (the match harness in virtual time, real data, the real meta registry) and the real Battle.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { DATA, makeMatch, give, legalTileFor } from './harness.js';
@@ -148,7 +149,7 @@ test('#7 the swap still happens in the Final Assault (escorts, never the leader 
   assert.ok(lpChecked);
 });
 
-test('#7 pair fields of the Final Assault and the Hidden Core (real match path): each player\'s 0–2 swaps land on their own half', () => {
+test('#7 pair fields of the Final Assault and the Hidden Core (real match path): each player\'s 0–2 swaps land on their own half', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合用例不适用'), () => {
   const seen = { boss: { L: 0, R: 0 }, hidden: { L: 0, R: 0 } };
   const done = () => Object.values(seen).every((k) => k.L > 0 && k.R > 0);
   for (let seed = 1; seed <= 8 && !done(); seed++) {

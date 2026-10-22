@@ -1,9 +1,10 @@
-// Client-side combat (DESIGN §14): BattleSpec round trip and determinism, authority per field, b.progress / b.result,
+﻿// Client-side combat (DESIGN §14): BattleSpec round trip and determinism, authority per field, b.progress / b.result,
 // result validation (implausible results → server re-simulation), takeovers (disconnect, deadline, leave), the shared
 // boss pool across two client-run fields (b.pool, team LP, overtime, b.end), 联防 built from the helpers' reported end
 // state, observing rules (research 09 §3.1 / §6.3), SP_VERIFY, reconnect. SimClients (test/match/simClient.js) play
 // the browsers in virtual time.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { validateC2S, isBattleResult } from '../../shared/protocol.js';
@@ -254,7 +255,7 @@ test('observing: no watching while the own battle runs; after it ends a teammate
   m.dispose();
 });
 
-test('Final Assault: two client-run pair fields share the server pool (b.progress bossDmg), b.pool ≤ 4 Hz, victory, per-player damage', () => {
+test('Final Assault: two client-run pair fields share the server pool (b.progress bossDmg), b.pool ≤ 4 Hz, victory, per-player damage', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合的客户端战斗用例不适用'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 4, seed: 9108, fake: true, clientCombat: true, instant: false,
     script: (b) => (b.kind === 'boss' ? { bossDps: 20000 } : { duration: 2 }) }).start();
   const m = h.m;
@@ -315,7 +316,7 @@ test('Final Assault: leaks and leader LP effects from b.progress drain the team 
   m.dispose();
 });
 
-test('Final Assault: the authority leaves → its partner\'s replica takes over; nobody left → the server paces the field (credits only new damage)', () => {
+test('Final Assault: the authority leaves → its partner\'s replica takes over; nobody left → the server paces the field (credits only new damage)', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合的客户端战斗用例不适用'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 9110, fake: true, clientCombat: true, instant: false,
     script: (b) => (b.kind === 'boss' ? { bossDps: 2000 } : { duration: 2 }) }).start();
   const m = h.m;
@@ -656,7 +657,7 @@ test('Final Assault, honest authority: the seat whose half let nothing through i
   assert.ok(bossPaid(9130, { leaks: 0, leaked: {} }).paid.every((n) => n > 0));
 });
 
-test('Final Assault, honest clients (client-side combat): a leak on one half costs that seat its perfect-payout card, not its partner; the leader\'s own LP effect costs nobody', () => {
+test('Final Assault, honest clients (client-side combat): a leak on one half costs that seat its perfect-payout card, not its partner; the leader\'s own LP effect costs nobody', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合的客户端战斗用例不适用'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 9132, fake: true, clientCombat: true, instant: false,
     script: (b) => (b.kind === 'boss' ? { bossDps: 20000, leaks: { p_1: 1 }, leakEvents: [{ at: 1, lpr: 1 }], lpLossEvents: [{ at: 1.5, amount: 2 }] } : { duration: 2 }) }).start();
   const m = h.m;

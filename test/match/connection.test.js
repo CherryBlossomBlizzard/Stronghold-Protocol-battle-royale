@@ -1,5 +1,6 @@
-// Platform interface: start/handle/onDisconnect/onReconnect/onLeave/dispose, autoplay, bot takeover, views.
+﻿// Platform interface: start/handle/onDisconnect/onReconnect/onLeave/dispose, autoplay, bot takeover, views.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE, ERR } from '../../shared/constants.js';
 import { Match } from '../../server/match/Match.js';
@@ -231,7 +232,7 @@ test('onLeave: quitting counts as elimination (copies back to the pool at once, 
   assert.equal(h.sched.pending(), 0, 'dispose cancels every timer');
 });
 
-test('onLeave: a quitter has no place in the Final Assault pairing or the boss pool; its draft turns pass on', () => {
+test('onLeave: a quitter has no place in the Final Assault pairing or the boss pool; its draft turns pass on', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合用例不适用'), () => {
   // band draft: the player on turn leaves → its pick is the default band and the turn moves on
   const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 3, seed: 5, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;

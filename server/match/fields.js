@@ -36,6 +36,7 @@ import { layerGainRoom } from '../../shared/constants.js';
 import { uniteLeft } from '../sim/spec.js';
 import { diyTokenOwner, diyRecordOf } from '../../shared/diy.js';
 import { requiresTraitLayerAuthority } from './operatorTraits.js';
+import { RULES } from './battleRoyaleRules.js';
 
 export const MAX_TICKS_PER_INTERVAL = 8;
 export const INTERVAL_MS = 1000 / 30;
@@ -660,7 +661,20 @@ export function specBounds(spec, gd = null) {
   }
   const derived = new Set();
   for (const k of keyCounts.keys()) for (const d of derivedKeys(gd, k)) derived.add(d);
-  const maxTotal = spawnCount * 4 + 100;
+  // 卫戍协议：盟约 · 大逃杀：maxTotal 是「这一场最多可能出现多少个敌人」的经验上界，官方按
+  // `spawnCount × 4 + 100` 估算。本服的偏离会让**诚实的**客户端结果超出它，于是被误判成伪造
+  // （客户端击杀数 > maxTotal ⇒ 'counts'）。两种情况：
+  //   * 首领战（boss / hidden）：血量固定 5 亿（RULES.bossHp），一场比官方按血点缩放的池子长得多；首领的周期
+  //     召唤（「死亡集群」无人机、部件、『御4』…）在 2 分钟里能累积到几百个。
+  //   * 第 14 回合起的普通 / 联防战场：怪物血量每回合翻倍（RULES.hpDoubleMul），战斗时长同步暴涨，同一批敌人
+  //     的召唤 / 分裂产物自然比官方回合多得多（实测 R19 普通场 301 次击杀，官方公式只给 272）。
+  // 因此上界随倍率放宽：普通 / 联防按回合数线性放大，首领战给一个固定的宽余量。
+  const lateRound = Number.isInteger(spec && spec.round) && Number.isInteger(RULES.hpDoubleFrom) && spec.round >= RULES.hpDoubleFrom
+    ? spec.round - RULES.hpDoubleFrom + 1 : 0;
+  const scale = 1 + lateRound * 2; // R14 起每往后一回合，允许的召唤产物再多一倍左右
+  const maxTotal = spec && (spec.kind === 'boss' || spec.kind === 'hidden')
+    ? Math.max(spawnCount * 4 + 100, 6000)
+    : (spawnCount * 4 + 100) * scale;
   // 联防: `${childKey}|${sourcePlayerId}` → how many content-spawned children the enemies that leaker sent in can leave
   // (offspringPerParent per parent; maxTotal when the data gives no bound) — a reported child must belong to a leaker
   // whose own enemies can have produced it, including a child marked `uniteRuntime` (which is not billed)

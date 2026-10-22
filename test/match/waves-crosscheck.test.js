@@ -1,4 +1,4 @@
-// Adversarial cross-checks of waves.js against the official client algorithms (research 08 §2–§5):
+﻿// Adversarial cross-checks of waves.js against the official client algorithms (research 08 §2–§5):
 //   * an independent re-implementation of RandomEnemyGenerater (_DoReplaceActionDataClient / BE count rule) and of
 //     AutoChessEnemyPreviewManager's zone choice, run straight on the raw official files in .cache/gamedata, compared
 //     with buildNormalWave / buildBossWave for every mode × round × template (leader and hidden rounds included) ×
@@ -9,6 +9,7 @@
 //     unit step min(max(W/M, 0.05·W), 5) with M = the largest owner group; host action = the first placeholder action of
 //     the class, else action 0 (`_GetSpEnemyActionData`).
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -121,7 +122,7 @@ test('independent official generator on the raw client data: every mode × round
   assert.ok(n > 5000 && leaderChecks > 1000, `${n} compositions (${leaderChecks} leader rounds)`);
 });
 
-test('preview zones: target row = start row + 6 (leader rounds + 13), upper zone only from target row 18', () => {
+test('preview zones: target row = start row + 6 (leader rounds + 13), upper zone only from target row 18', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方波次交叉校验不适用'), () => {
   // normal fields: only the (12,10) gate reaches the upper zone (a row-11 start would target row 17: lower)
   for (const [row, want] of [[9, 'lower'], [10, 'lower'], [11, 'lower'], [12, 'upper']]) assert.equal(gateOf([row, 10]), want, `normal row ${row}`);
   // leader / hidden rounds: (5,10) upper; the (2,10) gate and the leaders at (3,x) / (4,x) lower
@@ -235,7 +236,7 @@ test('bounty units are inserted among the host action\'s own units (decoded _Ins
   assert.deepEqual(fb.map((s) => [s.time, s.count, s.routeIndex]), [[12, 1, hostRoute], [15, 1, hostRoute]], 'step 6/2 on the walker route');
 });
 
-test('a bounty whose host action is not server-sent (the leader) spawns alone over that window; the leader is never re-timed', () => {
+test('a bounty whose host action is not server-sent (the leader) spawns alone over that window; the leader is never re-timed', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方波次交叉校验不适用'), () => {
   const gd = new GameData(DATA, 'mode_multi_hard');
   const picks = [];
   picks[15] = pickOf(DATA.factions.entries.enemy_1006_shield_3, 15);
@@ -252,7 +253,7 @@ test('a bounty whose host action is not server-sent (the leader) spawns alone ov
   assert.equal(all.length, w.spawns.length + 1);
 });
 
-test('round multipliers hit every enemy but 炎佑 (aceffect_enemy_* enemy_exclude): leader ATK / speed, never its HP', () => {
+test('round multipliers hit every enemy but 炎佑 (aceffect_enemy_* enemy_exclude): leader ATK / speed, never its HP', officialBaseline('第 14 回合起出怪改为掷骰子 —— 官方波次交叉校验不适用'), () => {
   const eff = DATA.effects;
   // the data behind the PRTS table: 攻坚装备 ATK ×1.1 / HP ×1.2, III ATK ×0.7 / HP ×0.75, only 炎佑 excluded
   // (补给线 also spares the TIMES tokens 瑞印 / 卷轴 / 镜 …, whose HP is a hit count — content's concern)

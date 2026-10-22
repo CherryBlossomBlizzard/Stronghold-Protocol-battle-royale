@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+﻿import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { makeMatch } from './harness.js';
 import { PHASE } from '../../shared/constants.js';
@@ -21,7 +22,7 @@ test('match kills add normal combat and unite credits across rounds', () => {
   h.m.dispose();
 });
 
-test('match total includes normal combat, Final Assault and Hidden Core', () => {
+test('match total includes normal combat, Final Assault and Hidden Core', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合用例不适用'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 2, fake: true, seed: 7,
     script: (b) => ({ creditedKills: { p_0: b.kind === 'hidden' ? 11 : b.kind === 'boss' ? 6 : 1, p_1: 0 }, bossDps: b.sharedBoss ? b.sharedBoss.maxHp / 8 : 0 }),
   }).start();

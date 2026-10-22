@@ -1,9 +1,10 @@
-// Official limits on the match side (docs/research/11-limits-official.md): bond layers stop at 999 per bond
+﻿// Official limits on the match side (docs/research/11-limits-official.md): bond layers stop at 999 per bond
 // (shared/constants.js BOND_LAYER_CAP: PlayerState.addLayers, the settle of the in-battle gains, the client-result
 // check, the invariants) and the boss-hit limit 限伤 (BOSS_HIT_LIMIT 300000) in a real Final Assault / Hidden Core with a
 // 999-layer board.
 
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE, BOND_LAYER_CAP, BOSS_HIT_LIMIT } from '../../shared/constants.js';
 import { Battle } from '../../server/sim/Battle.js';
@@ -155,7 +156,7 @@ function limitBattleClass(log, relentAfter = 6) {
   };
 }
 
-test('Final Assault + Hidden Core with a 999-layer 炎 board (real sim, server-run): every leader hit of ≥ 300000 deals 0 and nothing of it reaches the pool; the hits under the line win', () => {
+test('Final Assault + Hidden Core with a 999-layer 炎 board (real sim, server-run): every leader hit of ≥ 300000 deals 0 and nothing of it reaches the pool; the hits under the line win', officialBaseline('本服首领血量固定 5 亿 —— 官方限伤/首领数值用例不适用'), () => {
   const h = makeMatch({ mode: 'solo', difficulty: 'HARD', seed: 76, fake: true, captureFrames: false, script: (b) => (b.kind === 'normal' ? { duration: 1 } : {}) });
   const m = h.m;
   m.bossId = 'boss_6';       // 阿利斯泰尔 walks into the board

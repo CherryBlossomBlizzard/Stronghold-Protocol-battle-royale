@@ -4,6 +4,7 @@
 // (DESIGN §25.13.4, server/match/gamedata.js bossPoolShareOf).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { officialBaseline } from './official-baseline.js';
 import { makeMatch, DATA } from './harness.js';
 import { GameData } from '../../server/match/gamedata.js';
 import { bossPoolHp, SharedBossPool } from '../../server/match/finalAssault.js';
@@ -11,7 +12,7 @@ import { makeBattle } from '../helpers/battleHarness.js';
 
 const DIFFS = ['FUNNY', 'NORMAL', 'HARD', 'ABYSS'];
 
-test('every leader and difficulty: bloodPoint × the players alive (co-op), × 1 solo', () => {
+test('every leader and difficulty: bloodPoint × the players alive (co-op), × 1 solo', officialBaseline('本服的首领血量固定 5 亿（RULES.bossHp），不再按 bloodPoint × 存活人数缩放'), () => {
   for (const difficulty of DIFFS) {
     const gd = new GameData(DATA, `mode_multi_${difficulty.toLowerCase()}`);
     const solo = new GameData(DATA, `mode_single_${difficulty.toLowerCase()}`);
@@ -24,7 +25,8 @@ test('every leader and difficulty: bloodPoint × the players alive (co-op), × 1
 });
 
 for (const hidden of [false, true]) {
-  test(`R${hidden ? 15 : 14}: the round's pool leaves out two departed players`, () => {
+  test(`R${hidden ? 15 : 14}: the round's pool leaves out two departed players`,
+    officialBaseline('本服首领血量固定 5 亿，R14/R15 不再是首领战（首领战固定在 R20，且无隐秘核心）'), () => {
     const h = makeMatch({ humans: 4, difficulty: 'HARD', fake: true, instant: false }).start();
     h.toPrep(1);
     const m = h.m;
@@ -44,7 +46,7 @@ for (const hidden of [false, true]) {
   });
 }
 
-test('disconnected players (AI 托管) and bots count; an eliminated player does not', () => {
+test('disconnected players (AI 托管) and bots count; an eliminated player does not', officialBaseline('本服的首领血量固定 5 亿（RULES.bossHp），不再按 bloodPoint × 存活人数缩放'), () => {
   const h = makeMatch({ humans: 3, bots: 1, fake: true, instant: false }).start();
   h.toPrep(1);
   h.m.onDisconnect('p_1');
@@ -57,7 +59,7 @@ test('disconnected players (AI 托管) and bots count; an eliminated player does
   h.m.dispose();
 });
 
-test('config restores the fixed pool of 0.1.x (perPlayer false, solo 0.25) — GameData and the plain-object fallback agree', () => {
+test('config restores the fixed pool of 0.1.x (perPlayer false, solo 0.25) — GameData and the plain-object fallback agree', officialBaseline('本服的首领血量固定 5 亿（RULES.bossHp > 0），config 的 bossHpScale 分支不再生效'), () => {
   const data = structuredClone(DATA);
   data.config.bossHpScale = { ...data.config.bossHpScale, perPlayer: false, solo: 0.25 };
   for (const modeId of ['mode_single_abyss', 'mode_multi_abyss']) {
@@ -78,7 +80,7 @@ test('config restores the fixed pool of 0.1.x (perPlayer false, solo 0.25) — G
   assert.equal(bossPoolHp(plain, 'boss_8', 3), DATA.bosses.boss_8.bloodPoint.ABYSS * 3);
 });
 
-test('only the leader\'s pool scales: escorts and the Hidden Core\'s parts keep their stats', () => {
+test('only the leader\'s pool scales: escorts and the Hidden Core\'s parts keep their stats', officialBaseline('本服的首领血量固定 5 亿，隐秘核心已移除 —— 官方池/部件缩放不再适用'), () => {
   for (const kind of ['boss', 'hidden']) {
     const bossKey = kind === 'boss' ? 'enemy_9013_acstmk' : 'enemy_9013_acstmk_2';
     const snapshot = (n) => {

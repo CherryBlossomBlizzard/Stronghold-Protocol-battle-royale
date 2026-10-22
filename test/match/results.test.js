@@ -1,5 +1,6 @@
-// RESULT: titles (评语) assignment, per-player rows, trophies, rewards.
+﻿// RESULT: titles (评语) assignment, per-player rows, trophies, rewards.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { assignTitles } from '../../server/match/results.js';
 import { GameData } from '../../server/match/gamedata.js';
@@ -64,7 +65,7 @@ test('m.result rows: lineup, bonds, stats, roundsPassed per player, trophies (co
   m.dispose();
 });
 
-test('Final Assault: the result LP are the alive players\' shares of the merged team LP (a team beaten to 0 shows 0)', () => {
+test('Final Assault: the result LP are the alive players\' shares of the merged team LP (a team beaten to 0 shows 0)', officialBaseline('本服首领战固定在 R20 且无隐秘核心 —— 官方结算结构用例不适用'), () => {
   // defeat: the boss is never hurt, the overtime drain empties the team pool
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 4, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 0 } : {}) }).start();
   h.autoHumans();
@@ -103,7 +104,7 @@ test('Final Assault: the result LP are the alive players\' shares of the merged 
   h2.m.dispose();
 });
 
-test('co-op trophies / victory follow each player\'s OWN rounds passed: a teammate eliminated in R6 gets the table value of 5 rounds, not the Hidden-Core row', async () => {
+test('co-op trophies / victory follow each player\'s OWN rounds passed: a teammate eliminated in R6 gets the table value of 5 rounds, not the Hidden-Core row', officialBaseline('本服无隐秘核心（R20 首领战后结束）—— 官方隐秘核心结算行用例不适用'), async () => {
   const { buildResult } = await import('../../server/match/results.js');
   const h = makeMatch({ mode: 'coop', difficulty: 'HARD', humans: 2, seed: 5, fake: true }).start();
   h.toPrep(6);

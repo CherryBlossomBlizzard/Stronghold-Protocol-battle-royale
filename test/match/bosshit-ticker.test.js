@@ -10,6 +10,7 @@
 // strip also played a Final Assault line late, into the Hidden Core: test/ui/bosshit-ticker.test.js.)
 
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { BOSS_HIT_STEPS } from '../../server/match/finalAssault.js';
@@ -62,7 +63,7 @@ function assertTruthful(hits, phase, players) {
   return inPhase;
 }
 
-test('C1 (solo 绝境, server-run fields): the Hidden Core\'s first hit announces nothing — the Final Assault\'s damage is not damage to the hidden leader', () => {
+test('C1 (solo 绝境, server-run fields): the Hidden Core\'s first hit announces nothing — the Final Assault\'s damage is not damage to the hidden leader', officialBaseline('本分支已移除隐秘核心（MODIFICATIONS.md 第 8 条）：对局在 R20 首领战后直接结束'), () => {
   // the reported case: a Final Assault pool larger than half the hidden leader's — solo 绝境 (HARD): 盐风主教昆图斯 525000,
   // 75 % of 假想敌：铳's 700000, so the old share announced 超过50% at the hidden leader's first hit
   const { m, end, hits } = toHiddenCore({ mode: 'solo', difficulty: 'HARD', bossId: 'boss_4', hiddenBossId: 'boss_9', hiddenDps: 0.01 });
@@ -79,7 +80,8 @@ test('C1 (solo 绝境, server-run fields): the Hidden Core\'s first hit announce
 });
 
 for (const humans of [2, 4]) {
-  test(`C1 (${humans} players, client-side combat): every BOSS_HIT of the Hidden Core matches the player's damage to the hidden leader`, () => {
+  test(`C1 (${humans} players, client-side combat): every BOSS_HIT of the Hidden Core matches the player's damage to the hidden leader`,
+    officialBaseline('本分支已移除隐秘核心（MODIFICATIONS.md 第 8 条）：对局在 R20 首领战后直接结束'), () => {
     const { m, end, hits } = toHiddenCore({ mode: 'coop', difficulty: 'NORMAL', humans, clientCombat: true, seed: 62 + humans, bossId: 'boss_4', hiddenBossId: 'boss_8', hiddenDps: 0.02 });
     assert.equal(end.hiddenReached, true);
     const ids = [...m.players.keys()];
@@ -94,7 +96,8 @@ for (const humans of [2, 4]) {
   });
 }
 
-test('C1 (2 players, server-run fields — SP_COMBAT=server): the hidden pool\'s tickers follow the hidden-core damage only', () => {
+test('C1 (2 players, server-run fields — SP_COMBAT=server): the hidden pool\'s tickers follow the hidden-core damage only',
+  officialBaseline('本分支已移除隐秘核心（MODIFICATIONS.md 第 8 条）：对局在 R20 首领战后直接结束'), () => {
   const { m, end, hits } = toHiddenCore({ mode: 'coop', difficulty: 'HARD', humans: 2, clientCombat: false, seed: 66, bossId: 'boss_4', hiddenBossId: 'boss_8', hiddenDps: 0.02 });
   assert.equal(end.hiddenReached, true);
   assertTruthful(hits, PHASE.FINAL_ASSAULT, ['p_0', 'p_1']);
@@ -105,7 +108,8 @@ test('C1 (2 players, server-run fields — SP_COMBAT=server): the hidden pool\'s
   m.dispose();
 });
 
-test('C1 (solo, client-side combat, server takeover mid-fight): the re-simulated hidden field\'s credits announce the hidden-core share only', () => {
+test('C1 (solo, client-side combat, server takeover mid-fight): the re-simulated hidden field\'s credits announce the hidden-core share only',
+  officialBaseline('本分支已移除隐秘核心（MODIFICATIONS.md 第 8 条）：对局在 R20 首领战后直接结束'), () => {
   let tookOver = false;
   const { m, end, hits } = toHiddenCore({ mode: 'solo', difficulty: 'HARD', clientCombat: true, seed: 67, bossId: 'boss_4', hiddenBossId: 'boss_9', hiddenDps: 0.02,
     onHidden: (h) => {

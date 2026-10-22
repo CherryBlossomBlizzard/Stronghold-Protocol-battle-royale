@@ -1,4 +1,4 @@
-// User playtest #6 follow-up — a merge's elite goes to the board when it consumed a deployed copy. The user (first-hand,
+﻿// User playtest #6 follow-up — a merge's elite goes to the board when it consumed a deployed copy. The user (first-hand,
 // official game): "官方就是合成精锐时，如果消耗了场上的干员，精锐会出现在场上那个位置". PRTS 卫戍协议/帮助 §干员的获得与精锐化:
 // "不获得第3名干员，销毁已有的2名初始干员，发送1名【精锐】状态的该干员至手牌区（若消耗已部署至作战区的干员，则发送至作战区
 // 对应位置）". Remake (server/match/player/acquire.js _mergeChess, board.js mergeTile): the elite takes the tile and facing of the
@@ -8,6 +8,7 @@
 // the board gets its own stack (its loadout), the deploy count never grows, the reward offer is unchanged — for buys,
 // rewards, effect grants, SETTLE merges and the boss-field prep alike. audit.js checks the rule in every audited match.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { ERR, PHASE } from '../../shared/constants.js';
 import { checkLoadout } from '../../shared/protocol.js';
@@ -341,7 +342,7 @@ test('after the prep: a SETTLE grant completing a merge puts the elite on the de
   m.dispose();
 });
 
-test('boss-field prep (R14, act2 m01): the elite takes a copy\'s tile that is legal only on the player\'s boss half', () => {
+test('boss-field prep (R14, act2 m01): the elite takes a copy\'s tile that is legal only on the player\'s boss half', officialBaseline('本服首领战固定在 R20、血量 5 亿 —— 官方首领回合用例不适用'), () => {
   const STAGE = 'act2autochess_m01';
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 21, fake: true }).start();
   h.setStage(STAGE);

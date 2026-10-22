@@ -1,4 +1,4 @@
-// User playtest #6 item 5 — "图中的boss没有血量了但是不死，还在战斗，直到超时我们的生命被扣完才结束，但是最后的判定仍是胜利".
+﻿// User playtest #6 item 5 — "图中的boss没有血量了但是不死，还在战斗，直到超时我们的生命被扣完才结束，但是最后的判定仍是胜利".
 // The user's match: 2 humans (the AI teammates eliminated), 绝境, act2autochess_m01, client-side combat, one pair
 // field; the HUD read 0.0 %, the leader kept fighting, the overtime drain took the team LP and the result said 胜利.
 //
@@ -16,6 +16,7 @@
 // 则无视倒计时直接失败"), and reports arriving after the team LP ran out credit nothing.
 
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { makeMatch } from './harness.js';
@@ -47,7 +48,7 @@ function realFinalAssault({ bossId, seed, clientCombat = true }) {
 const STALLED = [['boss_1', 12], ['boss_2', 12], ['boss_3', 11], ['boss_10', 12]];
 
 for (const [bossId, seed] of STALLED) {
-  test(`#5 real match (client-side combat): ${bossId} seed ${seed} — the leader dies as soon as the shared pool is empty, victory, no overtime`, () => {
+  test(`#5 real match (client-side combat): ${bossId} seed ${seed} — the leader dies as soon as the shared pool is empty, victory, no overtime`, officialBaseline('本服首领血量固定 5 亿 —— 官方「按血点缩放的池子被打空」前提不成立'), () => {
     const h = realFinalAssault({ bossId, seed });
     const m = h.m;
     const f = m.fields[0];
@@ -86,7 +87,7 @@ for (const [bossId, seed] of STALLED) {
   });
 }
 
-test('#5 real match (server-run combat, SP_COMBAT=server): the Final Assault ends when the pool empties, never on float dust', () => {
+test('#5 real match (server-run combat, SP_COMBAT=server): the Final Assault ends when the pool empties, never on float dust', officialBaseline('本服首领血量固定 5 亿 —— 官方「按血点缩放的池子被打空」前提不成立'), () => {
   const h = realFinalAssault({ bossId: 'boss_3', seed: 11, clientCombat: false });
   const m = h.m;
   const pool = m.bossPool;
@@ -104,7 +105,7 @@ test('#5 real match (server-run combat, SP_COMBAT=server): the Final Assault end
 
 // ---- the shared pool through the real crediting path (FakeBattle hits a real LocalBossPool; deterministic) ---------
 
-test('#5 client-side combat: a boss dps whose per-player credits used to leave 1.5e-11 in the pool ends the fight when the pool empties', () => {
+test('#5 client-side combat: a boss dps whose per-player credits used to leave 1.5e-11 in the pool ends the fight when the pool empties', officialBaseline('本服首领血量固定 5 亿 —— 官方「按血点缩放的池子被打空」前提不成立'), () => {
   for (const dps of [3456.789, 24680.13]) {
     const h = makeMatch({ mode: 'coop', difficulty: 'FUNNY', humans: 2, seed: 9110, fake: true, clientCombat: true, instant: false,
       script: (b) => (b.kind === 'boss' ? { bossDps: dps } : { duration: 2 }) }).start();

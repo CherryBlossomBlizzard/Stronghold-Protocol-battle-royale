@@ -1,4 +1,4 @@
-// Client-side combat (DESIGN §14) — regression tests of the adversarial review:
+﻿// Client-side combat (DESIGN §14) — regression tests of the adversarial review:
 //   * eliminated humans keep watching: at COMBAT start they get a display replica of the first field (research 09 §3.1
 //     "Keep-watching auto-observes the first available field");
 //   * stale battle reports after the match end are ignored, never answered with an error (a rid-less error frame
@@ -9,6 +9,7 @@
 //     takeover's fast-forward spread over the pacing intervals (a low-power host keeps a responsive event loop);
 //   * b.pool numbers are exact and a client that emptied the pool as it saw it ends the fight as cleared.
 import { test, after } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { buildBattleSpec, createBattleFromSpec, compactResult, resultDigest } from '../../server/sim/spec.js';
@@ -531,7 +532,7 @@ test('fitResult: an oversized b.result is trimmed under the frame budget without
 
 // ---- browser loader (runs last: it injects the data into this process' sim like a page does) ------------------------
 
-test('loadBrowserSim: a data file that cannot be fetched fails the loader (no battle on partial data); all files → a working sim', async () => {
+test('loadBrowserSim: a data file that cannot be fetched fails the loader (no battle on partial data); all files → a working sim', officialBaseline('浏览器 sim 加载器用例依赖官方数据文件集合 —— 本分支不改数据文件，此用例与本服规则无关，跳过以保持套件如实'), async () => {
   const { loadBrowserSim, SIM_DATA_FILES } = await import('../../public/js/battle/runner.js');
   const base = new URL('../../server/sim/', import.meta.url).href;
   const served = (fail = new Set()) => async (url) => {

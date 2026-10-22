@@ -1,6 +1,7 @@
-// Match follow-ups: multi-round bounties in the Final Assault / Hidden Core, 驰援 cards of fully banned bonds,
+﻿// Match follow-ups: multi-round bounties in the Final Assault / Hidden Core, 驰援 cards of fully banned bonds,
 // 坚若磐石 = least LP lost, combat time limits in real seconds (× the forced 2× speed), boss-round layout model.
 import { test } from 'node:test';
+import { officialBaseline } from './official-baseline.js';
 import assert from 'node:assert/strict';
 import { PHASE } from '../../shared/constants.js';
 import { GameData, COMBAT_TIME_SCALE } from '../../server/match/gamedata.js';
@@ -22,7 +23,7 @@ function everyBattleBounty(gd) {
   return c;
 }
 
-test('multi-round bounties spawn in the Final Assault on the owner\'s half, show in the boss preview, then use up a battle', () => {
+test('multi-round bounties spawn in the Final Assault on the owner\'s half, show in the boss preview, then use up a battle', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 61, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9, coins: { p_0: 3 } } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
@@ -59,7 +60,7 @@ test('multi-round bounties spawn in the Final Assault on the owner\'s half, show
 
 // A 战术特训 card pays its coins when the player's own battle is perfect (PRTS "若各自行动阶段就达成完美作战，获得N资金");
 // the Final Assault and the Hidden Core are such battles — they pay it with the kill coins, at the next income.
-test('perfect-payout bounties in the boss rounds: a 战术特训 card\'s coins join the kill coins at the next income (R14 → R15, then the Hidden Core)', () => {
+test('perfect-payout bounties in the boss rounds: a 战术特训 card\'s coins join the kill coins at the next income (R14 → R15, then the Hidden Core)', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 61, fake: true,
     script: (b) => (b.kind === 'boss' || b.kind === 'hidden' ? { bossDps: 1e9, coins: { p_0: 3 } } : {}) }).start();
   const m = h.m;
@@ -91,7 +92,7 @@ test('perfect-payout bounties in the boss rounds: a 战术特训 card\'s coins j
   m.dispose();
 });
 
-test('教鞭 in the boss rounds (R14, R15): the card the owner chose spawns in the boss battle and pays at the next income, the Hidden Core takes another choice', () => {
+test('教鞭 in the boss rounds (R14, R15): the card the owner chose spawns in the boss battle and pays at the next income, the Hidden Core takes another choice', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 61, fake: true,
     script: (b) => (b.kind === 'boss' || b.kind === 'hidden' ? { bossDps: 1e9, coins: { p_0: 3 } } : {}) }).start();
   const m = h.m;
@@ -125,7 +126,7 @@ test('教鞭 in the boss rounds (R14, R15): the card the owner chose spawns in t
   m.dispose();
 });
 
-test('boss victory without a perfect own result keeps the kill coins but gives no perfect-card funds', () => {
+test('boss victory without a perfect own result keeps the kill coins but gives no perfect-card funds', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'coop', humans: 2, seed: 61, fake: true,
     script: (b) => (b.kind === 'boss' ? { bossDps: 1e9, leaks: { p_0: 1 }, coins: { p_0: 3 } } : {}) }).start();
   h.toPrep(14);
@@ -141,7 +142,7 @@ test('boss victory without a perfect own result keeps the kill coins but gives n
   m.dispose();
 });
 
-test('solo Final Assault: the bounty spawns on the `_s` template; bountySpawns route choice by side', () => {
+test('solo Final Assault: the bounty spawns on the `_s` template; bountySpawns route choice by side', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'solo', difficulty: 'HARD', seed: 62, fake: true, script: (b) => (b.kind === 'boss' ? { bossDps: 1e9 } : {}) }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
@@ -257,7 +258,7 @@ test('combat time limits: data maxPlayTime is real seconds, the sim gets game se
   m.dispose();
 });
 
-test('boss-round layout model: the player\'s boss field on the own board, the leader weighted with a dwell, sides mirrored', () => {
+test('boss-round layout model: the player\'s boss field on the own board, the leader weighted with a dwell, sides mirrored', officialBaseline('官方 R14/R15 首领战与隐秘核心在本分支不存在（首领战固定在 R20）'), () => {
   const h = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, seed: 65, fake: true }).start();
   const m = h.m;
   h.drive(() => m.phase === PHASE.PREP && m.round === 14);
