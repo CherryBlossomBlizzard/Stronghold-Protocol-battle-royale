@@ -136,16 +136,17 @@ export class MatchPhases {
     for (const g of d.groups) {
       const pid = g.order[g.idx];
       const cur = this.players.get(pid);
-      if (cur && cur.botControlled) this.scheduleBandBot();
+      if (cur && cur.botControlled) this.scheduleBandBot(g);
     }
     this.markPublic();
   }
 
-  scheduleBandBot() {
+  scheduleBandBot(g = null) {
     const token = this._turnToken;
     this.later(0, () => {
       if (this.phase !== PHASE.BAND_DRAFT || token !== this._turnToken) return;
-      const pid = this.draftTurn();
+      // 卫戍协议 · 20 人房：AI 隶属自己的组 —— 用该组的当前玩家（draftTurn() 无参只给第一未完成组）
+      const pid = g ? g.order[g.idx] : this.draftTurn();
       const ps = this.players.get(pid);
       if (!ps || !ps.botControlled) return;
       // 组内队友已选：AI 重抽，否则组内第一个空的
