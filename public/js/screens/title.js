@@ -34,6 +34,7 @@ import { data, useData } from '../data.js';
 import { FullscreenButton, PwaInstallButton, detectFeatures } from '../ui/device.js';
 import { LangToggle, useLang } from '../ui/lang.js';
 import { t, N_ } from '../../../shared/i18n.js';
+import { SERVER_NAME } from '../../../shared/constants.js';
 import { scriptOf } from '../../../shared/i18nPacks.js';
 import { GIcon } from '../ui/gameComponents.js';
 import { SettingsModal } from '../ui/settings.js';
@@ -247,6 +248,7 @@ export function TitleScreen() {
       </div>`}
       <h1 class=${`title-cn${alphabetic ? ' title-cn--latin' : ''}`}>${t('卫戍协议')}<span class="title-cn__colon">${alphabetic ? ': ' : '：'}</span><em>${t('盟约')}</em></h1>
       <p class="title-tag">${t('调配资金与干员，与同伴协同布防，抵御多波次进攻，直至击败敌方领袖。')}</p>
+      <p class="title-br">${SERVER_NAME} · 血量 30 · 卡池无限 · 装备无限 · 无联防 · 第 20 回合五亿血首领战</p>
 
       <div class="title-login">
         ${pendingJoin ? html`<div class="title-invite">

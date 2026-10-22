@@ -29,6 +29,15 @@
 
 import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
 import { PHASE } from '../../../shared/constants.js';
+// 卫戍协议：盟约 · 大逃杀：扣血加钱的代价（3 滴目标生命值）。
+const BLOOD_MONEY_COST = 3;
+/** 扣血加钱按钮的提示语（刚好 3 滴时会写明「用完当场淘汰」）。 */
+export function bloodMoneyTip(lp) {
+  const n = Number(lp);
+  if (!Number.isFinite(n)) return t('扣血加钱：3 滴目标生命值换 1 资金');
+  if (n < BLOOD_MONEY_COST) return t('目标生命值不足 3 点，不能扣血加钱');
+  return t('扣血加钱：花 3 滴目标生命值换 1 资金（还剩 {left} 滴）', { left: n - BLOOD_MONEY_COST });
+}
 import { html, Button, Icon, PingPill, Countdown, Tooltip, MicroLabel, DifficultyTag, Modal, useTicker } from './components.js';
 import { Sprite, LpTower, GIcon, LocalSprite } from './gameComponents.js';
 import { data, localAsset } from '../data.js';
@@ -460,7 +469,7 @@ export function PauseButton({ paused, busy = false, onToggle }) {
  */
 export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, onReady, readyBusy, readyCount, playerCount, pen = false, penAvail = false, onPen = () => {},
   config = null, frozenAt = null, pause = null, live = null, spectator = false,
-  spectators = null, myId = null, isHost = false, onRemoveSpectator = null, room = null }) {
+  spectators = null, myId = null, isHost = false, onRemoveSpectator = null, room = null, onBloodMoney = null }) {
   const phase = pub?.phase;
   const boss = isBossPhase(phase);
   const lp = boss && Number.isFinite(pub?.teamLp) ? pub.teamLp : Number.isFinite(priv?.lp) ? priv.lp : null;
@@ -514,6 +523,8 @@ export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, 
       </div>
       <${LpTower} value=${lp} size="lg" tone=${lowLp ? 'danger' : boss ? 'team' : null} pending=${pending}
         note=${pending > 0 && live?.unite ? t('联防中') : null} tip=${pendingTip(lp, pending, { unite: !!live?.unite, cap, left: live?.left ?? null })} />
+      ${phase === PHASE.PREP && !spectator && priv?.alive !== false && Number.isFinite(lp) && onBloodMoney ? html`<${Button} variant="danger" size="sm" class="gtop__blood" disabled=${!(lp >= BLOOD_MONEY_COST)}
+        title=${bloodMoneyTip(lp)} onClick=${() => onBloodMoney && onBloodMoney()}>3 血 → 1 钱<//>` : null}
       <${Tooltip} text=${btn.right.tip} placement="bottom">
         <${CheckBtn} sprite=${btn.right.sprite} cls=${cx('enemybtn', btn.right.grey && 'is-grey')} label=${btn.right.label}
           chev=${btn.right.grey ? null : '▶▶'} disabled=${btn.right.grey && !pen} onClick=${onRight} testid="check-enemy" />

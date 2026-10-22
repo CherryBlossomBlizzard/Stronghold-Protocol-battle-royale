@@ -6,6 +6,8 @@ export const PROTOCOL_VERSION = 1;
 /** Release version shown to players (title screen, server banner, /healthz). Kept equal to package.json "version"
  * (test/version.test.js); PROTOCOL_VERSION above is the separate wire-format number. */
 export const APP_VERSION = '0.3.1';
+/** 本服名称（卫戍协议：盟约 · 大逃杀）：启动横幅、标题画面与 /healthz 用。 */
+export const SERVER_NAME = '卫戍协议：盟约 · 大逃杀';
 /** A development build (the public `dev` branch): the title screen, the boot banner and the README say so, and
  * tools/package.mjs refuses to build a release zip from it without --allow-dev. */
 export const DEV_BUILD = /-dev$/.test(APP_VERSION);

@@ -591,6 +591,9 @@ export const C2S = {
   // solo pause (official PauseUp / ResumeUp, DESIGN §14): freezes the running battle (field clock, deadlines, the
   // browser's local runner) — solo matches only (co-op ⇒ WRONG_PHASE), only while a battle runs; m.public.paused
   'g.pause': { on: isBool },
+  // 卫戍协议：盟约 · 大逃杀：扣血加钱 —— 花 3 点目标生命值换 1 资金。低于 3 滴不能用；刚好 3 滴可以用，
+  // 但用完之后目标生命值归零、当场淘汰（休整期可用）
+  'g.bloodMoney': {},
   // the stats the own board's units start their next battle with (user playtest #4 item 7; prep phases): answered by
   // the push m.unitStats { seq, round, units: [unitStatsEntry] }; `seq` is echoed so the client keeps the newest answer
   'g.unitStats': { seq: (v) => isInt(v, 0, 2 ** 31), $optional: ['seq'] },
