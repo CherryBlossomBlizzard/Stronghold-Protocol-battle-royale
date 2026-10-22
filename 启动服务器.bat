@@ -157,22 +157,40 @@ set "P3000= "
 if not "%P%"=="3000" (
   for /f "tokens=5" %%P in ('netstat -ano ^| findstr /r /c:":3000 " ^| findstr /i LISTENING') do set "P3000=!P3000!%%P "
 )
-set "FOUND="
+rem 收集去重后的 PID 列表（IPv4 + IPv6 会对同一 PID 报两行）
+set "PIDS= "
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /r /c:":%P% " ^| findstr /i LISTENING') do (
+  echo !PIDS! | findstr /c:" %%P " >nul || set "PIDS=!PIDS!%%P "
+)
+if "!PIDS!"==" " (
+  echo   [端口 %P%] 空闲，无需清理。
+  endlocal
+  exit /b 0
+)
+for %%P in (!PIDS!) do (
   set "PID=%%P"
   set "SKIP="
   if "!PID!"=="0" set "SKIP=1"
-  for %%X in (!P3000!) do if "%%X"=="!PID!" set "SKIP=1"
+  if not "%P%"=="3000" for %%X in (!P3000!) do if "%%X"=="!PID!" set "SKIP=1"
   if defined SKIP (
     echo   [端口 %P%] PID !PID! 也在监听 3000 —— 按安全规则不动它，跳过。
   ) else (
     set "IMG=?"
-    for /f "tokens=1 delims=," %%N in ('tasklist /FI "PID eq !PID!" /FO CSV /NH') do set "IMG=%%~N"
-    echo   [端口 %P%] 发现 PID !PID! ^(!IMG!^) 占用，自动关闭…
-    taskkill /PID !PID! /T /F >nul 2>&1
+    for /f "tokens=1 delims=," %%N in ('tasklist /FI "PID eq !PID!" /FO CSV /NH 2^>nul') do if not defined IMGDONE set "IMG=%%~N" & set "IMGDONE=1"
+    set "IMGDONE="
+    echo   [端口 %P%] 发现 PID !PID! 占用，自动关闭…
+    taskkill /PID !PID! /T /F >nul 2>nul
     set "FOUND=1"
   )
 )
-if not defined FOUND echo   [端口 %P%] 空闲，无需清理。
+powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %P% -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }" >nul 2>&1
+if errorlevel 1 (
+  echo   [端口 %P%] 仍有占用，再试一轮…
+  endlocal
+  call :freeport %P%
+  exit /b 0
+)
+if defined FOUND echo   [端口 %P%] 已释放。
 endlocal
+exit /b 0
 exit /b 0
