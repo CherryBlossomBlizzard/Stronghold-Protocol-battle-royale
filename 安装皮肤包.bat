@@ -27,14 +27,22 @@ echo == 合并分卷 ==
 copy /b official-skins-plugin.zip.7z.001+official-skins-plugin.zip.7z.002+official-skins-plugin.zip.7z.003+official-skins-plugin.zip.7z.004+official-skins-plugin.zip.7z.005 official-skins-plugin.7z >nul
 
 echo == 解压 ==
-where 7z >nul 2>nul
-if errorlevel 1 (
-  echo   [错误] 没有 7-Zip。请安装：https://www.7-zip.org/
-  echo   或者解压合并好的 official-skins-plugin.7z 到本目录（覆盖 plugins\）。
+rem 7-Zip 查找顺序：PATH → 标准安装位 → 下载目录/本目录里的便携版 7z.exe
+set "SZ="
+where 7z >nul 2>nul && set "SZ=7z"
+if not defined SZ if exist "%ProgramFiles%\7-Zip\7z.exe" set "SZ=%ProgramFiles%\7-Zip\7z.exe"
+if not defined SZ if exist "%ProgramFiles(x86)%\7-Zip\7z.exe" set "SZ=%ProgramFiles(x86)%\7-Zip\7z.exe"
+if not defined SZ for %%D in ("%USERPROFILE%\Downloads" "%~dp0") do if exist "%%~D\7z.exe" set "SZ=%%~D\7z.exe"
+if not defined SZ (
+  echo   [错误] 没有找到 7-Zip。三种解决办法任选：
+  echo     a. 安装 7-Zip：https://www.7-zip.org/  （装完重新运行本脚本）
+  echo     b. 把 7z.exe（绿色版）放到本目录或下载目录
+  echo     c. 用 7-Zip 手动解压合并好的 official-skins-plugin.7z，把解压出的
+  echo        official-skins 文件夹放进 plugins\ 里
   pause
   exit /b 1
 )
-7z x -y official-skins-plugin.7z >nul
+"%SZ%" x -y official-skins-plugin.7z >nul
 
 echo == 清理分卷 ==
 del official-skins-plugin.zip.7z.* official-skins-plugin.7z 2>nul
