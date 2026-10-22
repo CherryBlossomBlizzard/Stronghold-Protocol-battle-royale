@@ -4,37 +4,49 @@ cd /d "%~dp0"
 title 安装官方皮肤包
 
 if exist plugins\official-skins\plugin.json (
-  echo   皮肤插件已经安装过了（plugins\official-skins\）。如需重装请先删除该文件夹。
-  pause
-  exit /b 0
-)
-
-if not exist official-skins-plugin.zip (
-  echo   正在从 GitHub 下载皮肤包（21 MB，下载速度取决于网络）…
-  curl -L -o official-skins-plugin.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins-plugin.zip"
-  if errorlevel 1 (
-    echo   [错误] 下载失败。请手动下载：
-    echo     https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins-plugin.zip
-    echo   放到本目录（与 bat 同目录）后重新运行。
+  if exist plugins\official-skins\media\spine (
+    echo   皮肤插件已经安装过了。如需重装请先删除 plugins\official-skins\。
     pause
-    exit /b 1
+    exit /b 0
   )
 )
 
-echo == 解压插件到 plugins\ ==
-powershell -NoProfile -Command "Expand-Archive -Path 'official-skins-plugin.zip' -DestinationPath 'plugins' -Force"
-if exist plugins\official-skins\plugin.json (
-  echo.
-  echo   ============================================================
-  echo    皮肤包安装完成
-  echo   ============================================================
-  echo    下一步：
-  echo    1. 重启服务器（关掉再运行 启动服务器.bat）
-  echo    2. 每个玩家：浏览器【设置】拉到最底 → 打开「官方皮肤包」开关
-  echo    3. 到【干员调配】点开干员 → 「皮肤」分区选皮肤
-  echo       （带模型的皮肤在战斗里也会换装）
-  echo ============================================================
-) else (
-  echo   [错误] 解压后没找到 plugins\official-skins\plugin.json
+echo == 下载 5 个分卷（共约 400MB，视网络而定）==
+for %%I in (001 002 003 004 005) do (
+  if not exist "official-skins-plugin.zip.7z.%%I" (
+    curl -L -o "official-skins-plugin.zip.7z.%%I" "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins-plugin.zip.7z.%%I"
+    if errorlevel 1 (
+      echo   [错误] 分卷 %%I 下载失败。请检查网络后重试。
+      pause
+      exit /b 1
+    )
+  )
 )
+
+echo == 合并分卷 ==
+copy /b official-skins-plugin.zip.7z.001+official-skins-plugin.zip.7z.002+official-skins-plugin.zip.7z.003+official-skins-plugin.zip.7z.004+official-skins-plugin.zip.7z.005 official-skins-plugin.7z >nul
+
+echo == 解压 ==
+where 7z >nul 2>nul
+if errorlevel 1 (
+  echo   [错误] 没有 7-Zip。请安装：https://www.7-zip.org/
+  echo   或者解压合并好的 official-skins-plugin.7z 到本目录（覆盖 plugins\）。
+  pause
+  exit /b 1
+)
+7z x -y official-skins-plugin.7z >nul
+
+echo == 清理分卷 ==
+del official-skins-plugin.zip.7z.* official-skins-plugin.7z 2>nul
+
+if exist plugins\official-skins\plugin.json (
+  if exist plugins\official-skins\media\spine (
+    echo.
+    echo   ============================================================
+    echo    皮肤包安装完成（64 套皮肤，含战斗内动态模型）
+    echo   ============================================================
+    echo    下一步：重启服务器。玩家在【设置】里打开「官方皮肤包」，
+    echo    到【干员调配】选皮肤；立绘与战斗内动态模型都会生效。
+  ) else echo   [错误] 解压不完整（缺 media\spine）
+) else echo   [错误] 解压后没找到 plugins\official-skins\plugin.json
 pause
