@@ -52,29 +52,32 @@ for key in keys:
             fail.append((key, f"skel={bool(skel)} atlas={bool(atlas)}")); continue
         outdir = os.path.join(SPIPE, safe_name(key))
         os.makedirs(outdir, exist_ok=True)
-        with open(os.path.join(outdir, skel[0]), "wb") as f: f.write(skel[1])
+        with open(os.path.join(outdir, safe_name(skel[0])), "wb") as f: f.write(skel[1])
         atlas_text = atlas[1].decode("utf-8", "replace")
-        with open(os.path.join(outdir, atlas[0]), "wb") as f: f.write(atlas[1])
-        # 贴图：atlas 里引用的页名 → 存 png；名字保持与 atlas 引用一致（Spine 读 atlas 相对路径）
-        pages = re.findall(r"^(\S+\.(?:png|webp|jpg))\s*$", atlas_text, re.M)
+        # 页名行 png→webp，且页名 safe 清洗（与文件名一致）；atlas 结构（换行）保持原样
+        atlas_text = re.sub(r"^(dyn_illust_[^\s]+)\.png$", lambda m: safe_name(m.group(1)) + ".webp", atlas_text, flags=re.M)
+        with open(os.path.join(outdir, safe_name(atlas[0])), "w", encoding="utf-8") as f: f.write(atlas_text)
+        pages = re.findall(r"^(\S+\.webp)\s*$", atlas_text, re.M)
         size = None
         for page in pages:
-            img = textures.get(page.replace(".png", "")) or textures.get(page)
+            img = textures.get(page.replace(".webp", "")) or textures.get(page)
             if img is None:
                 # 尝试带 [alpha] 等变体
                 for tn, im in textures.items():
-                    if page.startswith(tn): img = im; break
+                    if page.startswith(safe_name(tn)): img = im; break
             if img is None: fail.append((key, f"page {page} not found")); continue
-            img.save(os.path.join(outdir, page))
+            img.save(os.path.join(outdir, page), "WEBP", lossless=False, quality=90, method=6)
             size = size or 0
-        # spine 引用（相对插件 media/ 的路径）
+        # spine 引用（相对插件 media/ 的路径）：文件名一律 safe，贴图字段名是 textures（不是 pages）
         rel = f"media/spine/{safe_name(key)}"
+        base = safe_name(f"dyn_illust_{key}")
         entry = plugin["assets"]["chars"]
         # 找到归属干员
         for cid, rec in entry.items():
             skins = rec.get("skins") or {}
             if key in skins:
-                skins[key]["spine"] = {"front": {"skel": f"{rel}/{skel[0]}", "atlas": f"{rel}/{atlas[0]}", "pages": pages}}
+                skins[key]["spine"] = {"front": {"skel": f"{rel}/{base}.skel", "atlas": f"{rel}/{base}.atlas",
+                                                 "textures": [f"{rel}/{p}" for p in pages], "pma": True}}
                 break
         ok.append(key)
         print(f"  OK {key}: {len(pages)} pages, skel {len(skel[1])//1024}KB")
