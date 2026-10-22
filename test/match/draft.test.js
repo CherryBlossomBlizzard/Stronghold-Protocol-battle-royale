@@ -50,7 +50,7 @@ test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one sk
   assert.deepEqual(m.draft.order, [second, third, first]);
   assert.equal(m.draftTurn(), second);
   assert.deepEqual(m.handle(second, { t: 'g.band', bandId: 'band_sarkazb' }), { ok: true });
-  assert.equal(h.ps(second).lp, 45, '歌利亚 starts with 45 LP');
+  assert.equal(h.ps(second).lp, 30, '卫戍协议 · 大逃杀：所有策略固定 30 LP（官方歌利亚是 45）');
   assert.deepEqual(m.handle(second, { t: 'g.band', bandId: 'band_sarkazb' }), { error: ERR.ALREADY });
   // research 09 §5 / DESIGN §14 corrections: a strategy a teammate already took is 队友已选 (test/ui/bandDraft.test.js)
   assert.equal(m.handle(third, { t: 'g.band', bandId: 'band_sarkazb' }).error, ERR.BAD_TARGET, '队友已选: no duplicates');
@@ -59,7 +59,8 @@ test('band draft (co-op): random order, one pick per turn, NOT_YOUR_TURN, one sk
   assert.equal(m.draftTurn(), first);
   assert.deepEqual(m.handle(first, { t: 'g.bandSkip' }).error, ERR.ALREADY, 'only one skip');
   assert.deepEqual(m.handle(first, { t: 'g.band', bandId: 'band_lisa' }), { ok: true });
-  assert.equal(h.ps(first).lp, 20);
+  // 卫戍协议 · 大逃杀：固定 30 LP（官方 band_lisa 20）
+  assert.equal(h.ps(first).lp, 30);
   h.sched.advance(1);
   assert.equal(m.phase, PHASE.BATTLE_CHECK);
   m.dispose();
@@ -93,7 +94,8 @@ test('band draft timers (user playtest #4 item 4): one countdown of BAND_TURN_SE
     if (pid.startsWith('ai_')) { assert.ok(DATA.bands[h.ps(pid).bandId], 'bot picked a band'); taken.add(h.ps(pid).bandId); continue; }
     const want = !taken.has('band_bldsk') ? 'band_bldsk' : m.gd.bandIds().find((b) => !taken.has(b));
     assert.equal(h.ps(pid).bandId, want, `${pid} gets the default strategy nobody else holds`);
-    assert.equal(h.ps(pid).lp, DATA.bands[want].totalHp);
+    // 卫戍协议 · 大逃杀：LP 不随策略的 totalHp 变化（官方按策略 22-45 浮动）
+    assert.equal(h.ps(pid).lp, 30);
     taken.add(want);
   }
   assert.equal(new Set(Object.values(m.draft.picks)).size, 4, 'no duplicate strategies');

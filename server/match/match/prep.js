@@ -26,10 +26,15 @@ export class MatchPrep {
     ps.stats.lpLost += RULES.bloodMoneyCost;
     ps.stats.fundsGained += RULES.bloodMoneyGain;
     if (ps.lp <= 0) {
+      // 卫戍协议：盟约 · 大逃杀：血量到 0 → 当场淘汰。收尾与 onLeave 同款（platform.js）：
+      // 全员淘汰则对局结束；否则 PREP 里重算 maybeEndPrep（被淘汰者的 ready 已被 eliminate 清掉，
+      // 不再挡其他玩家的休整期推进 —— fuzz seed 104 的「对局停在 PREP」死角就出在这里）。
       ps.lp = 0;
       ps.eliminate(this.round);
       this.toast(ps, 'error', '你的目标生命值耗尽，已被淘汰');
       this.tickerText(msg('{name}博士的目标生命值已耗尽', { name: ps.name }), FLOW_TICKER_PRIORITY);
+      if (!this.alivePlayers().length) { this.finish({ victory: false, reason: 'eliminated' }); return OK; }
+      if (this.phase === PHASE.PREP) this.maybeEndPrep();
     }
     ps.recompute();
     ps.dirty();

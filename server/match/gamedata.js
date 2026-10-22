@@ -645,6 +645,9 @@ export class GameData {
   }
 
   startLp(bandId) {
+    // 卫戍协议：盟约 · 大逃杀：所有玩家的目标生命值（血量）上限统一固定 30（RULES.startLp），
+    // 不按策略（bands.json totalHp：22-45 不等）区分 —— 这是本服的规则之一。
+    if (RULES.startLp > 0) return RULES.startLp;
     const b = this.band(bandId);
     return b && Number.isInteger(b.totalHp) && b.totalHp > 0 ? b.totalHp : this.defaultStartLp;
   }

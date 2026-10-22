@@ -76,7 +76,7 @@ test('solo over websockets: briefing → band → prep → buy/place/ready → c
   await c.waitFor('m.public', (p) => p.phase === 'BAND_DRAFT');
   await ok(c, { t: 'g.band', bandId: 'band_sarkazb' });
   const prep = await c.waitFor('m.public', (p) => p.phase === 'PREP' && p.round === 1, 10000);
-  assert.equal(prep.players[0].lp, 45);
+  assert.equal(prep.players[0].lp, 30); // 卫戍协议 · 大逃杀：固定 30 LP（官方歌利亚 45）
   const priv = await c.waitFor('m.private', (p) => p.funds === 4 && p.shop.slots.length > 0);
   const slot = priv.shop.slots.findIndex((s) => s && s.kind === 'chess' && s.price <= 4);
   await ok(c, { t: 'g.buy', slot });

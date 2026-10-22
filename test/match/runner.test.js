@@ -310,7 +310,7 @@ function scriptResults(r, script) {
 }
 
 test('a b.result lost with the socket is sent again when the session resumes and on an authoritative b.start of the finished battle; a refusal is final', async () => {
-  const start = realStart(7305);
+  const start = realStart(7301) // 卫戍协议：盟约 · 大逃杀：7305 在固定 30 血下 R2 无部署（bot 采购路径不同），换 7301;
   const results = (r) => r.net.sent.filter((x) => x.t === 'b.result');
   const warn = console.warn;
   console.warn = () => {};
@@ -485,7 +485,7 @@ test('live leaks: a boss field is not counted (the merged team LP moves through 
 });
 
 test('live unit stats (user playtest #4 item 7): unitStats(id) reads the battle on screen — the sim\'s last computed stats, never unit.s (no recompute from the UI)', async () => {
-  const start = realStart(7305);
+  const start = realStart(7301) // 卫戍协议：盟约 · 大逃杀：7305 在固定 30 血下 R2 无部署（bot 采购路径不同），换 7301;
   const r = rig();
   r.net.emit('b.start', start);
   await r.settle();

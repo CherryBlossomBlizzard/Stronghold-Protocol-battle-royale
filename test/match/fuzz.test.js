@@ -84,7 +84,9 @@ function fuzzOne(seed, { fake, rules }) {
   }
   // finish the match: everyone left on AI 托管
   for (const ps of m.players.values()) if (!ps.isBot && !ps.left) m.handle(ps.playerId, { t: 'g.autoplay', on: true });
-  h.drive(() => h.ended != null);
+  const drove = h.drive(() => h.ended != null);
+  if (!h.ended) console.error('FUZZD2 ' + JSON.stringify({ seed, drove }));
+  if (!h.ended) console.error(String.raw`FUZZDUMP` + JSON.stringify({ seed, phase: m.phase, round: m.round, players: [...m.players.values()].map((p) => ({ id: p.playerId, name: p.name, alive: p.alive, lp: p.lp, ready: p.ready, left: p.left, connected: p.connected, bot: p.isBot, autoplay: p.autoplay })) }));
   assert.ok(h.ended, `seed ${seed}: match did not end (${m.phase} R${m.round})`);
   assert.equal(h.endedCount, 1);
   assert.equal(m.errorCount, 0, `seed ${seed}: ${JSON.stringify(m.errors.slice(0, 3))}`);
