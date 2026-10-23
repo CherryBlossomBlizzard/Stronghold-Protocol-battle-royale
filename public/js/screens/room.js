@@ -280,6 +280,8 @@ export function RoomScreen() {
   const setDifficulty = (difficulty) => run('diff', () => net.request('room.setDifficulty', { difficulty }));
   // 卫戍协议：盟约 · 大逃杀：房主选择规则变体（大逃杀 / 官方）
   const setRulesVariant = (rulesVariant) => run('rules', () => net.request('room.setRulesVariant', { rulesVariant }));
+  // 卫戍协议 · 20 人房（龙千尘）：房主切换房间容量（4/8/10/16/20；改容量会清其他真人的准备）
+  const setCapacity = (capacity) => run('cap', () => net.request('room.setCapacity', { capacity }));
   const setAiLast = (on) => run('ailast', () => net.request('room.setAiPicksLast', { on }));
   // spectator seats: the host frees one; a spectator takes a free player seat with room.join of this room
   const removeSpectator = (playerId) => run(`rs${playerId}`, () => net.request('room.removeSpectator', { playerId }));
@@ -378,6 +380,15 @@ export function RoomScreen() {
                 class=${`rules-variant__opt${room.rulesVariant === 'official' ? ' is-active' : ''}`}
                 disabled=${!!busy} onClick=${() => setRulesVariant('official')}>${t('官方原版')}</button>
             </div>
+                    ${coop && facts.isHost ? html`<div class="rules-variant">
+            <span class="room-bar__label">${t('房间容量')}<${MicroLabel}>SEATS<//></span>
+            <div class="rules-variant__opts" role="radiogroup" aria-label=${t('房间容量')}>
+              ${[4, 8, 10, 16, 20].map((n) => html`<button key=${n} type="button" role="radio"
+                aria-checked=${room.capacity === n ? 'true' : 'false'}
+                class=${`rules-variant__opt${room.capacity === n ? ' is-active' : ''}`}
+                disabled=${!!busy} onClick=${() => setCapacity(n)}>${n}</button>`)}
+            </div>
+          </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('房间容量：')}${room.capacity}</span>` : null}
           </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('规则模式：')}${room.rulesVariant === 'official' ? t('官方原版') : t('大逃杀')}</span>` : null}
         </div>
       </div>
