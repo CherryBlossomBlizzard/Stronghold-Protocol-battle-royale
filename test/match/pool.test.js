@@ -6,7 +6,8 @@ import { SharedPool, drawDisabledBonds } from '../../server/match/pool.js';
 import { createRng } from '../../server/sim/rng.js';
 import { DATA, makeMatch, give, checkInvariants, chessOfTier } from './harness.js';
 
-const gdOf = (modeId = 'mode_multi_normal') => new GameData(DATA, modeId);
+// 卫戍协议 · 大逃杀：SharedPool 现在按 RULES.infinitePool 放大库存 —— 这些测试验证官方库存行为，用官方变体
+const gdOf = (modeId = 'mode_multi_normal') => new GameData(DATA, modeId, { variant: 'official' });
 
 test('co-op pool doubles the measured single-player capacities; only visible, unbanned chess enter', () => {
   const gd = gdOf();

@@ -88,15 +88,19 @@ export class SharedPool {
   constructor(gd, { banned = [], scale = 1 } = {}) {
     this.gd = gd;
     this.scale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    // 卫戍协议 · 大逃杀：卡池无限（RULES.infinitePool）——每个棋子的库存放大 poolCapMultiplier 倍（100×），
+    // 同一张牌几乎不可能被抢空；官方变体（infinitePool: false）保持官方库存。
+    const rules = gd.RULES || {};
+    this.multiplier = rules.infinitePool ? Math.max(1, Number(rules.poolCapMultiplier) || 1) : 1;
     const ban = new Set(banned);
     /** @type {Map<string, { cap: number, left: number, tier: number }>} */
     this.entries = new Map();
     for (const id of gd.visibleChess) {
       if (ban.has(id)) continue;
       const tier = gd.tierOf(id);
-      const scaled = gd.poolCopies(id) * this.scale;
+      const scaled = gd.poolCopies(id) * this.scale * this.multiplier;
       // 五人组（×1.25）的 III 阶取 22 而不是把 18 × 1.25 向上取成 23（维护者确认）；其余品阶向上取整
-      const cap = this.scale === poolCopyScale(5) && tier === 3 ? Math.floor(scaled) : Math.ceil(scaled);
+      const cap = this.scale === poolCopyScale(5) && tier === 3 && this.multiplier === 1 ? Math.floor(scaled) : Math.ceil(scaled);
       if (cap <= 0) continue;
       this.entries.set(id, { cap, left: cap, tier });
     }
