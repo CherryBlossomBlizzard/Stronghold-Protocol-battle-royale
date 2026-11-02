@@ -109,6 +109,18 @@ if not exist "public\assets" (
   call npm run setup
   echo   [提示] 素材没下完也不影响启动，游戏里会自动补齐。
 )
+rem ---- 卫戍协议 · 大逃杀：皮肤系统内置化 —— 缺失时自动从 GitHub 下载（59 MB，Windows 内置解压）----
+if not exist "plugins\official-skins\plugin.json" (
+  echo   首次运行：下载官方皮肤包（59 MB，64 套皮肤，含战斗内动态模型）…
+  curl -L -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip" >nul 2>nul
+  if exist official-skins.zip (
+    powershell -NoProfile -Command "Expand-Archive -Path 'official-skins.zip' -DestinationPath 'plugins' -Force" >nul 2>nul
+    del official-skins.zip 2>nul
+    if exist "plugins\official-skins\plugin.json" (
+      echo   皮肤包就绪。玩家在【设置】里打开「官方皮肤包」即可使用。
+    ) else echo   [提示] 皮肤包解压失败 —— 跳过（不影响游戏；可稍后运行 安装皮肤包.bat）
+  ) else echo   [提示] 皮肤包下载失败 —— 跳过（不影响游戏；可稍后运行 安装皮肤包.bat）
+)
 goto start
 
 :start
