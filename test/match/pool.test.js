@@ -2,12 +2,42 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameData } from '../../server/match/gamedata.js';
-import { SharedPool, drawDisabledBonds } from '../../server/match/pool.js';
+import { SharedPool, SharedItemPool, drawDisabledBonds } from '../../server/match/pool.js';
 import { createRng } from '../../server/sim/rng.js';
 import { DATA, makeMatch, give, checkInvariants, chessOfTier } from './harness.js';
 
 // 卫戍协议 · 大逃杀：SharedPool 现在按 RULES.infinitePool 放大库存 —— 这些测试验证官方库存行为，用官方变体
 const gdOf = (modeId = 'mode_multi_normal') => new GameData(DATA, modeId, { variant: 'official' });
+
+// 大逃杀的两条「无限」到底落在哪：干员卡池放大每张的库存，装备直接取消共享库存上限；官方变体都保持官方值。
+test('大逃杀：干员卡池 ×100、装备取消共享上限；官方变体保持官方库存', () => {
+  const br = new GameData(DATA, 'mode_multi_normal');
+  const off = new GameData(DATA, 'mode_multi_normal', { variant: 'official' });
+  assert.equal(br.RULES.infinitePool, true);
+  assert.equal(br.RULES.poolCapMultiplier, 100);
+  assert.equal(br.RULES.infiniteItems, true);
+  assert.equal(off.RULES.infinitePool, false);
+  assert.equal(off.RULES.infiniteItems, false);
+
+  // 干员：同一张牌，大逃杀的库存正好是官方库存的 poolCapMultiplier 倍
+  const brPool = new SharedPool(br, { banned: [] });
+  const offPool = new SharedPool(off, { banned: [] });
+  const chessId = br.visibleChess[0];
+  assert.equal(brPool.cap(chessId), offPool.cap(chessId) * br.RULES.poolCapMultiplier, `chess ${chessId}`);
+
+  // 装备：官方按 tier 有共享上限；大逃杀 cap = null（没有商店上限 → left 为 Infinity、总能获得）
+  const brItems = new SharedItemPool(br, () => []);
+  const offItems = new SharedItemPool(off, () => []);
+  const itemId = Object.keys(DATA.items).find((k) => /^chess_item_/.test(k) && off.item(k) && off.itemPoolCopies(k) != null);
+  assert.ok(itemId, '找到一件有官方库存的装备');
+  const tier = off.item(itemId).tier;
+  assert.equal(offItems.cap(itemId), DATA.config.economy.itemPoolCopies[String(tier)], '官方：按 tier 的官方库存');
+  assert.equal(brItems.cap(itemId), null, '大逃杀：没有共享上限');
+  assert.equal(brItems.left(itemId), Infinity);
+  assert.equal(brItems.canGain(itemId), true);
+  // 无上限的装备不记欠账（unlimitedGift 之外的 granted 也不再被库存挡住）
+  assert.equal(brItems.owe(itemId, 5), 0, '无上限 → 不记欠账');
+});
 
 test('co-op pool doubles the measured single-player capacities; only visible, unbanned chess enter', () => {
   const gd = gdOf();

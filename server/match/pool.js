@@ -251,7 +251,16 @@ export class SharedItemPool {
     /** @type {Map<string, number>} base id → copies taken past the cap by an already-displayed card */
     this.debt = new Map();
   }
-  cap(id) { return this.gd.itemPoolCopies(id); }
+  /**
+   * 这件装备的共享库存上限；`null` = 没有商店上限（`rawLeft` 为 Infinity、`canGain` 恒真、`owe` 不记账）。
+   * 卫戍协议 · 大逃杀（`RULES.infiniteItems: true`）：**装备无限量供应**，取消共享库存上限 —— 与干员卡池的
+   * `infinitePool`（放大每张的库存）不同，装备这边直接不再设上限。官方变体（`infiniteItems: false`）保持官方库存
+   * （data/config.json economy.itemPoolCopies：4/6/7/8/7/3 按 tier）。
+   */
+  cap(id) {
+    if (this.gd.RULES && this.gd.RULES.infiniteItems) return null;
+    return this.gd.itemPoolCopies(id);
+  }
   need(id) { return this.gd.isGolden(id) ? 2 : 1; }
   held(id) {
     const base = this.gd.baseIdOf(id);

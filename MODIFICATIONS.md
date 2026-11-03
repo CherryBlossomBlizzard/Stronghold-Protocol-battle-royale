@@ -67,8 +67,17 @@
 9. **20 人房**：沿用龙千尘分支的容量规则（`shared/playerCapacity.js`：4 / 8 / 10 / 16 / 20 席位、固定分组表、
    五人组 III 阶取整、按组数扩展联防）。
 10. **血量上限统一 30**（`startLp: 30`，`server/match/gamedata.js` 的 `startLp()` 对所有策略返回 30，
-    不按 bands.json 的 totalHp 22–45 浮动）；卡池角色无限张、装备无限量供应；删除联防环节（漏怪直接扣血）；
-   回合数没有上限（第 20 回合首领战后收尾）。
+    不按 bands.json 的 totalHp 22–45 浮动）；**干员卡池与装备都无限量**（见下）；
+    删除联防环节（漏怪直接扣血，`noUnite: true` → `server/match/match/combat.js` 直接结算扣血）；回合数没有上限
+    （`endless: true`，第 20 回合首领战后收尾）。
+    * **干员卡池无限张**（`infinitePool: true`、`poolCapMultiplier: 100`）：`SharedPool` 把**每张**的库存放大 100 倍
+      （官方 tier 库存 12/14/18/16/8/5 × 2 人以上 co-op ×2 → 大逃杀再 ×100，实测一张 24 → 2400），抽卡仍按上游的
+      剩余份数加权，只是几乎抽不空。官方变体（`infinitePool: false`）回到官方库存。
+    * **装备无限量供应**（`infiniteItems: true`）：`SharedItemPool.cap()` 返回 `null` = **没有共享库存上限**
+      （`left` 为 Infinity、`canGain` 恒真、「牌已售罄」不再出现、没发到手的欠账也不再记）；与干员侧的「放大库存」
+      不同，装备这边是**直接取消上限**。官方变体（`infiniteItems: false`）按 data/config.json 的
+      `economy.itemPoolCopies`（tier 1–6 各 4/6/7/8/7/3）保持官方共享库存。
+      注意：**每回合购买/奖励张数**（`storeCntMax`、`maxArtsPerRound`、整备区容量）仍按官方，取消的只是「共享库存」。
 11. **炎盟约 13 层后炎佑吃炎层数增益**（`yanyouLayerBonusFrom: 13`）：炎的层数达到 13 层后，**炎佑也吃到玩家的炎层数
     攻击力增益** —— 与成员同一条公式（`base_atk + atk_per_stack·L`，直接乘算，`server/sim/content/bonds/core.js`
     `yanyouLayerBonus`），随层数实时刷新。炎佑登场时（battleStart）补一次，之后每次层数变化（`onLayers`）刷新；层数
