@@ -3,9 +3,8 @@
 //   炎 yanShip           members ATK +(base_atk + atk_per_stack·L); 6: one “炎佑” (its template ATK / max HP + 30 %
 //                        of the 炎 ATK / max HP sums at battle start — PRTS "增加…（最终加算）"); 9: two 炎佑, ATK ×atk,
 //                        damage taken ×(1 − damage_resistance)
-//                        卫戍协议：盟约 · 大逃杀 (`battle.flags.yanyouLayerBonusFrom`, RULES.yanyouLayerBonusFrom = 13):
-//                        炎的层数达到该值后，炎佑也吃到玩家的炎层数攻击力增益（同一条 base_atk + atk_per_stack·L，随层
-//                        数实时刷新；官方规则没有这个 flag，炎佑不吃层数）
+//                        炎佑在本复刻里**只**作为我方召唤存在（server/match/waves.js 的骰子池显式排除它）：它不吃层数增益，
+//                        也不该作为敌人出现在怪海里
 //   (every bond "+X%" ATK / max HP here is 直接乘算 — S.directMods, additive with the other percentages, PRTS 盟约记录)
 //   萨尔贡 sargonShip    member skill start → every member on the field gets an independent stack (ASPD +base_attack_speed
 //                        for base_time + time_per_stack·L s, ≤ max_buff_stack_cnt); 6: each stack also ATK +base_atk
@@ -42,7 +41,7 @@
 
 import * as S from '../support/index.js';
 import { mitigate } from '../../damage.js';
-import { spawnYanyou, TOKEN_IDS } from '../tokens.js';
+import { spawnYanyou } from '../tokens.js';
 import { kjeragColdWind } from '../devices.js';
 import * as items from '../items.js';
 import { FORCED_EXIT } from '../../constants.js';
@@ -186,11 +185,9 @@ const ownTag = (dmg, tag) => !!dmg && Array.isArray(dmg.tags) && dmg.tags.includ
 
 function installYan(battle, pid, bb, members) {
   const L = () => S.bondLayers(battle, pid, 'yanShip');
-  const atkMods = () => S.directMods({ atk: num(bb.base_atk) + num(bb.atk_per_stack) * L() });
   const apply = () => {
-    const mods = atkMods();
+    const mods = S.directMods({ atk: num(bb.base_atk) + num(bb.atk_per_stack) * L() });
     for (const u of members) S.passiveBuff(battle, u, 'bond:yan', mods);
-    yanyouLayerBonus(battle, pid);
   };
   apply();
   onLayers(battle, pid, 'yanShip', apply);
@@ -212,30 +209,7 @@ function installYan(battle, pid, bb, members) {
       dmgTakenMul: ex ? Math.max(0, 1 - num(bb.damage_resistance, 0)) : 1,
     });
     for (const y of out) y.mem.bondYan = true;
-    // 卫戍协议：盟约 · 大逃杀：炎佑在开战登场后才存在，登场时补一次层数增益（层数在战斗中也还会变：onLayers → apply）
-    yanyouLayerBonus(battle, pid);
   }, { once: true });
-}
-
-/**
- * 卫戍协议：盟约 · 大逃杀（`battle.flags.yanyouLayerBonusFrom`，RULES.yanyouLayerBonusFrom = 13）：炎的层数达到
- * `from` 层后，**炎佑也吃到玩家的炎层数攻击力增益** —— 与成员同一条公式（`base_atk + atk_per_stack·L`，直接乘算，
- * 和成员各自的 `bond:yan` 加算叠加），随层数实时刷新（onLayers → apply → 这里；passiveBuff 的 `refresh: 'replace'`
- * 让重复施加幂等）。官方规则（没有这个 flag，或 flag ≤ 0）下炎佑保持上游行为：只有模板属性 + 30 % 总和（+ 9 炎的
- * ×1.5 / 减伤），不吃层数。
- * [ASSUMED] 增益只作用于攻击力（层的公式本来只有 atk_per_stack）；阈值「≥ from」含 from 本身（「十三层后」= 13 层起）。
- */
-function yanyouLayerBonus(battle, pid) {
-  const from = Number(battle.flags && battle.flags.yanyouLayerBonusFrom);
-  if (!(Number.isFinite(from) && from > 0)) return;
-  const L = S.bondLayers(battle, pid, 'yanShip');
-  const bb = bondBb('yanShip');
-  if (!bb) return;
-  for (const u of battle.allyUnits) {
-    if (u.defId !== TOKEN_IDS.yanyou || u.ownerId !== pid) continue;
-    if (L >= from) S.passiveBuff(battle, u, 'bond:yan', S.directMods({ atk: num(bb.base_atk) + num(bb.atk_per_stack) * L }));
-    else battle.removeBuff(u, 'bond:yan');
-  }
 }
 
 // =====================================================================================================================

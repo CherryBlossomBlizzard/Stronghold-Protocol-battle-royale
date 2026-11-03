@@ -593,18 +593,14 @@ export class GameData {
    *   * `bossHitLimit: false` 关掉官方的限伤（打五亿血的首领用，server/sim/damage.js leaderHitCancelled）；
    *   * `timesHpBonus: false` 让次数怪（频次器物）不吃回合血量加成，次数用数据原值
    *     （server/sim/content/enemies/archetypes.js `times`）；
-   *   * `yanyouLayerBonusFrom`（13）：炎的层数达到该值后，炎佑也吃到玩家的炎层数攻击力增益
-   *     （server/sim/content/bonds/core.js yanyouLayerBonus；官方变体为 0 = 不吃）。
    * 开关都从 RULES 读，随规格一起发给浏览器，所以服务端和浏览器跑同一份战斗时行为一致；
-   * 工具与 golden 不经过这里，保持上游默认（限伤开、次数吃加成、炎佑不吃层数）。
+   * 工具与 golden 不经过这里，保持上游默认（限伤开、次数吃加成）。
    */
   get battleFlags() {
-    const from = Number(this.RULES.yanyouLayerBonusFrom);
     return {
       ...this.dp,
       ...(this.RULES.bossHitLimit ? {} : { bossHitLimit: false }),
       ...(this.RULES.timesHpBonus ? {} : { timesHpBonus: false }),
-      ...(Number.isFinite(from) && from > 0 ? { yanyouLayerBonusFrom: from } : {}),
     };
   }
   get unite() {

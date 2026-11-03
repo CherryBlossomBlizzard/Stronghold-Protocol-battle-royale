@@ -78,12 +78,6 @@ export const RULES = Object.freeze({
   flySpawnChance: 0.5,
   /** 扣血加钱：花费多少血、换多少钱。 */
   bloodMoneyCost: 3, bloodMoneyGain: 1,
-  /**
-   * 炎的层数达到这个值（13 层）之后，**炎佑也吃到玩家的炎层数攻击力增益**（与成员同一条公式
-   * `base_atk + atk_per_stack·L`，随层数实时刷新；server/sim/content/bonds/core.js yanyouLayerBonus）。
-   * 官方规则没有这一条（OFFICIAL_RULES 置 0）：炎佑只有模板属性 + 30 % 总和（+ 9 炎的 ×1.5 / 减伤）。
-   */
-  yanyouLayerBonusFrom: 13,
   /** 卡池：每名干员的上限放大倍数（概率不变，只把上限加大）。 */
   infinitePool: true, poolCapMultiplier: 100,
   /** 装备：删除共享库存上限，无限量供应。 */
@@ -185,6 +179,4 @@ export const OFFICIAL_RULES = Object.freeze({
    */
   bloodMoneyCost: 0,
   bloodMoneyGain: 0,
-  /** 官方：炎佑不吃炎层数增益（上游行为）。 */
-  yanyouLayerBonusFrom: 0,
 });

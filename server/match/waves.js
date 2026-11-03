@@ -300,6 +300,11 @@ function monsterPools(gd) {
   for (const [key, rec] of Object.entries(gd.raw.enemies || {})) {
     if (!rec || typeof rec !== 'object') continue;
     if (rec.tokenOnly || rec.notCountInTotal || leaders.has(key) || bossParts.has(key) || gd.inactiveEnemies.has(key)) continue;
+    // 炎佑（enemy_9012_acloon）在本复刻里**只**是我方盟约召唤的飞行单位（bonds.js spawnYanyou），从来不作为敌人出现 ——
+    // 官方回合表里就是这么排除的（templateSpawns / pickRoundEntry 都跳过它），第 14 回合起的骰子也必须一样排除：
+    // 它的数据记录 `tokenOnly: false`，不显式跳过的话会被当成普通精英飞行怪刷进怪海，从而带上「我方」的身份和增益。
+    // docs/history/0.2.1.md §21.9 / tools/build-data.mjs 都断言「炎佑 is never an enemy」。
+    if (key === ACLOON) continue;
     // 亡语 / 召唤产物（次数怪的亡语产物等）：只在召唤者被击杀时出现，不直接刷进怪海
     if (products.has(key)) continue;
     const rank = String(rec.rank || 'NORMAL');

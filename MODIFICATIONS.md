@@ -14,10 +14,9 @@
 
 同一台服务器上两种规则**同时存在**，开房的房主在房间设置里选「规则模式」：
 
-* **大逃杀**（默认）：下面的全部改动生效 —— 掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池/装备、无联防……、
-  扣血加钱、炎盟约 13 层后炎佑吃层数增益。
+* **大逃杀**（默认）：下面的全部改动生效 —— 掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池/装备、无联防……、扣血加钱。
 * **官方原版**：这一局完全按上游 v0.3.1 的官方规则 —— R14 最终攻势 + R15 隐秘核心、首领按血点缩放、按策略 22-45 浮动血量、
-  官方出怪表、官方卡池库存、联防回归；**本服的玩法一概关闭**（扣血加钱入口不给、炎佑不吃层数增益、关卡与怪物倍率走官方表）。
+  官方出怪表、官方卡池库存、联防回归；**本服的玩法一概关闭**（扣血加钱入口不给、关卡与怪物倍率走官方表）。
   同盟等待室的「交流」（官方表情）与大厅的「搜寻队友」不属于玩法规则，两种模式下都可用（皮肤等外观插件同理）。
 
 切换是**房内设置**（`room.setRulesVariant`，房主操作，开局前可改，切换会让其他真人的准备失效）；
@@ -28,13 +27,16 @@
 **两个模式互不影响的支撑点（改动这些地方时要一起检查）**：
 1. 凡是读规则的地方都走**每局实例**的 `gd.RULES` / `this.RULES`，**没有任何一处读模块级的 `RULES` 常量**
    （`battleRoyaleRules.js` 导出的那个只是测试/工具与「没有 gd」时的兜底）。
-2. 战斗模拟（浏览器与服务端共用）只认 `battle.flags`：`bossHitLimit` / `timesHpBonus` / `yanyouLayerBonusFrom`
+2. 战斗模拟（浏览器与服务端共用）只认 `battle.flags`：`bossHitLimit` / `timesHpBonus`
    都是 `GameData.battleFlags` 按变体下发，官方变体不下发 → 模拟端自然走官方行为。
 3. 每个 fork 专属机制在 `OFFICIAL_RULES` 里都要显式关掉；关掉的方式是「阈值置 0」而不是「猜 key 不存在」——
-   `bloodMoneyCost: 0` 即未启用、`yanyouLayerBonusFrom: 0` 即不吃层数、`rollWaveFrom: 0` 即不掷骰子。
+   `bloodMoneyCost: 0` 即未启用、`rollWaveFrom: 0` 即不掷骰子。
 4. 客户端按 `room.state.rulesVariant` 决定是否显示本服专属的入口（例如休整期顶栏的「扣血加钱」）。
 5. `test/match/rules-variant.test.js` 把上述链条端到端钉住：变体 → `battleFlags` → 战斗模拟，以及 `g.bloodMoney`
-   在两个变体下的接受/拒绝。
+   在两个变体下的接受/拒绝、炎佑在两个变体下都不进怪海也不吃层数。
+6. **我方专属单位绝不进怪海**：`enemy_9012_acloon`（炎佑）的数据记录 `tokenOnly: false`，所以每个「从全部怪物里抽」的
+   地方都要显式排除它（`server/match/waves.js` 的 `monsterPools` 与模板抽卡都排除）。它在复刻里只由 `spawnYanyou`
+   作为我方召唤单位出现，也**不吃**炎的层数增益（上游行为）；层数只作用于炎干员本身。
 
 **本项目是上述两代上游的修改版，由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护并分发，本次修改日期 2026-11-04。**
 它不是上游发布的版本，也未获上游作者或《明日方舟》权利人的授权或认可。
@@ -78,11 +80,12 @@
       不同，装备这边是**直接取消上限**。官方变体（`infiniteItems: false`）按 data/config.json 的
       `economy.itemPoolCopies`（tier 1–6 各 4/6/7/8/7/3）保持官方共享库存。
       注意：**每回合购买/奖励张数**（`storeCntMax`、`maxArtsPerRound`、整备区容量）仍按官方，取消的只是「共享库存」。
-11. **炎盟约 13 层后炎佑吃炎层数增益**（`yanyouLayerBonusFrom: 13`）：炎的层数达到 13 层后，**炎佑也吃到玩家的炎层数
-    攻击力增益** —— 与成员同一条公式（`base_atk + atk_per_stack·L`，直接乘算，`server/sim/content/bonds/core.js`
-    `yanyouLayerBonus`），随层数实时刷新。炎佑登场时（battleStart）补一次，之后每次层数变化（`onLayers`）刷新；层数
-    低于阈值时移除该增益。官方原版变体（`OFFICIAL_RULES.yanyouLayerBonusFrom: 0`）不吃层数，保持上游行为。
-    [ASSUMED] 增益只作用于攻击力（层的公式本来只有 `atk_per_stack`）；「13 层后」= 层数 ≥ 13 生效。
+11. **炎佑（`enemy_9012_acloon`）不参与大逃杀的骰子出怪**（`server/match/waves.js` 的 `monsterPools`）：
+    它在复刻里**只**是我方盟约的召唤单位（`spawnYanyou`），官方回合表一直是跳过它的
+    （`pickRoundEntry` / `templateSpawns` 都排除），但它的数据记录 `tokenOnly: false`，第 14 回合起「从全部怪物里抽」
+    的骰子若不多排一次，就会把它当普通精英飞行怪刷进怪海 —— 那会带来「敌方炎佑」这种不存在的单位，还会让它带上
+    我方的身份与增益。现在骰子池与模板一样显式跳过它（`docs/history/0.2.1.md`、`tools/build-data.mjs` 的
+    「炎佑 is never an enemy」断言由此成立）。炎佑也**不吃**炎的层数增益（上游行为）：层数只作用于炎干员本身。
 12. **扣血加钱（`g.bloodMoney`，休整期顶栏）**：花 3 点目标生命值换 1 资金；低于 3 滴不能用；**刚好 3 滴可以用，用完之后
     目标生命值归零、当场淘汰**。这是本服玩法，**只在大逃杀变体启用**（`bloodMoneyCost: 3`）；官方原版把它置 0
     （`OFFICIAL_RULES.bloodMoneyCost: 0`），服务端 `MatchPrep.bloodMoney` 直接回 `WRONG_PHASE`，客户端也按

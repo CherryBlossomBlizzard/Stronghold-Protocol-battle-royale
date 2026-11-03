@@ -84,71 +84,25 @@ test('炎 6 / 9: one / two 炎佑 with their template stats + 30 % of the real �
   }
 });
 
-// 卫戍协议：盟约 · 大逃杀（battle.flags.yanyouLayerBonusFrom = 13）：13 层后炎佑也吃到炎的层数增益。
-test('大逃杀 yanyouLayerBonusFrom=13: 炎佑吃炎层数增益（≥13 层实时刷新；<13 层 / 无 flag 不吃）', () => {
+// 炎佑在本复刻里只作为我方召唤存在：它**不吃**炎的层数增益（上游行为），层数只作用于炎干员本身。
+// 「怪海里的炎佑」不存在 —— server/match/waves.js 的骰子池显式排除 enemy_9012_acloon（test/match/waves.test.js 钉住）。
+test('炎佑不吃炎的层数增益（20 层也一样），层数只给炎干员', () => {
   const bb = bondBb('yanShip');
   const tpl = DATA.tokens.enemy_9012_acloon.stats;
   const list = [];
   for (let i = 0; i < 5; i++) list.push([`y${i}_a`, ['yanShip']]);
   list.push(['mani_a', ['maniShip']]);
-  const defs = defsOf(list);
-
-  // 12 层：炎佑不吃层数（和上游一样）；13 层起吃；层数变化实时刷新。
-  // 30 % 的「炎总和」在开战登场时定格（用登场那一刻成员的 atk，含 L=12 的层数增益），之后不随层数变；
-  // 层数增益是叠在它上面的 bond:yan 乘区（atkPct），随层数实时刷新。
   const h = makeBattle({
-    defs, units: lineup(list.map((x) => x[0])),
-    bonds: { yanShip: bondOn(6, 12), maniShip: { count: 1, active: true, tier: 1, layers: 0 } },
-    flags: { yanyouLayerBonusFrom: 13 },
+    defs: defsOf(list), units: lineup(list.map((x) => x[0])),
+    bonds: { yanShip: bondOn(6, 20), maniShip: { count: 1, active: true, tier: 1, layers: 0 } },
   });
   h.step(1);
   const [y] = h.b.allyUnits.filter((u) => u.defId === TOKEN_IDS.yanyou && u.alive);
   assert.ok(y, '炎佑 on the field');
-  const sumAtk = (L) => 5 * 1000 * (1 + bb.base_atk + bb.atk_per_stack * L);
-  const base = tpl.atk + sumAtk(12) * 0.3;      // 定格在登场时的 L=12 总和
-  close(y.s.atk, base, 1e-6, '12 层：炎佑不吃层数增益');
-  assert.equal(buffOf(y, 'bond:yan'), null, '12 层：没有 bond:yan');
-
-  h.b.addLayers('p1', 'yanShip', 1, 'test');    // → 13 层
-  h.step(2);
-  close(y.s.atk, base * (1 + bb.base_atk + bb.atk_per_stack * 13), 1e-6, '13 层：炎佑吃到层数增益');
-  assert.ok(buffOf(y, 'bond:yan'), 'bond:yan on 炎佑');
-
-  h.b.addLayers('p1', 'yanShip', 7, 'test');    // → 20 层：实时刷新
-  h.step(2);
-  close(y.s.atk, base * (1 + bb.base_atk + bb.atk_per_stack * 20), 1e-6, '20 层：增益随层数刷新');
-
-  // 官方（无 flag）：20 层的炎佑仍然只有模板 + 30 % 总和
-  const h2 = makeBattle({
-    defs, units: lineup(list.map((x) => x[0])),
-    bonds: { yanShip: bondOn(6, 20), maniShip: { count: 1, active: true, tier: 1, layers: 0 } },
-  });
-  h2.step(1);
-  const [y2] = h2.b.allyUnits.filter((u) => u.defId === TOKEN_IDS.yanyou && u.alive);
-  close(y2.s.atk, tpl.atk + sumAtk(20) * 0.3, 1e-6, '官方：炎佑不吃层数');
-  assert.equal(buffOf(y2, 'bond:yan'), null);
-  checkInvariants(h.b); checkInvariants(h2.b);
-});
-
-test('大逃杀 9 炎 + yanyouLayerBonusFrom：两只炎佑都吃层数，×1.5 与减伤不变', () => {
-  const bb = bondBb('yanShip');
-  const tpl = DATA.tokens.enemy_9012_acloon.stats;
-  const list = [];
-  for (let i = 0; i < 8; i++) list.push([`y${i}_a`, ['yanShip']]);
-  list.push(['mani_a', ['maniShip']]);
-  const h = makeBattle({
-    defs: defsOf(list), units: lineup(list.map((x) => x[0])),
-    bonds: { yanShip: bondOn(9, 15), maniShip: { count: 1, active: true, tier: 1, layers: 0 } },
-    flags: { yanyouLayerBonusFrom: 13 },
-  });
-  h.step(1);
-  const yy = h.b.allyUnits.filter((u) => u.defId === TOKEN_IDS.yanyou && u.alive);
-  assert.equal(yy.length, 2, '9 炎 → 2 炎佑');
-  const sumAtk = 8 * 1000 * (1 + bb.base_atk + bb.atk_per_stack * 15);
-  for (const y of yy) {
-    close(y.s.atk, (tpl.atk + sumAtk * 0.3) * bb.atk * (1 + bb.base_atk + bb.atk_per_stack * 15), 1e-6, '9 炎：×1.5 后再乘层数增益');
-    close(y.s.dmgTakenMul, 1 - bb.damage_resistance, 1e-9);
-  }
+  // 成员的 atk 含层数增益（所以 30 % 总和里也含），炎佑自己不再叠第二份 bond:yan
+  const sumAtk = 5 * 1000 * (1 + bb.base_atk + bb.atk_per_stack * 20);
+  close(y.s.atk, tpl.atk + sumAtk * 0.3, 1e-6, '炎佑只有模板 + 30 % 总和');
+  assert.equal(buffOf(y, 'bond:yan'), null, '炎佑身上没有 bond:yan');
   checkInvariants(h.b);
 });
 
