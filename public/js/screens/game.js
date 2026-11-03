@@ -196,6 +196,8 @@ function MatchScreen() {
   const emotes = useStore((s) => s.emotes);
   const roomSolo = useStore((s) => s.room?.mode === 'solo');
   const spectator = useStore((s) => isSpectating(s.room, s.me.playerId));
+  // 规则变体（room.state.rulesVariant）：官方原版没有「扣血加钱」这条本服玩法，按钮不给 —— 两个模式互不影响。
+  const officialRules = useStore((s) => s.room?.rulesVariant === 'official');
   const playerSettings = useSettings();
   const metricsSetting = playerSettings.combatMetrics === true;
   // gameplay plugins (DESIGN §32.6): the HUD corner's MOD mark — re-rendered only when the room's content changes
@@ -1679,7 +1681,7 @@ function MatchScreen() {
         pen=${pen} penAvail=${penAvail} onPen=${togglePen} config=${gd.config} frozenAt=${frozenAt}
         pause=${canPause || paused ? { show: canPause, paused, busy: pauseBusy, onToggle: () => togglePause(!paused) } : null}
         live=${liveLpNow} spectator=${spectator}
-        onBloodMoney=${() => actions.bloodMoney()}
+        onBloodMoney=${officialRules ? null : () => actions.bloodMoney()}
         spectators=${specFacts.list} myId=${myId} isHost=${specFacts.isHost} onRemoveSpectator=${removeSpectator} room=${modRoom} />
 
       <div class="gm__bonds">

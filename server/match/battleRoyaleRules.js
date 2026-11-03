@@ -179,6 +179,12 @@ export const OFFICIAL_RULES = Object.freeze({
   poolCapMultiplier: 1,
   infiniteItems: false,
   noUnite: false,
+  /**
+   * 官方：**没有**「扣血加钱」—— 这是本服的玩法，上游没有。`bloodMoneyCost: 0` 即视为未启用
+   * （MatchPrep.bloodMoney 用 `R.bloodMoneyCost > 0` 判掉；客户端按 room.rulesVariant 藏起按钮）。
+   */
+  bloodMoneyCost: 0,
+  bloodMoneyGain: 0,
   /** 官方：炎佑不吃炎层数增益（上游行为）。 */
   yanyouLayerBonusFrom: 0,
 });

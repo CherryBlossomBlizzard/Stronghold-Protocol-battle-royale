@@ -16,11 +16,14 @@ export class MatchPrep {
    * 卫戍协议：盟约 · 大逃杀：扣血加钱（g.bloodMoney）——花 RULES.bloodMoneyCost（3）点目标生命值换
    * RULES.bloodMoneyGain（1）资金。低于 3 滴不能用；刚好 3 滴可以用，用完之后目标生命值归零、当场淘汰。
    * 只在休整期、且自己还活着时可用；淘汰走与结算相同的路径（eliminate + 通告）。
+   * **只在大逃杀变体启用**：官方原版没有这条玩法（OFFICIAL_RULES.bloodMoneyCost = 0），一律 WRONG_PHASE ——
+   * 两个模式互不影响，官方局连扣血换钱的入口都不该通。
    */
   bloodMoney(ps) {
     if (this.phase !== PHASE.PREP) return fail(ERR.WRONG_PHASE);
     if (!ps.alive || ps.left) return fail(ERR.ELIMINATED);
     const R = this.gd.RULES || RULES;
+    if (!(R.bloodMoneyCost > 0)) return fail(ERR.WRONG_PHASE, 'blood money is a battle-royale rule');
     if (!(ps.lp >= R.bloodMoneyCost)) return fail(ERR.BAD_TARGET, msg('目标生命值不足 3 点'));
     ps.lp -= R.bloodMoneyCost;
     ps.funds += R.bloodMoneyGain;

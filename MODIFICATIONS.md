@@ -14,13 +14,27 @@
 
 同一台服务器上两种规则**同时存在**，开房的房主在房间设置里选「规则模式」：
 
-* **大逃杀**（默认）：下面的全部改动生效 —— 掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池/装备、无联防……
-* **官方原版**：这一局完全按上游 v0.3.1 的官方规则 —— R14 最终攻势 + R15 隐秘核心、首领按血点缩放、按策略 22-45 浮动血量、官方出怪表、官方卡池库存、联防回归。
+* **大逃杀**（默认）：下面的全部改动生效 —— 掷骰子出怪、五亿血首领战 R20、固定 30 血、无限卡池/装备、无联防……、
+  扣血加钱、炎盟约 13 层后炎佑吃层数增益。
+* **官方原版**：这一局完全按上游 v0.3.1 的官方规则 —— R14 最终攻势 + R15 隐秘核心、首领按血点缩放、按策略 22-45 浮动血量、
+  官方出怪表、官方卡池库存、联防回归；**本服的玩法一概关闭**（扣血加钱入口不给、炎佑不吃层数增益、关卡与怪物倍率走官方表）。
+  同盟等待室的「交流」（官方表情）与大厅的「搜寻队友」不属于玩法规则，两种模式下都可用（皮肤等外观插件同理）。
 
 切换是**房内设置**（`room.setRulesVariant`，房主操作，开局前可改，切换会让其他真人的准备失效）；
 对局创建时变体随房间进入 `Match`（`opts.rulesVariant`）→ `GameData` 的第三参，整局固定。
 实现：`server/match/battleRoyaleRules.js` 的 `OFFICIAL_RULES`（官方变体规则集）与 `GameData` 的 per-instance `this.RULES`；
 皮肤等外观插件不受规则模式影响，两种模式下都能用。
+
+**两个模式互不影响的支撑点（改动这些地方时要一起检查）**：
+1. 凡是读规则的地方都走**每局实例**的 `gd.RULES` / `this.RULES`，**没有任何一处读模块级的 `RULES` 常量**
+   （`battleRoyaleRules.js` 导出的那个只是测试/工具与「没有 gd」时的兜底）。
+2. 战斗模拟（浏览器与服务端共用）只认 `battle.flags`：`bossHitLimit` / `timesHpBonus` / `yanyouLayerBonusFrom`
+   都是 `GameData.battleFlags` 按变体下发，官方变体不下发 → 模拟端自然走官方行为。
+3. 每个 fork 专属机制在 `OFFICIAL_RULES` 里都要显式关掉；关掉的方式是「阈值置 0」而不是「猜 key 不存在」——
+   `bloodMoneyCost: 0` 即未启用、`yanyouLayerBonusFrom: 0` 即不吃层数、`rollWaveFrom: 0` 即不掷骰子。
+4. 客户端按 `room.state.rulesVariant` 决定是否显示本服专属的入口（例如休整期顶栏的「扣血加钱」）。
+5. `test/match/rules-variant.test.js` 把上述链条端到端钉住：变体 → `battleFlags` → 战斗模拟，以及 `g.bloodMoney`
+   在两个变体下的接受/拒绝。
 
 **本项目是上述两代上游的修改版，由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护并分发，本次修改日期 2026-11-04。**
 它不是上游发布的版本，也未获上游作者或《明日方舟》权利人的授权或认可。
@@ -60,6 +74,10 @@
     `yanyouLayerBonus`），随层数实时刷新。炎佑登场时（battleStart）补一次，之后每次层数变化（`onLayers`）刷新；层数
     低于阈值时移除该增益。官方原版变体（`OFFICIAL_RULES.yanyouLayerBonusFrom: 0`）不吃层数，保持上游行为。
     [ASSUMED] 增益只作用于攻击力（层的公式本来只有 `atk_per_stack`）；「13 层后」= 层数 ≥ 13 生效。
+12. **扣血加钱（`g.bloodMoney`，休整期顶栏）**：花 3 点目标生命值换 1 资金；低于 3 滴不能用；**刚好 3 滴可以用，用完之后
+    目标生命值归零、当场淘汰**。这是本服玩法，**只在大逃杀变体启用**（`bloodMoneyCost: 3`）；官方原版把它置 0
+    （`OFFICIAL_RULES.bloodMoneyCost: 0`），服务端 `MatchPrep.bloodMoney` 直接回 `WRONG_PHASE`，客户端也按
+    `room.state.rulesVariant` 不显示这个按钮 —— 两个模式互不影响。
 
 ### 本服新增的社交与外观功能（官方 盟约 有、上游 0.3.1 网页版未复刻的部分）
 
