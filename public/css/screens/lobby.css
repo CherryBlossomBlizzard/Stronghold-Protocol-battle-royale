@@ -249,3 +249,43 @@
 }
 .create-box .btn--xl { height: .92rem; font-size: calc(.32 * var(--t)); letter-spacing: .3em; }
 .create-box__hint { display: flex; align-items: center; justify-content: center; min-height: .3rem; font-size: calc(.14 * var(--t)); color: var(--text-lo); }
+
+/* ---- 搜寻队友 (官方 联合模拟 matchmaking, research 06 §3.3) ------------------------------------------ */
+.search-panel .panel__body { display: flex; flex-direction: column; gap: .16rem; padding: .22rem .26rem .2rem; }
+.search-panel__head { display: flex; align-items: center; gap: .12rem; font-size: calc(.2 * var(--t)); font-weight: 700; color: var(--text-hi); }
+.search-panel__head > .icon { width: .26rem; height: .26rem; color: var(--mint-500); }
+.search-panel__head .micro { margin-left: .08rem; }
+.search-panel__hint { font-size: calc(.14 * var(--t)); line-height: 1.5; }
+.search-panel__row { display: flex; gap: .12rem; }
+.search-panel__opt {
+  flex: 1; display: flex; flex-direction: column; gap: .06rem; text-align: left; padding: .14rem .18rem;
+  border: 1px solid var(--line); background: rgba(8, 13, 11, .6); cursor: pointer; color: var(--text-md);
+  transition: border-color var(--t-med), background var(--t-med);
+}
+.search-panel__opt.is-active { border-color: var(--mint-400); background: rgba(23, 249, 183, .1); color: var(--text-hi); }
+.search-panel__opt:disabled { opacity: .5; cursor: default; }
+.search-panel__opt-name { font-size: calc(.17 * var(--t)); font-weight: 700; }
+.search-panel__opt-desc { font-size: calc(.13 * var(--t)); line-height: 1.4; }
+.search-panel__cap {
+  flex: 1; padding: .1rem 0; border: 1px solid var(--line); background: rgba(8, 13, 11, .6);
+  color: var(--text-md); font-size: calc(.16 * var(--t)); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.search-panel__cap.is-active { border-color: var(--amber); color: var(--text-hi); background: rgba(246, 163, 41, .12); }
+.search-panel__cap:disabled { opacity: .5; cursor: default; }
+
+/* The 搜寻中 overlay: shown while queued (store.js search.state = 'queued'); the room.state that follows swaps the screen. */
+.search-overlay {
+  position: fixed; inset: 0; z-index: 95; display: grid; place-items: center;
+  background: rgba(4, 7, 6, .82); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.search-overlay__box {
+  --bk-c: var(--mint-700);
+  display: flex; flex-direction: column; align-items: center; gap: .18rem; width: min(6.4rem, 86vw);
+  padding: .5rem .44rem; background: rgba(9, 14, 12, .96); border: 1px solid var(--line); text-align: center;
+}
+.search-overlay__box h2 { font-size: calc(.26 * var(--t)); color: var(--text-hi); letter-spacing: .1em; }
+.search-overlay__mode { font-size: calc(.15 * var(--t)); color: var(--text-md); }
+.search-overlay__count { display: flex; align-items: baseline; justify-content: center; gap: .1rem; font-size: calc(.16 * var(--t)); }
+.search-overlay__count .num { font-size: calc(.5 * var(--t)); line-height: 1; color: var(--mint-400); text-shadow: 0 0 .14rem rgba(23, 249, 183, .45); }
+.search-overlay__count .t-lo { margin-left: .16rem; }
+.search-overlay__tip { font-size: calc(.14 * var(--t)); line-height: 1.5; min-height: .42rem; animation: tip-in var(--t-slow) var(--ease-out); }

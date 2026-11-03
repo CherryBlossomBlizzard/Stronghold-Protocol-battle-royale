@@ -123,6 +123,11 @@
   background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .06) 0 .05rem, transparent .05rem .1rem);
 }
 .seat__art .avatar { --av: 2.1rem; }
+/* 交流 (官方 盟约 的房间交流，research 06 §9.1): the sender's emote bubble over their seat's avatar, for chatTime 3 s.
+   Two-class selector so it wins over emotes.css `.ebubble { position: relative }` regardless of sheet load order. */
+.seat__art .seat__bubble { position: absolute; top: .12rem; right: .12rem; z-index: 4; }
+/* The room's 交流 wheel: bottom-left above the room bar, like the battle's corner (research 06 §9.1). */
+.room-emote { position: fixed; left: .3rem; bottom: 1.5rem; z-index: 40; }
 .seat__bot-label {
   display: flex;
   align-items: center;

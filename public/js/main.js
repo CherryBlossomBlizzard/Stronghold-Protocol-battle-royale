@@ -149,7 +149,7 @@ function backToLobby() {
   clearTimeout(restoreTimer);
   const s = store.get();
   if (s.room || s.match.public) closeAllDialogs();
-  store.set({ room: null, match: emptyMatch(), ticker: [], emotes: [] });
+  store.set({ room: null, match: emptyMatch(), ticker: [], emotes: [], roomEmotes: [], search: null });
   store.patch('ui', { restoring: false });
 }
 
@@ -210,7 +210,11 @@ function onRoomState(msg) {
   const prevRoom = store.get().room;
   // A (new) match starts: forget the previous match's state so stale results never show.
   if (room.inMatch && !(prevRoom && prevRoom.inMatch && prevRoom.code === room.code)) store.set({ match: emptyMatch() });
-  store.set({ room });
+  // 搜寻队友 is over once this page holds a room (the server dequeued it): drop the queue state even if its m.search
+  // never arrived. A room's 交流 bubbles live as long as the room does — only a different room clears them.
+  const patch = { room, search: null };
+  if (!(prevRoom && prevRoom.code === room.code)) patch.roomEmotes = [];
+  store.set(patch);
   identity.rememberMatch(room.inMatch && seats.some((seat) => seat?.playerId === myId)
     ? { name: store.get().me.name, code: room.code || '' } : null);
   if (room.mode === 'coop' && typeof room.code === 'string') rememberRoom(room.code, room.test === true);
@@ -281,6 +285,22 @@ function wireNet() {
   });
   net.on('m.emote', (msg) => {
     store.set((s) => ({ emotes: [...s.emotes.slice(-(EMOTE_KEEP - 1)), { seq: ++seq, playerId: msg.playerId, id: msg.id, at: Date.now() }] }));
+  });
+  // 同盟等待室的交流（官方 盟约：emotes only，research 06 §0 fact 16）：room.emote 的广播，房间界面里弹气泡。
+  net.on('m.roomEmote', (msg) => {
+    store.set((s) => ({ roomEmotes: [...s.roomEmotes.slice(-(EMOTE_KEEP - 1)), { seq: ++seq, playerId: msg.playerId, id: msg.id, at: Date.now() }] }));
+  });
+  // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：m.search 的状态推送。'queued' 进入排队；'found'/'timeout'
+  // 房间马上以 room.state 到达（清掉排队态）；'cancelled' 退出排队。
+  net.on('m.search', (msg) => {
+    const state = typeof msg.state === 'string' ? msg.state : null;
+    if (state === 'queued') {
+      store.set({ search: { state, search: msg.search, difficulty: msg.difficulty, capacity: msg.capacity, queue: msg.queue, timeoutSec: msg.timeoutSec, at: Date.now() } });
+    } else if (state === 'found' || state === 'timeout') {
+      store.set({ search: null }); // the room.state that follows takes over the screen
+    } else if (state === 'cancelled') {
+      store.set({ search: null });
+    }
   });
 
   // Entering (title → lobby) while already online also needs the deep-link join.

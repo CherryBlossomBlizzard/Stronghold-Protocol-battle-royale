@@ -90,6 +90,12 @@ export const initialState = Object.freeze({
   match: emptyMatch(),
   ticker: [],
   emotes: [],
+  // 同盟等待室的交流（官方 盟约：emotes only，research 06 §0 fact 16）：recent `m.roomEmote` events, like `emotes` but
+  // for the room screen. Cleared when the room closes.
+  roomEmotes: [],
+  // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：`m.search` state — null when idle, else
+  // { state: 'queued'|'found'|'timeout'|'cancelled', search, difficulty, capacity, queue, timeoutSec, at }.
+  search: null,
   clock: { offset: 0, rtt: null, synced: false },
   ui: { pendingJoin: null, restoring: false, buildStale: false },
 });

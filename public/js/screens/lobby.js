@@ -15,8 +15,9 @@
 import { TestMark } from '../ui/testConsole.js';
 import { ResumeMatchButton } from '../ui/resumeMatch.js';
 import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
-import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, ROOM_CODE_LEN, MAX_SEATS, MAX_SPECTATORS, modeIdFor, ERR } from '../../../shared/constants.js';
-import { html, confirmDialog, Button, Icon, MicroLabel, Panel, TextField, PingPill, AvatarFrame, Tooltip, Spinner, DifficultyIcon, doctorNo } from '../ui/components.js';
+import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, ROOM_CODE_LEN, MAX_SEATS, MAX_SPECTATORS, modeIdFor, ERR,
+  DEFAULT_SEATS, ROOM_CAPACITIES, MATCH_TIMEOUT_MS } from '../../../shared/constants.js';
+import { html, confirmDialog, Button, Icon, MicroLabel, Panel, TextField, PingPill, AvatarFrame, Tooltip, Spinner, DifficultyIcon, doctorNo, useTicker } from '../ui/components.js';
 import { toast, toastError } from '../ui/toasts.js';
 import { GuideButton } from '../ui/guide.js';
 import { openStats } from './stats.js';
@@ -224,6 +225,82 @@ function TipsPanel() {
   </div>`;
 }
 
+/**
+ * 搜寻队友 (官方 联合模拟 matchmaking, research 06 §3.3): pick the search mode and room capacity, then 开始搜寻. The
+ * server queues the player with everyone searching the same 难度+容量 and assembles a 同盟 once enough real players
+ * gather (or fills with AI on timeout). Disabled while solo is selected — matchmaking is a co-op thing.
+ */
+function SearchPanel({ roomMode, searchMode, capacity, online, busy, onPickMode, onPickCapacity, onSearch }) {
+  const solo = roomMode === 'solo';
+  return html`<${Panel} class="search-panel brackets" tone="mint">
+    <div class="search-panel__head">
+      <${Icon} name="users" />
+      <span>${t('搜寻队友')}<${MicroLabel}>MATCHMAKING<//></span>
+    </div>
+    <p class="search-panel__hint t-lo">${solo ? t('搜寻队友用于同盟模拟：先选择「同盟模拟」') : t('按难度与人数搜寻队友，凑齐后自动组建同盟；等不到足够真人时由 AI 队友补位')}</p>
+    <div class="search-panel__row" role="radiogroup" aria-label=${t('搜寻方式')}>
+      <button type="button" role="radio" aria-checked=${searchMode === 'exact' ? 'true' : 'false'}
+        class=${`search-panel__opt${searchMode === 'exact' ? ' is-active' : ''}`} disabled=${solo || !!busy}
+        onClick=${() => onPickMode('exact')}>
+        <span class="search-panel__opt-name">${t('精确搜寻')}</span>
+        <span class="search-panel__opt-desc t-dim">${t('更容易搜寻到实力相近的队友')}</span>
+      </button>
+      <button type="button" role="radio" aria-checked=${searchMode === 'fast' ? 'true' : 'false'}
+        class=${`search-panel__opt${searchMode === 'fast' ? ' is-active' : ''}`} disabled=${solo || !!busy}
+        onClick=${() => onPickMode('fast')}>
+        <span class="search-panel__opt-name">${t('快速搜寻')}</span>
+        <span class="search-panel__opt-desc t-dim">${t('更快速地搜寻队友')}</span>
+      </button>
+    </div>
+    <div class="search-panel__row" role="radiogroup" aria-label=${t('房间容量')}>
+      ${ROOM_CAPACITIES.map((n) => html`<button key=${n} type="button" role="radio" aria-checked=${capacity === n ? 'true' : 'false'}
+        class=${`search-panel__cap${capacity === n ? ' is-active' : ''}`} disabled=${solo || !!busy}
+        onClick=${() => onPickCapacity(n)}>${n}</button>`)}
+    </div>
+    <${Button} variant="secondary" size="lg" block=${true} icon="search" loading=${busy === 'search'} disabled=${solo || !online || !!busy}
+      onClick=${onSearch}>${t('开始搜寻')}<//>
+  <//>`;
+}
+
+/**
+ * The 搜寻中 overlay (research 06 §3.3): shown while the player is queued (store.js search.state = 'queued'). A live
+ * elapsed / remaining counter, the rotating official matching tips, and 取消搜寻. The room arrives as room.state and the
+ * router swaps the screen; m.search { state: 'found'|'timeout' } clears this first.
+ */
+function SearchOverlay({ search, onCancel, busy }) {
+  const cfg = getConfig();
+  useTicker(500);
+  const tips = Array.isArray(cfg?.matchingTips) && cfg.matchingTips.length
+    ? cfg.matchingTips.map((x) => (typeof x === 'string' ? x : x?.tip)).filter((x) => typeof x === 'string' && x)
+    : FALLBACK_TIPS.map((x) => t(x));
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * Math.max(1, tips.length)));
+  useEffect(() => {
+    if (tips.length < 2) return undefined;
+    const id = setInterval(() => setIdx((i) => (i + 1) % tips.length), TIP_ROTATE_MS);
+    return () => clearInterval(id);
+  }, [tips.length]);
+  const totalMs = Number(search?.timeoutSec) > 0 ? Number(search.timeoutSec) * 1000 : MATCH_TIMEOUT_MS;
+  const elapsed = Math.max(0, Math.round((Date.now() - (search?.at ?? Date.now())) / 1000));
+  const left = Math.max(0, Math.round(totalMs / 1000) - elapsed);
+  return html`<div class="search-overlay" role="dialog" aria-label=${t('搜寻队友中')}>
+    <div class="search-overlay__box brackets">
+      <${Spinner} size="lg" label="SEARCHING" />
+      <h2>${t('正在搜寻队友…')}</h2>
+      <p class="search-overlay__mode">
+        ${search?.search === 'exact' ? t('精确搜寻') : t('快速搜寻')}
+        <span class="t-dim"> · ${search?.difficulty ? t(DIFFICULTY_NAMES[search.difficulty] || '') : ''}</span>
+        <span class="t-dim"> · ${t('房间容量')} ${search?.capacity ?? DEFAULT_SEATS}</span>
+      </p>
+      <p class="search-overlay__count">
+        <span class="num">${String(left).padStart(2, '0')}</span><span class="t-dim">${t('秒')}</span>
+        <span class="t-lo">${t('队列中 {n} 人', { n: search?.queue ?? 1 })}</span>
+      </p>
+      ${tips.length ? html`<p key=${idx} class="search-overlay__tip t-lo">${tips[idx]}</p>` : null}
+      <${Button} variant="ghost" size="lg" icon="close" loading=${busy === 'searchCancel'} onClick=${onCancel}>${t('取消搜寻')}<//>
+    </div>
+  </div>`;
+}
+
 function ModeCard({ card, selected, onSelect }) {
   return html`<button type="button" class=${`mode-card brackets${selected ? ' is-selected' : ''}`} onClick=${() => onSelect(card.id)}
       aria-pressed=${selected ? 'true' : 'false'}>
@@ -262,11 +339,18 @@ function DifficultyCard({ roomMode, difficulty, selected, onSelect }) {
 export function LobbyScreen() {
   const me = useStore((s) => s.me, shallowEqual);
   const conn = useStore((s) => s.connection, shallowEqual);
+  // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：m.search 的排队状态（store.js search）。
+  const search = useStore((s) => s.search);
   useData('config');
   const [roomMode, setRoomMode] = useState(() => (loadPref('lobby.mode', 'coop') === 'solo' ? 'solo' : 'coop'));
   const [difficulty, setDifficulty] = useState(() => {
     const d = loadPref('lobby.difficulty', 'FUNNY');
     return DIFFICULTIES.includes(d) ? d : 'FUNNY';
+  });
+  const [searchMode, setSearchMode] = useState(() => (loadPref('lobby.searchMode', 'fast') === 'exact' ? 'exact' : 'fast'));
+  const [capacity, setCapacity] = useState(() => {
+    const n = loadPref('lobby.capacity', DEFAULT_SEATS);
+    return ROOM_CAPACITIES.includes(n) ? n : DEFAULT_SEATS;
   });
   const [code, setCode] = useState('');
   const [asTest, setAsTest] = useState(false);
@@ -284,6 +368,8 @@ export function LobbyScreen() {
 
   const pickMode = (m) => { setRoomMode(m); savePref('lobby.mode', m); };
   const pickDifficulty = (d) => { setDifficulty(d); savePref('lobby.difficulty', d); };
+  const pickSearchMode = (m) => { setSearchMode(m); savePref('lobby.searchMode', m); };
+  const pickCapacity = (n) => { setCapacity(n); savePref('lobby.capacity', n); };
 
   const run = async (kind, fn) => {
     if (inFlight.current) return;
@@ -298,6 +384,9 @@ export function LobbyScreen() {
   const create = () => run('create', () => net.request('room.create', {
     mode: roomMode, difficulty, ...(testMode && asTest ? { test: true } : {}),
   }));
+  // 搜寻队友（coop only）：进入匹配队列；房间凑齐 / 超时后由服务端组建同盟并推送 room.state。
+  const startSearch = () => run('search', () => net.request('room.search', { search: searchMode, difficulty, capacity }));
+  const cancelSearch = () => run('searchCancel', () => net.request('room.searchCancel', {}));
   const join = (c = code) => {
     // `onClick=${join}` hands the click EVENT as the first argument, and a default parameter only applies to
     // `undefined` — codeArg keeps an event target out of the key and falls back to the input field
@@ -411,8 +500,12 @@ export function LobbyScreen() {
               : html`<${Spinner} size="sm" label="CONNECTING" />`}
           </div>
         </div>
+        ${roomMode === 'coop' ? html`<div class="section-label"><span class="section-label__idx num">04</span>${t('搜寻队友')}<${MicroLabel}>FIND TEAMMATES<//></div>
+          <${SearchPanel} roomMode=${roomMode} searchMode=${searchMode} capacity=${capacity} online=${online} busy=${busy}
+            onPickMode=${pickSearchMode} onPickCapacity=${pickCapacity} onSearch=${startSearch} />` : null}
       </section>
     </div>
+    ${search && search.state === 'queued' ? html`<${SearchOverlay} search=${search} busy=${busy} onCancel=${cancelSearch} />` : null}
     ${sweepOpen ? html`<${SweepReport} onClose=${() => setSweepOpen(false)} />` : null}
   </div>`;
 }

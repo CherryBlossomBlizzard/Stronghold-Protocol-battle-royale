@@ -160,9 +160,29 @@
 //     time → room.closed {kicked} to it. A spectator in a LOBBY room may take a free player seat with room.join of the same
 //     code; a player never switches to spectating in place (ALREADY). Disconnect / grace / reconnect / expiry work as for
 //     a player seat (the seat is kept and given back on resume).
+//   * 同盟等待室的交流 (卫戍协议：盟约 · 大逃杀 — room.emote, research 06 §9.1 / §0 fact 16 "Communication is emotes
+//     only"): the official 盟约 has no text chat anywhere — in a room as in a match the communication is official emotes.
+//     room.emote { id } takes an id of the same official table as g.emote, is rate-limited with the official chatCD
+//     (EMOTE_COOLDOWN_MS 1 s, per session), and is broadcast to every connected member of the room as
+//     m.roomEmote { playerId, id } (the room-phase counterpart of the match's m.emote; the client pops the bubble over
+//     that seat for chatTime 3 s). NOT_IN_ROOM outside a room, SPECTATOR for a spectator seat (watch only, like in a
+//     match), BAD_MSG for an unknown id, RATE inside the cooldown. The official room-scene sprites (AUTOCHESS_ROOM, 10
+//     emotes) are not in the client bundles and the mirror lacks them, so the room reuses the 36 battle emotes' art.
+//   * 搜寻队友 (卫戍协议：盟约 · 大逃杀 — room.search / room.searchCancel / m.search, the official 联合模拟 matchmaking,
+//     research 06 §3.3): the lobby's 精确搜寻 ("更容易搜寻到实力相近的队友") / 快速搜寻 ("更快速地搜寻队友") queue
+//     players by 难度+容量 (searchQueue: playerId → { search, difficulty, capacity, at }) — one co-op room per group,
+//     assembled when the group holds `capacity` real players (the first entry hosts), or AI-filled (addBot seats) when
+//     every entry passed its own deadline: 快速 after MATCH_FAST_FILL_MS (15 s [ASSUMED] — this remake has no trophy data
+//     to match skill on, so the two modes differ only in this wait), 精确 after the official matchTimeMax
+//     (MATCH_TIMEOUT_MS 120 s). drainSearch runs every MATCH_POLL_MS while the queue is non-empty (searchTimer, unref'd
+//     like net.js's sweep; tests call it directly). A member hears m.search { state } — 'queued' on entry, 'found' /
+//     'timeout' right before its room.state, 'cancelled' after room.searchCancel. An entry leaves the queue when it
+//     assembles, cancels, creates or joins a room by key, disconnects (onDisconnect) or expires (onExpire); a vanished
+//     session is dropped at the drain. WRONG_PHASE while in a room, ALREADY while already queued.
 
 import { randomBytes, randomInt } from 'node:crypto';
-import { DIFFICULTIES, ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor, ROOM_CAPACITIES, DEFAULT_SEATS } from '../shared/constants.js';
+import { DIFFICULTIES, ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor, ROOM_CAPACITIES, DEFAULT_SEATS,
+  MATCH_TIMEOUT_MS, MATCH_FAST_FILL_MS, MATCH_POLL_MS, EMOTES, EMOTE_COOLDOWN_MS } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks, charPotentialChanges, checkSkinSelection, operatorCharIds } from '../shared/protocol.js';
 import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
 import { getData as defaultGetData, lookup } from './data.js';
@@ -441,6 +461,15 @@ export class Lobby {
     this.graceTimers = new Map();
     /** @type {Map<string, NodeJS.Timeout>} deferred (coalesced) resyncs by playerId */
     this.resyncTimers = new Map();
+    /**
+     * 搜寻队友 (research 06 §3.3): the matchmaking queue — playerId → { playerId, search, difficulty, capacity, at }.
+     * Drained every MATCH_POLL_MS while it is non-empty (searchTimer); entries leave it when they assemble a room,
+     * cancel, or their session goes.
+     * @type {Map<string, { playerId: string, search: 'exact'|'fast', difficulty: string, capacity: number, at: number }>}
+     */
+    this.searchQueue = new Map();
+    /** @type {NodeJS.Timeout | null} the queue-drain timer (ensureSearchTimer) */
+    this.searchTimer = null;
     /** per-network limit warnings: at most one log line per 10 s (the rest are counted) */
     this.limitLog = { at: -Infinity, suppressed: 0 };
     /** log lines said once (warnOnce) */
@@ -661,6 +690,10 @@ export class Lobby {
       case 'room.create': return this.create(session, msg);
       case 'room.join': return this.join(session, msg);
       case 'room.leave': return this.leave(session);
+      // 同盟等待室的交流（官方 盟约：emotes only，research 06 §0 fact 16）+ 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）
+      case 'room.emote': return this.roomEmote(session, msg);
+      case 'room.search': return this.search(session, msg);
+      case 'room.searchCancel': return this.searchCancel(session);
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
@@ -692,6 +725,7 @@ export class Lobby {
   /** The session's socket closed. @param {import('./net.js').Session} session */
   onDisconnect(session) {
     this.clearResync(session.playerId); // the next resume resyncs immediately
+    this.dequeueSearch(session.playerId); // 搜寻队友: a queued player that dropped is out of the queue
     const room = this.roomOf(session);
     // a solo run may be resumed within singleReconnectTime (24 h); everything else keeps the registry's window
     session.resumeWindowMs = room && room.match && room.mode === 'solo' ? this.soloResumeWindowMs() : null;
@@ -720,6 +754,7 @@ export class Lobby {
     session.notice = null;
     session.pendingResult = null;
     this.clearResync(session.playerId);
+    this.dequeueSearch(session.playerId);
     const code = session.roomCode;
     const room = code ? this.rooms.get(code) : null;
     // in order with the room's messages when its match runs in a match host (header "Gameplay plugins")
@@ -740,6 +775,8 @@ export class Lobby {
     this.offContentStale?.();
     this.offStale = null;
     this.offContentStale = null;
+    this.stopSearchTimer();
+    this.searchQueue.clear();
     for (const room of [...this.rooms.values()]) this.disposeRoom(room, reason);
     for (const t of this.graceTimers.values()) clearTimeout(t);
     this.graceTimers.clear();
@@ -788,6 +825,7 @@ export class Lobby {
     session.roomCode = code;
     session.notice = null;
     session.pendingResult = null;
+    this.dequeueSearch(session.playerId); // 搜寻队友: creating a room takes the player out of the queue
     this.log.info(`[lobby] ${code} created (${mode}/${difficulty}${room.test ? ', test' : ''}) by ${session.name}`);
     this.broadcastState(room);
     return OK;
@@ -811,6 +849,7 @@ export class Lobby {
     session.roomCode = room.code;
     session.notice = null;
     session.pendingResult = null;
+    this.dequeueSearch(session.playerId); // 搜寻队友: joining by key takes the player out of the queue
     if (!room.hostId) room.hostId = session.playerId;
     this.broadcastState(room);
     return OK;
@@ -821,6 +860,181 @@ export class Lobby {
     if (!room) return fail(ERR.NOT_IN_ROOM);
     this.removeMember(room, session.playerId);
     return OK;
+  }
+
+  // ---------------------------------------------------------------------------------------------------
+  // 同盟等待室的交流 (room.emote) — 官方 盟约 没有文字聊天，「communication is emotes only」(research 06 §0 fact 16)：
+  // 房间里发一个官方表情（与对局内 g.emote 同一张表、同样的 chatCD 限频），服务端向房间广播 m.roomEmote。
+  // 观战席只能看不能发（与对局内表情一致：SPECTATOR）。
+  // ---------------------------------------------------------------------------------------------------
+
+  /**
+   * room.emote { id }: an official emote in the 同盟等待室 (the official room scene's 交流 panel). Rate-limited with the
+   * official chatCD (1 s, EMOTE_COOLDOWN_MS); the bubble is the client's business (chatTime 3 s). Broadcast to every
+   * connected member of the room as `m.roomEmote { playerId, id }`.
+   * @param {import('./net.js').Session} session
+   * @param {{ id: string }} msg
+   */
+  roomEmote(session, { id }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.spectatorOf(session.playerId)) return fail(ERR.SPECTATOR);
+    if (!EMOTES.includes(id)) return fail(ERR.BAD_MSG, 'unknown emote');
+    const now = this.now();
+    if (now - (session.lastRoomEmoteAt ?? -Infinity) < EMOTE_COOLDOWN_MS) return fail(ERR.RATE);
+    session.lastRoomEmoteAt = now;
+    this.broadcastRoom(room, { t: 'm.roomEmote', playerId: session.playerId, id });
+    return OK;
+  }
+
+  // ---------------------------------------------------------------------------------------------------
+  // 搜寻队友 (room.search / room.searchCancel) — 官方 联合模拟 的 matchmaking (research 06 §3.3): 精确搜寻「更容易搜寻到
+  // 实力相近的队友」/ 快速搜寻「更快速地搜寻队友」，超时 matchTimeMax = 120 s。本复刻没有奖杯数据，[ASSUMED] 两种搜寻的
+  // 区别是凑不满真人时的等待时长：精确等满 MATCH_TIMEOUT_MS 才由 AI 补位开局，快速 MATCH_FAST_FILL_MS 后就补位；
+  // 队列按 难度+容量 分组，组内凑满 capacity 个真人立即开房。
+  // ---------------------------------------------------------------------------------------------------
+
+  /**
+   * room.search { search, difficulty, capacity? }: join the matchmaking queue. Refused while the player is in a room
+   * (WRONG_PHASE) or already queued (ALREADY). Answers OK and pushes `m.search { state: 'queued' }`; the room arrives
+   * later as `m.search { state: 'found' }` + room.state (drainSearch assembles it).
+   * @param {import('./net.js').Session} session
+   * @param {{ search: 'exact'|'fast', difficulty: string, capacity?: number }} msg
+   */
+  search(session, { search, difficulty, capacity }) {
+    if (this.roomOf(session)) return fail(ERR.WRONG_PHASE, 'leave your room first');
+    if (this.searchQueue.has(session.playerId)) return fail(ERR.ALREADY, 'already searching');
+    const cap = capacity === undefined ? DEFAULT_SEATS : capacity;
+    this.searchQueue.set(session.playerId, { playerId: session.playerId, search, difficulty, capacity: cap, at: this.now() });
+    this.ensureSearchTimer();
+    this.log.info(`[lobby] ${session.name} searches (${search}, ${difficulty}, cap ${cap}; queue ${this.searchQueue.size})`);
+    this.sendSearch(session, 'queued');
+    return OK;
+  }
+
+  /** room.searchCancel: leave the queue (no-op answer when not queued). @param {import('./net.js').Session} session */
+  searchCancel(session) {
+    if (!this.searchQueue.delete(session.playerId)) return OK;
+    if (this.searchQueue.size === 0) this.stopSearchTimer();
+    this.sendSearch(session, 'cancelled');
+    return OK;
+  }
+
+  /** Take a player out of the queue silently (it entered a room another way, disconnected, expired). */
+  dequeueSearch(playerId) {
+    if (!this.searchQueue.delete(playerId)) return;
+    if (this.searchQueue.size === 0) this.stopSearchTimer();
+  }
+
+  /** `m.search` state push to one session. @param {import('./net.js').Session} session @param {string} state */
+  sendSearch(session, state) {
+    const e = this.searchQueue.get(session.playerId);
+    sendSession(session, {
+      t: 'm.search', state,
+      ...(e ? { search: e.search, difficulty: e.difficulty, capacity: e.capacity } : {}),
+      queue: this.searchQueue.size,
+      timeoutSec: Math.round(MATCH_TIMEOUT_MS / 1000),
+    });
+  }
+
+  /** The queue-drain timer runs only while anyone is queued (MATCH_POLL_MS; unref'd like net.js's sweep). */
+  ensureSearchTimer() {
+    if (this.searchTimer) return;
+    this.searchTimer = setInterval(() => {
+      try { this.drainSearch(); } catch (e) { this.log.error('[lobby] search drain crashed', e); }
+    }, MATCH_POLL_MS);
+    this.searchTimer.unref?.();
+  }
+
+  stopSearchTimer() {
+    if (this.searchTimer) clearInterval(this.searchTimer);
+    this.searchTimer = null;
+  }
+
+  /**
+   * Drain the matchmaking queue: per 难度+容量 group, assemble a room once it holds `capacity` real players, or the
+   * entries that passed their own deadline — 快速搜寻 fills with AI after MATCH_FAST_FILL_MS, 精确搜寻 after the official
+   * matchTimeMax (MATCH_TIMEOUT_MS) (research 06 §3.3 [ASSUMED] "fill with bots"). Each entry keeps its own promise: a
+   * 精确 searcher still within its window never delays a 快速 one that has timed out. Called by the timer; tests may call
+   * it directly. A session that vanished (registry) is dropped.
+   */
+  drainSearch() {
+    if (this.searchQueue.size === 0) { this.stopSearchTimer(); return; }
+    const now = this.now();
+    // drop entries whose session is gone (they are removed on disconnect too — this is the belt)
+    for (const [pid] of this.searchQueue) if (!this.registry.byId(pid)) this.searchQueue.delete(pid);
+    const groups = new Map();
+    for (const e of this.searchQueue.values()) {
+      const k = `${e.difficulty}|${e.capacity}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(e);
+    }
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.at - b.at);
+      const capacity = list[0].capacity;
+      if (list.length >= capacity) { this.assembleSearchRoom(list.slice(0, capacity), false); continue; }
+      // not full: assemble the entries that passed their OWN deadline (fast: MATCH_FAST_FILL_MS, exact:
+      // MATCH_TIMEOUT_MS), AI-filling the rest. A waiting 精确 searcher never holds a 快速 one past its own deadline.
+      const due = list.filter((e) => now - e.at >= (e.search === 'fast' ? MATCH_FAST_FILL_MS : MATCH_TIMEOUT_MS));
+      if (due.length === 0) continue;
+      this.assembleSearchRoom(due, true);
+    }
+    if (this.searchQueue.size === 0) this.stopSearchTimer();
+  }
+
+  /**
+   * Build a co-op room for the matched entries (first = host), AI-fill when `aiFill`, tell every member
+   * `m.search { state: 'found'|'timeout' }` and broadcast the room. Mirrors create() + addBot() semantics.
+   * @param {{ playerId: string, search: string, difficulty: string, capacity: number, at: number }[]} entries
+   * @param {boolean} aiFill
+   */
+  assembleSearchRoom(entries, aiFill) {
+    const sessions = [];
+    for (const e of entries) {
+      this.searchQueue.delete(e.playerId);
+      const session = this.registry.byId(e.playerId);
+      if (session && session.connected && !this.roomOf(session)) sessions.push(session);
+    }
+    if (sessions.length === 0) return;
+    const difficulty = entries[0].difficulty;
+    const capacity = entries[0].capacity;
+    const code = this.genCode();
+    if (!code) { this.log.error('[lobby] search: no room code available'); return; }
+    const room = new Room(code, 'coop', difficulty, this.now(), capacity);
+    room.content = this.vanilla;
+    const defaults = this.plugins?.defaults?.() || [];
+    if (defaults.length) {
+      const r = this.resolveContent(room, defaults);
+      if ('error' in r) this.warnOnce(`[lobby] the default plugins (${defaults.join(', ')}) cannot be applied: ${r.error}${r.detail ? ` (${r.detail})` : ''}`);
+      else { room.content = r.content; this.holdContent(r.content); }
+    }
+    let idx = 0;
+    for (const session of sessions) {
+      this.dequeueSearch(session.playerId);
+      const cur = this.roomOf(session);
+      if (cur) this.removeMember(cur, session.playerId);
+      room.seats[idx] = this.humanSeat(idx, session);
+      session.roomCode = code;
+      session.notice = null;
+      session.pendingResult = null;
+      if (idx === 0) { room.hostId = session.playerId; room.ownerKey = session.limitKey || null; }
+      idx++;
+    }
+    if (aiFill) {
+      const used = new Set();
+      while (idx < room.seatLimit()) {
+        const name = BOT_NAMES.find((n) => !used.has(n)) || `AI·${idx + 1}`;
+        used.add(name);
+        let playerId;
+        do playerId = 'ai_' + randomBytes(4).toString('hex'); while (room.seatOf(playerId));
+        room.seats[idx] = { seat: idx, playerId, name, isBot: true, ready: true, connected: true, left: false };
+        idx++;
+      }
+    }
+    this.rooms.set(code, room);
+    this.log.info(`[lobby] ${code} matched (${difficulty}, ${sessions.length} player(s)${aiFill ? ', AI fill' : ''})`);
+    for (const session of sessions) this.sendSearch(session, aiFill ? 'timeout' : 'found');
+    this.broadcastState(room);
   }
 
   /**

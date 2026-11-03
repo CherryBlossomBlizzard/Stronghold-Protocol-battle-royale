@@ -248,7 +248,7 @@ export function TitleScreen() {
       </div>`}
       <h1 class=${`title-cn${alphabetic ? ' title-cn--latin' : ''}`}>${t('卫戍协议')}<span class="title-cn__colon">${alphabetic ? ': ' : '：'}</span><em>${t('盟约')}</em></h1>
       <p class="title-tag">${t('调配资金与干员，与同伴协同布防，抵御多波次进攻，直至击败敌方领袖。')}</p>
-      <p class="title-br">${SERVER_NAME} · 血量 30 · 卡池无限 · 装备无限 · 无联防 · 第 20 回合五亿血首领战</p>
+      <p class="title-br">${t('{SERVER_NAME} · 血量 30 · 卡池无限 · 装备无限 · 无联防 · 第 20 回合五亿血首领战', { SERVER_NAME })}</p>
 
       <div class="title-login">
         ${pendingJoin ? html`<div class="title-invite">

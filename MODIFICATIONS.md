@@ -22,7 +22,7 @@
 实现：`server/match/battleRoyaleRules.js` 的 `OFFICIAL_RULES`（官方变体规则集）与 `GameData` 的 per-instance `this.RULES`；
 皮肤等外观插件不受规则模式影响，两种模式下都能用。
 
-**本项目是上述两代上游的修改版，由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护并分发，本次修改日期 2026-10-22。**
+**本项目是上述两代上游的修改版，由 [CherryBlossomBlizzard](https://github.com/CherryBlossomBlizzard) 维护并分发，本次修改日期 2026-11-04。**
 它不是上游发布的版本，也未获上游作者或《明日方舟》权利人的授权或认可。
 
 ## 本仓库相对上游 v0.3.1 的改动
@@ -55,6 +55,31 @@
 10. **血量上限统一 30**（`startLp: 30`，`server/match/gamedata.js` 的 `startLp()` 对所有策略返回 30，
     不按 bands.json 的 totalHp 22–45 浮动）；卡池角色无限张、装备无限量供应；删除联防环节（漏怪直接扣血）；
    回合数没有上限（第 20 回合首领战后收尾）。
+11. **炎盟约 13 层后炎佑吃炎层数增益**（`yanyouLayerBonusFrom: 13`）：炎的层数达到 13 层后，**炎佑也吃到玩家的炎层数
+    攻击力增益** —— 与成员同一条公式（`base_atk + atk_per_stack·L`，直接乘算，`server/sim/content/bonds/core.js`
+    `yanyouLayerBonus`），随层数实时刷新。炎佑登场时（battleStart）补一次，之后每次层数变化（`onLayers`）刷新；层数
+    低于阈值时移除该增益。官方原版变体（`OFFICIAL_RULES.yanyouLayerBonusFrom: 0`）不吃层数，保持上游行为。
+    [ASSUMED] 增益只作用于攻击力（层的公式本来只有 `atk_per_stack`）；「13 层后」= 层数 ≥ 13 生效。
+
+### 本服新增的社交与外观功能（官方 盟约 有、上游 0.3.1 网页版未复刻的部分）
+
+- **同盟等待室的交流**（`room.emote` / `m.roomEmote`，research 06 §9.1 / §0 fact 16 "Communication is emotes only"）：
+  官方 盟约 没有文字聊天，房间内与对局内都用官方表情。房间界面加了和战斗内同一套表情轮盘（`public/js/ui/emotes.js`
+  `EmoteWheel`，36 个官方表情、chatCD 1 秒限频、气泡显示 chatTime 3 秒），发一个表情服务端按官方 chatCD 限频并向
+  房间广播 `m.roomEmote { playerId, id }`，每位博士头像上弹气泡。观战席只能看不能发（`SPECTATOR`，与对局内一致）。
+- **搜寻队友**（`room.search` / `room.searchCancel` / `m.search`，官方 联合模拟 matchmaking，research 06 §3.3）：大厅
+  加了官方的匹配入口 —— **精确搜寻**（"更容易搜寻到实力相近的队友"）与**快速搜寻**（"更快速地搜寻队友"），按
+  难度 + 房间容量（`ROOM_CAPACITIES` 4/8/10/16/20）分组排队（`server/lobby.js` searchQueue），组内凑满 capacity 个
+  真人立即组建同盟（首位为房主），凑不满则超时由 AI 队友补位开局（research 06 §3.3 [ASSUMED] "fill with bots"）。
+  本复刻没有官方的奖杯数据，[ASSUMED] 两种搜寻的区别只在等待时长：快速搜寻 `MATCH_FAST_FILL_MS`（15 秒）后补位，
+  精确搜寻等满官方 `matchTimeMax`（`MATCH_TIMEOUT_MS` 120 秒）。搜寻中可 `room.searchCancel` 退出；建房 / 加入房间 /
+  掉线 / 会话过期都会自动出队；服务端每 `MATCH_POLL_MS`（1 秒）清空队列（仅队列非空时开定时器）。
+- **皮肤部署后的战斗小人**：皮肤系统的战斗内 Spine 模型链路（`Unit.skin` → `snapshot.js` → `render/units.js`
+  `_modelEntry` → `assets.js` `spineEntry(id, { skin })`）上游已具备，`docs/SKINS.md` 为准绳；本次修复的是 dist 分支
+  `official-skins.zip` 皮肤包数据 —— 上一版 zip 里 Spine 文件缺扩展名（`_skel` / `_atlas`）与 `plugin.json` 的引用
+  （`.skel` / `.atlas`）对不上、且缺 `plugin.lock.json` 动画数据，导致皮肤只换立绘、部署后战斗里的角色小人仍是原版
+  模型。重打包后 64 套皮肤里 62 套带战斗内动态模型（`char_1020_reed2_summer#17` / `char_4058_pepe_sightseer#2` 两套
+  骨骼解析失败，暂回退立绘），玩家在设置里开启皮肤插件、干员调配里选皮肤后，战斗中该干员的角色小人即按所选皮肤展示。
 
 ### 配套修复（这些偏离会牵动上游的两处假设，已一并修好）
 

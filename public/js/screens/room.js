@@ -2,6 +2,10 @@
 // host controls (difficulty picker, add/remove AI and the 「AI 队友最后选择」 switch in co-op, start), invite code with
 // copy code / copy link, ready toggle and leave.
 //
+// 交流 (官方 盟约 的房间交流，research 06 §9.1 / §0 fact 16 "Communication is emotes only"): the same official emote
+// wheel as in a match (ui/emotes.js EmoteWheel) sends room.emote; the server rate-limits with the official chatCD and
+// broadcasts m.roomEmote, and every seat shows the sender's bubble (chatTime 3 s) over its avatar.
+//
 // Start rule (server/lobby.js): room.start needs every *other* human connected and ready; the
 // host's start counts as the host's ready. So 开始模拟 is enabled exactly then and sends room.start
 // alone (no separate room.ready round trip that could leave the host "ready" after a failed start).
@@ -17,10 +21,13 @@
 // Texts go through t() (docs/I18N.md).
 
 import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
-import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, MAX_SEATS, MAX_SPECTATORS } from '../../../shared/constants.js';
+import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, MAX_SPECTATORS, EMOTE_BUBBLE_MS,
+  ROOM_CAPACITIES, BASE_SEATS } from '../../../shared/constants.js';
 import {
-  html, Button, Icon, MicroLabel, PingPill, AvatarFrame, DifficultyTag, DifficultyIcon, Tooltip, confirmDialog, doctorNo, Modal,
+  html, Button, Icon, MicroLabel, PingPill, AvatarFrame, DifficultyTag, DifficultyIcon, Tooltip, confirmDialog, doctorNo, Modal, useTicker,
 } from '../ui/components.js';
+import { EmoteWheel, EmoteBubble } from '../ui/emotes.js';
+import { activeBubbles } from '../ui/gameLogic/watch.js';
 import { toast, toastError } from '../ui/toasts.js';
 import { TestMark } from '../ui/testConsole.js';
 import { copyText } from '../ui/clipboard.js';
@@ -36,12 +43,16 @@ import { difficultyInfo } from './lobby.js';
 import { t, tc } from '../../../shared/i18n.js';
 
 /**
- * Seats padded to the room's capacity (co-op 4, solo 1), each null or a seat record.
+ * Seats padded to the room's capacity (`room.state.capacity`, shared/constants.js ROOM_CAPACITIES — the 龙千尘 20-player
+ * branch; every room.state carries it, a legacy payload without one pads to the official 4, a solo room always 1), each
+ * null or a seat record.
  * @param {any} room room.state payload
  * @returns {(null | {seat:number, playerId:any, name:string, isBot:boolean, ready:boolean, connected:boolean})[]}
  */
 export function normalizeSeats(room) {
-  const cap = room?.mode === 'solo' ? 1 : MAX_SEATS;
+  const cap = room?.mode === 'solo' ? 1
+    : ROOM_CAPACITIES.includes(room?.capacity) ? room.capacity
+    : BASE_SEATS;
   const src = Array.isArray(room?.seats) ? room.seats : [];
   const out = [];
   for (let i = 0; i < cap; i++) {
@@ -113,7 +124,7 @@ export function inviteLink(code) {
  */
 export { copyText };
 
-function SeatCard({ seat, index, room, facts, myId, busy, onAddBot, onRemoveBot, onKick }) {
+function SeatCard({ seat, index, room, facts, myId, busy, onAddBot, onRemoveBot, onKick, bubble }) {
   const coop = room.mode !== 'solo';
   if (!seat) {
     const canAdd = coop && facts.isHost;
@@ -149,6 +160,7 @@ function SeatCard({ seat, index, room, facts, myId, busy, onAddBot, onRemoveBot,
       <div class="seat__stripes" aria-hidden="true"></div>
       <${AvatarFrame} size="xl" name=${seat.name} seat=${index} bot=${seat.isBot} self=${isMe} ready=${state === 'ready'} offline=${offline} />
       ${seat.isBot ? html`<span class="seat__bot-label"><${Icon} name="robot" />${t('AI 队友')}</span>` : null}
+      ${bubble ? html`<${EmoteBubble} key=${bubble.seq} class="seat__bubble" id=${bubble.id} at=${bubble.at} ttl=${EMOTE_BUBBLE_MS} />` : null}
     </div>
     <div class="seat__who">
       <span class="seat__name">${seat.name || t('博士')}</span>
@@ -243,7 +255,9 @@ export function RoomScreen() {
   const room = useStore((s) => s.room);
   const me = useStore((s) => s.me, shallowEqual);
   const conn = useStore((s) => s.connection, shallowEqual);
+  const roomEmotes = useStore((s) => s.roomEmotes);
   const [busy, setBusy] = useState(null);
+  const [emoteOpen, setEmoteOpen] = useState(false);
   const alive = useRef(true);
   const inFlight = useRef(false); // synchronous guard against double clicks (state updates are async)
   useEffect(() => () => { alive.current = false; }, []);
@@ -254,6 +268,10 @@ export function RoomScreen() {
   const facts = roomFacts(room, me.playerId);
   const myReady = !!facts.mine?.ready;
   const info = difficultyInfo(room.mode, room.difficulty);
+  // 交流（官方 盟约 的房间交流）: the sender's bubble over their seat, for chatTime (EMOTE_BUBBLE_MS) after arrival.
+  const bubbles = activeBubbles(roomEmotes, Date.now(), EMOTE_BUBBLE_MS);
+  useTicker(bubbles.size ? 500 : 0); // re-render only while a bubble shows (to expire it)
+  const sendEmote = (id) => { if (online) net.request('room.emote', { id }).catch(() => {}); };
 
   const run = async (kind, fn) => {
     if (inFlight.current) return;
@@ -350,7 +368,8 @@ export function RoomScreen() {
 
     <main class=${`seats${coop ? '' : ' seats--solo'}`}>
       ${facts.seats.map((s, i) => html`<${SeatCard} key=${s ? `p${s.playerId}` : `e${i}`} seat=${s} index=${i} room=${room} facts=${facts}
-        myId=${me.playerId} busy=${busy} onAddBot=${addBot} onRemoveBot=${removeBot} onKick=${kick} />`)}
+        myId=${me.playerId} busy=${busy} onAddBot=${addBot} onRemoveBot=${removeBot} onKick=${kick}
+        bubble=${s ? bubbles.get(s.playerId) || null : null} />`)}
       ${coop ? null : html`<aside class="solo-brief brackets">
         <${MicroLabel} tone="mint">BRIEFING<//>
         <h2>${DIFFICULTY_NAMES[room.difficulty] ? t(DIFFICULTY_NAMES[room.difficulty]) : ''}<span class="num t-dim"> ${info.code}</span></h2>
@@ -363,6 +382,9 @@ export function RoomScreen() {
       </aside>`}
     </main>
     <${SpectatorBar} facts=${facts} myId=${me.playerId} busy=${busy} onRemove=${removeSpectator} onSit=${sit} />
+    ${coop && !facts.spectating ? html`<div class="room-emote">
+      <${EmoteWheel} open=${emoteOpen} onToggle=${setEmoteOpen} onSend=${sendEmote} disabled=${!online} />
+    </div>` : null}
 
     <footer class="room-bar">
       <div class="room-bar__left">

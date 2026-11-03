@@ -524,7 +524,7 @@ export function TopBar({ pub, priv, conn, hud, total, drawer, onExit, onDrawer, 
       <${LpTower} value=${lp} size="lg" tone=${lowLp ? 'danger' : boss ? 'team' : null} pending=${pending}
         note=${pending > 0 && live?.unite ? t('联防中') : null} tip=${pendingTip(lp, pending, { unite: !!live?.unite, cap, left: live?.left ?? null })} />
       ${phase === PHASE.PREP && !spectator && priv?.alive !== false && Number.isFinite(lp) && onBloodMoney ? html`<${Button} variant="danger" size="sm" class="gtop__blood" disabled=${!(lp >= BLOOD_MONEY_COST)}
-        title=${bloodMoneyTip(lp)} onClick=${() => onBloodMoney && onBloodMoney()}>3 血 → 1 钱<//>` : null}
+        title=${bloodMoneyTip(lp)} onClick=${() => onBloodMoney && onBloodMoney()}>${t('3 血 → 1 钱')}<//>` : null}
       <${Tooltip} text=${btn.right.tip} placement="bottom">
         <${CheckBtn} sprite=${btn.right.sprite} cls=${cx('enemybtn', btn.right.grey && 'is-grey')} label=${btn.right.label}
           chev=${btn.right.grey ? null : '▶▶'} disabled=${btn.right.grey && !pen} onClick=${onRight} testid="check-enemy" />

@@ -7,7 +7,7 @@ export const PROTOCOL_VERSION = 1;
  * (test/version.test.js); PROTOCOL_VERSION above is the separate wire-format number. */
 export const APP_VERSION = '0.3.1';
 /** 本服名称（卫戍协议：盟约 · 大逃杀）：启动横幅、标题画面与 /healthz 用。 */
-export const SERVER_NAME = '卫戍协议：盟约 · 大逃杀';
+export const SERVER_NAME = N_('卫戍协议：盟约 · 大逃杀'); // i18n-ignore: 品牌名（启动横幅与 /healthz 直接使用，标题画面经 t('{SERVER_NAME} · …') 包装）
 /** A development build (the public `dev` branch): the title screen, the boot banner and the README say so, and
  * tools/package.mjs refuses to build a release zip from it without --allow-dev. */
 export const DEV_BUILD = /-dev$/.test(APP_VERSION);
@@ -42,6 +42,19 @@ export const MAX_DRAFT_CARDS = MAX_SEATS + 2;
 export const MAX_SPECTATORS = 2;
 export const ROOM_CODE_LEN = 4;
 export const NAME_MAX_LEN = 12;
+
+/**
+ * 搜寻队友 (官方 联合模拟 matchmaking, research 06 §3.3): a co-op room is assembled from a queue. The official client
+ * offers 精确搜寻 ("更容易搜寻到实力相近的队友") and 快速搜寻 ("更快速地搜寻队友"), matching by trophy level/count with a
+ * timeout `matchTimeMax` = 120 s. This remake has no trophy data, so the two modes differ only in how long they wait for
+ * real players before AI fill: 精确 waits the whole MATCH_TIMEOUT_MS and fills with AI only at the end; 快速 fills sooner
+ * (MATCH_FAST_FILL_MS) so a match starts faster. [ASSUMED] A queue assembles when it holds a full capacity of real
+ * players, or on timeout (AI teammates fill the rest, room.addBot semantics).
+ */
+export const MATCH_TIMEOUT_MS = 120_000;   // activity_table autoChessData.matchTimeMax (s) → ms
+export const MATCH_FAST_FILL_MS = 15_000;  // [ASSUMED] 快速搜寻: AI-fill this soon when a full team has not gathered
+export const MATCH_POLL_MS = 1_000;        // how often the lobby drains the queue
+export const MATCH_SEARCH_MODES = Object.freeze(['exact', 'fast']);
 
 export const DIFFICULTIES = ['FUNNY', 'NORMAL', 'HARD', 'ABYSS'];
 export const DIFFICULTY_NAMES = { FUNNY: N_('标准模拟'), NORMAL: N_('险境模拟'), HARD: N_('绝境模拟'), ABYSS: N_('终极模拟') };

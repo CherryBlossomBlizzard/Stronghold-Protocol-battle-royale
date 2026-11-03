@@ -37,7 +37,7 @@ test('规则变体：真实对局里两边的开局数值', () => {
   assert.equal(h1.m.gd.rulesVariant, 'battle-royale');
   assert.equal(h1.ps('p_0').lp, 30);
   h1.m.dispose();
-  const h2 = makeMatch({ rulesVariant: 'battle-royale', mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71, rulesVariant: 'official' }).start();
+  const h2 = makeMatch({ mode: 'coop', difficulty: 'NORMAL', humans: 2, bots: 1, seed: 71, rulesVariant: 'official' }).start();
   h2.toPrep(1);
   assert.equal(h2.m.gd.rulesVariant, 'official');
   assert.equal(h2.ps('p_0').lp, DATA.bands[h2.ps('p_0').bandId].totalHp);

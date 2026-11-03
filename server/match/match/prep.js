@@ -21,7 +21,7 @@ export class MatchPrep {
     if (this.phase !== PHASE.PREP) return fail(ERR.WRONG_PHASE);
     if (!ps.alive || ps.left) return fail(ERR.ELIMINATED);
     const R = this.gd.RULES || RULES;
-    if (!(ps.lp >= R.bloodMoneyCost)) return fail(ERR.BAD_TARGET, '目标生命值不足 3 点');
+    if (!(ps.lp >= R.bloodMoneyCost)) return fail(ERR.BAD_TARGET, msg('目标生命值不足 3 点'));
     ps.lp -= R.bloodMoneyCost;
     ps.funds += R.bloodMoneyGain;
     ps.stats.lpLost += R.bloodMoneyCost;

@@ -503,6 +503,17 @@ export const C2S = {
     capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['test', 'capacity'] },
   'room.join': { $optional: ['testAck'], testAck: (v) => v === true, code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v) },
   'room.leave': {},
+  // 同盟等待室的交流（官方 盟约 没有文字聊天，communication is emotes only — research 06 §0 fact 16）：房间里发一个
+  // 官方表情，服务端按 chatCD（1 s）限频并向房间广播 m.roomEmote。表情 id 与对局内的 g.emote 同一张官方表。
+  'room.emote': { id: (v) => EMOTES.includes(v) },
+  // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：进入匹配队列。`search`: 'exact' 精确搜寻（更容易搜寻到实力
+  // 相近的队友；本复刻没有奖杯数据，[ASSUMED] 精确 = 只在队列凑满真人时开局，凑不满等到 matchTimeMax 才由 AI 补位）/
+  // 'fast' 快速搜寻（更快速地搜寻队友；[ASSUMED] 等不到足够真人时较早由 AI 补位开局）。difficulty 用大厅已选的，
+  // capacity 是房间容量（ROOM_CAPACITIES，缺省 DEFAULT_SEATS）。已匹配 / 已在房间 / 已在队列：ALREADY / WRONG_PHASE。
+  'room.search': { search: (v) => v === 'exact' || v === 'fast', difficulty: (v) => DIFFICULTIES.includes(v),
+    capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
+  // 退出匹配队列（搜寻中可随时取消）。
+  'room.searchCancel': {},
   'room.ready': { ready: isBool },
   'room.setDifficulty': { difficulty: (v) => DIFFICULTIES.includes(v) },
   // the co-op room option 「AI 队友最后选择」 (GitHub #338; host, before the match): the strategy and 机变 drafts order every
@@ -641,6 +652,12 @@ export const C2S = {
 export const S2C = [
   'welcome', 'ok', 'error', 'pong',
   'room.state', 'room.closed',
+  // m.roomEmote { playerId, id } — 同盟等待室里某位博士发的官方表情（room.emote 的广播；只在房间阶段，对局内是 m.emote）
+  'm.roomEmote',
+  // m.search { state, search, difficulty, capacity, queue, elapsedSec, timeoutSec } — 搜寻队友的状态推送
+  //   state: 'queued' 排队中 / 'found' 已匹配到房间（随后 room.state 到达）/ 'timeout' 等待超时已用 AI 补位开局 /
+  //          'cancelled' 已退出队列
+  'm.search',
   'm.public', 'm.private', 'm.field', 'm.toast', 'm.ticker', 'm.emote', 'm.result',
   // m.layer { playerId, bondId, add } — own live prep layer gain; ephemeral, never replayed on resync.
   'm.layer',
