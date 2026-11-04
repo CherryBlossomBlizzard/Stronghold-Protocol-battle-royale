@@ -2224,4 +2224,6 @@
   "加入": "Join",
   "已满": "Full",
   "还没有人开同盟房 —— 你可以现在开一个": "No one has opened an alliance room yet — you can open one now"
+,
+  "本局分 {n} 组并行轮选，跨组可以选择同一个策略": "This match drafts in {n} groups in parallel; the same strategy can be picked in different groups"
 }

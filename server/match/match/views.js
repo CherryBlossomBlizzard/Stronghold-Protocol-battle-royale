@@ -150,6 +150,12 @@ export class MatchViews {
       v.draft = {
         order: d.order.slice(), turn: this.draftTurn(), turns, picks: { ...d.picks }, skipsLeft: { ...d.skipsLeft }, turnDeadline: d.turnDeadline || 0,
         turnSeconds: d.untimed ? 0 : this.bandTurnMs() / 1000, untimed: !!d.untimed,
+        // 卫戍协议 · 20 人房（龙千尘）：分组轮转的真相。以前只发把全房拍平的 order，客户端于是把所有组的已选都当成
+        // 「队友已选」、也只画一条全房决策顺序 —— 分组看起来就"没工作"。members 是成员，order 是该组轮转顺序，
+        // idx 是轮到第几个，turn 是该组当前的选人（已选完为 null）。客户端按 members 找自己那组。
+        groups: (d.groups || []).map((g) => ({
+          members: [...g.playerIds], order: g.order.slice(), idx: g.idx, turn: g.order[g.idx] ?? null,
+        })),
       };
     }
     if (this.phase === PHASE.SP_DRAFT && this.sp) {

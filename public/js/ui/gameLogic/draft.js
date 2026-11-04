@@ -34,7 +34,29 @@ export function normalizeDraft(draft, players = []) {
   const sk = draft?.skipsLeft ?? draft?.skips;
   if (isObj(sk)) for (const [k, v] of Object.entries(sk)) if (Number.isFinite(v)) skipsLeft.set(k, v);
   const done = order.length > 0 && order.every((pid) => picks.has(pid));
-  return { order, turnPid, picks, skipsLeft, done };
+  // 卫戍协议 · 20 人房：卡池分组（服务端 draft.groups）。每组独立轮转、独立卡池，跨组可以重复选同一个策略 ——
+  // 所以「队友已选」只能按自己那一组算，决策顺序也只画自己那一组。
+  const groups = (Array.isArray(draft?.groups) ? draft.groups : [])
+    .filter(isObj)
+    .map((g) => ({
+      members: (Array.isArray(g.members) ? g.members : []).filter((x) => typeof x === 'string'),
+      order: (Array.isArray(g.order) ? g.order : []).filter((x) => typeof x === 'string'),
+      idx: Number.isInteger(g.idx) ? g.idx : 0,
+      turn: typeof g.turn === 'string' ? g.turn : null,
+    }))
+    .filter((g) => g.members.length);
+  return { order, turnPid, picks, skipsLeft, done, groups };
+}
+
+/**
+ * 我在哪一个卡池组里（room 里 20 人房有 5 组）；没有分组信息时返回 null（老服务器 / 单人）。
+ * @param {any} draft normalizeDraft 的结果
+ * @param {string} myId
+ */
+export function myDraftGroup(draft, myId) {
+  const groups = Array.isArray(draft?.groups) ? draft.groups : [];
+  if (!groups.length || typeof myId !== 'string') return null;
+  return groups.find((g) => g.members.includes(myId)) || null;
 }
 
 /**

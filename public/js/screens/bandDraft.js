@@ -24,7 +24,7 @@ import { useGameData, BandIcon, RichText, PlayerAvatar, LpTower, Sprite } from '
 import { StepHeader, ExitModal } from '../ui/matchChrome.js';
 import { MatchInfoDialog, matchInfoModel } from '../ui/matchInfo.js';
 import { actions, act } from '../ui/gameActions.js';
-import { normalizeDraft, sortedPlayers } from '../ui/gameLogic.js';
+import { normalizeDraft, myDraftGroup, sortedPlayers } from '../ui/gameLogic.js';
 import { useStore } from '../store.js';
 import { data } from '../data.js';
 import { audio } from '../audio.js';
@@ -185,18 +185,27 @@ export function BandDraftScreen() {
   const bands = useMemo(() => allowedBands(gd.list('bands'), mode?.type || (solo ? 'SINGLE' : 'MULTI')), [gd.ready, mode?.type, solo, data.locale()]);
   const players = sortedPlayers(pub);
   const draft = normalizeDraft(pub?.draft, players);
+  // 卫戍协议 · 20 人房：卡池分组 —— 决策顺序、跳过余量、以及「队友已选」都只看自己那一组（跨组可以重复选）
+  const myGroup = myDraftGroup(draft, myId);
+  const myGroupSet = myGroup ? new Set(myGroup.members) : null;
+  const groupOrder = myGroup ? myGroup.order : draft.order;
   const myPick = draft.picks.get(myId) || priv?.bandId || null;
   // 卫戍协议 · 20 人房：各组并行轮选 —— 轮到我 = 我的组当前是我（turns 含我；旧服务器回落 turnPid）
   const myTurn = !myPick && (solo || (Array.isArray(draft.turns) ? draft.turns.includes(myId) : draft.turnPid === myId));
   const skipsLeft = draft.skipsLeft.has(myId) ? draft.skipsLeft.get(myId) : (skipped ? 0 : 1);
-  const canSkip = !solo && myTurn && skipsLeft > 0 && draft.order.filter((pid) => !draft.picks.has(pid)).length > 1;
-  const taken = solo ? new Map() : teammateBands(draft.picks, myId);
+  const canSkip = !solo && myTurn && skipsLeft > 0 && groupOrder.filter((pid) => !draft.picks.has(pid)).length > 1;
+  // 「队友已选」只算本组队友：别的组选同一个策略不算抢
+  const taken = solo ? new Map() : teammateBands(
+    myGroupSet ? new Map([...draft.picks].filter(([pid]) => myGroupSet.has(pid))) : draft.picks, myId);
   const pickers = new Map(); // bandId → players
   for (const [pid, bid] of draft.picks) {
+    if (myGroupSet && !myGroupSet.has(pid)) continue;   // 只显示本组谁选了哪个
     const p = players.find((x) => x.playerId === pid);
     if (!pickers.has(bid)) pickers.set(bid, []);
     pickers.get(bid).push(p || { playerId: pid, name: '?' });
   }
+  // 其它组的进度（20 人房 5 组并行）：只做一行提示，不参与本组的判断
+  const otherGroups = (draft.groups || []).filter((g) => g !== myGroup);
 
   // default selection: my pick, else what a timeout gives me (华法琳 while free); when my turn comes while the selected
   // band has been taken by a teammate meanwhile (队友已选), move the selection back to that default
@@ -266,7 +275,7 @@ export function BandDraftScreen() {
     <main class="draft__main">
       <aside class="draft-order">
         <h3 class="brief-h"><span>${solo ? t('独立模拟') : t('决策顺序')}</span><${MicroLabel}>${solo ? 'FREE PICK' : 'RANDOM ORDER'}</${MicroLabel}></h3>
-        ${(solo ? players.filter((p) => p.playerId === myId) : draft.order.map((pid) => players.find((p) => p.playerId === pid)).filter(Boolean)).map((p, i) => {
+        ${(solo ? players.filter((p) => p.playerId === myId) : groupOrder.map((pid) => players.find((p) => p.playerId === pid)).filter(Boolean)).map((p, i) => {
           const picked = draft.picks.get(p.playerId) || (p.playerId === myId ? myPick : p.bandId) || null;
           const cur = !picked && (solo || (Array.isArray(draft.turns) ? draft.turns.includes(p.playerId) : draft.turnPid === p.playerId));
           const pband = picked ? gd.band(picked) : null;
@@ -289,6 +298,13 @@ export function BandDraftScreen() {
         <${Button} variant="secondary" icon="search" block=${true} class="draft-order__info" data-testid="match-info-open"
           aria-haspopup="dialog" onClick=${() => setInfoOpen(true)}>${t('查看禁用盟约与干员')}<//>
         ${!solo ? html`<p class="draft-order__tip" data-testid="draft-tip">${draftTip({ timed, turnSeconds: turnLen, autoName: myPick ? null : autoName, selected: autoId === sel })}</p>` : null}
+        ${!solo && otherGroups.length ? html`<p class="draft-order__tip t-dim" data-testid="draft-groups">
+          ${t('本局分 {n} 组并行轮选，跨组可以选择同一个策略', { n: otherGroups.length + 1 })}
+          ${otherGroups.map((g, i) => {
+            const picked = g.members.filter((pid) => draft.picks.has(pid)).length;
+            return html`<span key=${i} class="draft-order__group">§${i + 2} <b class="num">${picked}/${g.members.length}</b></span>`;
+          })}
+        </p>` : null}
       </aside>
 
       <section class="draft-grid" role="listbox" aria-label=${t('策略')}>
