@@ -119,18 +119,25 @@
   `official-skins.zip` 皮肤包数据 —— 上一版 zip 里 Spine 文件缺扩展名（`_skel` / `_atlas`）与 `plugin.json` 的引用
   （`.skel` / `.atlas`）对不上、且缺 `plugin.lock.json` 动画数据，导致皮肤只换立绘、部署后战斗里的角色小人仍是原版
   模型。玩家在设置里开启皮肤插件、干员调配里选皮肤后，战斗中该干员的角色小人即按所选皮肤展示。
-  **皮肤覆盖**：`arts/dynchars` 里共 **102 个**骨骼包，早先只装了 64 套（漏了 38 个），所以很多干员的皮肤区是空的。
-  `extract-dynchars.py` 改为**枚举整个目录**（按 `character_table.json` 的最长前缀算 charId，骨骼与 atlas 按同茎配对，
-  茎名不一致但各只有一个时直接配对），现在共 **100 套**：
-  * `official-skins`（dist `official-skins.zip`，98 MB）：64 套 —— 62 套带战斗内 Spine 模型 + 2 套仅立绘
-    （`char_1020_reed2_summer#17` / `char_4058_pepe_sightseer#2` 的骨骼本身不是 Spine 3.8，回退立绘）。
-  * `official-skins-part2`（dist `official-skins-part2.zip`，42.9 MB）：36 套，全部带战斗内 Spine 模型。
-  三个骨骼包没进包：`char_1001_amiya2_sale#16` / `char_1037_amiya3_sale#13`（本机 `character_table` 里没有这两位干员）、
-  `char_4058_pepe_2`（只有 atlas，没有骨骼）。
-  安装侧：`启动服务器.bat`（以及 `安装皮肤包.bat` / `.sh`）以 **`plugin.lock.json` 是否存在** 作为「装的是不是修复后的包」
-  的判据 —— 旧包缺这个文件，所以玩家机器上留下的旧版会被识别出来、删掉重下。两批皮肤都会自动下载，并写一份
-  `plugins/config.json`（`default: ["official-skins", "official-skins-part2"]`）让**新房间默认就带皮肤包**，
-  不再需要玩家自己去【设置】里找开关。
+  **皮肤覆盖（0.2.0）**：皮肤分三类素材，全部从本机客户端提取：
+  1. **战斗内动态模型**：`arts/dynchars` 共 **102 个**骨骼包 —— `extract-dynchars.py` 枚举整个目录（按
+     `character_table.json` 的最长前缀算 charId，骨骼与 atlas 按同茎配对，茎名不一致但各只有一个时直接配对）。
+  2. **商店时装立绘**：`spritepack/arts_shop_skin_portrait_*.ab`（16 个包）里的 Sprite 名字就是皮肤 id —— 这是
+     【干员调配】皮肤格里该显示的图。`extract-skin-portraits.py` 提了 **447 套**。
+  3. 名字：官方皮肤名在服务器 gamedata 的 `skin_table.json` 里（本机没有、也拉不到），所以用「**干员名 · 系列**」
+     生成（`epoque`→时代、`summer`→夏日、`ambienceSynesthesia`→音律联觉…，`_2` → 精英二；没把握的系列保留原代码，
+     不编名字），此前显示的是原始 id。
+  三批插件（每套皮肤只出现在一个包里，skinId 不跨包重复）：
+  * `official-skins`（80.4 MB）：64 套 —— 62 套带战斗内 Spine 模型 + 2 套仅立绘
+    （`char_1020_reed2_summer#17` / `char_4058_pepe_sightseer#2` 的骨骼本身不是 Spine 3.8，回退立绘），全部带立绘。
+  * `official-skins-part2`（43.0 MB）：36 套，全部带战斗内 Spine 模型（多为精英二外观）。
+  * `official-skins-part3`（15.4 MB）：381 套，仅立绘（其余全部时装）。
+  合计 **481 套皮肤**。三个骨骼包进不了包：`char_1001_amiya2_sale#16` / `char_1037_amiya3_sale#13`（本机
+  `character_table` 里没有这两位干员，名字用「阿米娅」代）、`char_4058_pepe_2`（只有 atlas，没有骨骼）。
+  安装侧：`启动服务器.bat`（以及 `安装皮肤包.bat` / `.sh`）以 **`plugin.lock.json` 是否存在 + `plugin.json` 的
+  `version` 是否为 `0.2.0`** 作为「装的是不是新包」的判据（旧包缺 lock 或还是 0.1.0 → 删掉重下）。三批都会自动下载，
+  并写一份 `plugins/config.json`（`default` 按实际装上的包拼）让**新房间默认就带皮肤包**，不再需要玩家自己去
+  【设置】里找开关。策略文件 `plugins/config.json` 由 PowerShell 生成（字符串拼接会丢引号），读取侧也容忍 UTF-8 BOM。
 
 ### 配套修复（这些偏离会牵动上游的两处假设，已一并修好）
 

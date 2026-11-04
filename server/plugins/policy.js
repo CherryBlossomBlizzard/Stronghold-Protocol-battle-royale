@@ -99,7 +99,11 @@ export function createPluginPolicy({ pluginsDir, log = noopLog, env = process.en
     let json = null;
     let problems = [];
     if (s !== 'none') {
-      try { json = JSON.parse(fs.readFileSync(/** @type {string} */ (file), 'utf8')); } catch (e) { problems.push(`not JSON (${e?.message || e})`); }
+      try {
+        // Windows 工具（记事本 / PowerShell 的 Set-Content）常带 UTF-8 BOM，JSON.parse 不认 —— 先剥掉，
+        // 否则房主手写的策略文件会被当成 "not JSON" 整份忽略。
+        json = JSON.parse(fs.readFileSync(/** @type {string} */ (file), 'utf8').replace(/^\uFEFF/, ''));
+      } catch (e) { problems.push(`not JSON (${e?.message || e})`); }
     }
     const r = readPolicy(json, { env });
     current = r.policy;
