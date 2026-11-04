@@ -118,12 +118,19 @@
   `_modelEntry` → `assets.js` `spineEntry(id, { skin })`）上游已具备，`docs/SKINS.md` 为准绳；本次修复的是 dist 分支
   `official-skins.zip` 皮肤包数据 —— 上一版 zip 里 Spine 文件缺扩展名（`_skel` / `_atlas`）与 `plugin.json` 的引用
   （`.skel` / `.atlas`）对不上、且缺 `plugin.lock.json` 动画数据，导致皮肤只换立绘、部署后战斗里的角色小人仍是原版
-  模型。重打包后 64 套皮肤里 62 套带战斗内动态模型（`char_1020_reed2_summer#17` / `char_4058_pepe_sightseer#2` 两套
-  骨骼解析失败，暂回退立绘），玩家在设置里开启皮肤插件、干员调配里选皮肤后，战斗中该干员的角色小人即按所选皮肤展示。
-  安装侧：`启动服务器.bat`（以及 `安装皮肤包.bat` / `.sh`）以 **`plugins/official-skins/plugin.lock.json` 是否存在**
-  作为「装的是不是修复后的包」的判据 —— 旧包缺这个文件，所以玩家机器上留下的旧版会被识别出来、删掉重下，
-  而不是像以前那样「`plugin.json` 在就跳过」。皮肤包 98 MB（dist 分支单 zip），下载解压是自动的，但插件开关
-  仍由玩家在【设置】里自己打开，不替玩家自动启用。
+  模型。玩家在设置里开启皮肤插件、干员调配里选皮肤后，战斗中该干员的角色小人即按所选皮肤展示。
+  **皮肤覆盖**：`arts/dynchars` 里共 **102 个**骨骼包，早先只装了 64 套（漏了 38 个），所以很多干员的皮肤区是空的。
+  `extract-dynchars.py` 改为**枚举整个目录**（按 `character_table.json` 的最长前缀算 charId，骨骼与 atlas 按同茎配对，
+  茎名不一致但各只有一个时直接配对），现在共 **100 套**：
+  * `official-skins`（dist `official-skins.zip`，98 MB）：64 套 —— 62 套带战斗内 Spine 模型 + 2 套仅立绘
+    （`char_1020_reed2_summer#17` / `char_4058_pepe_sightseer#2` 的骨骼本身不是 Spine 3.8，回退立绘）。
+  * `official-skins-part2`（dist `official-skins-part2.zip`，42.9 MB）：36 套，全部带战斗内 Spine 模型。
+  三个骨骼包没进包：`char_1001_amiya2_sale#16` / `char_1037_amiya3_sale#13`（本机 `character_table` 里没有这两位干员）、
+  `char_4058_pepe_2`（只有 atlas，没有骨骼）。
+  安装侧：`启动服务器.bat`（以及 `安装皮肤包.bat` / `.sh`）以 **`plugin.lock.json` 是否存在** 作为「装的是不是修复后的包」
+  的判据 —— 旧包缺这个文件，所以玩家机器上留下的旧版会被识别出来、删掉重下。两批皮肤都会自动下载，并写一份
+  `plugins/config.json`（`default: ["official-skins", "official-skins-part2"]`）让**新房间默认就带皮肤包**，
+  不再需要玩家自己去【设置】里找开关。
 
 ### 配套修复（这些偏离会牵动上游的两处假设，已一并修好）
 

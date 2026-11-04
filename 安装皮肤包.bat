@@ -43,20 +43,40 @@ powershell -NoProfile -Command "Expand-Archive -Path 'official-skins.zip' -Desti
 set "RC=%errorlevel%"
 del official-skins.zip 2>nul
 
+rem ---- 第二批（36 套，42.9 MB）：dynchars 里共 102 个骨骼包，第一批只装了 64 套 ----
+if not exist plugins\official-skins-part2\plugin.lock.json (
+  echo == 下载第二批皮肤（42.9 MB）==
+  if not exist official-skins-part2.zip (
+    curl -L --retry 2 -o official-skins-part2.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins-part2.zip"
+  )
+  set "ZS2=0"
+  for %%F in (official-skins-part2.zip) do set "ZS2=%%~zF"
+  if !ZS2! LSS 20000000 (
+    echo   [提示] 第二批没下完整（!ZS2! 字节）—— 跳过第二批，第一批不受影响。
+    del official-skins-part2.zip 2>nul
+  ) else (
+    powershell -NoProfile -Command "Expand-Archive -Path 'official-skins-part2.zip' -DestinationPath 'plugins' -Force"
+    del official-skins-part2.zip 2>nul
+    if exist plugins\official-skins-part2\plugin.json echo    第二批皮肤就绪。
+  )
+)
+
 if exist plugins\official-skins\plugin.json (
   rem 让新房间默认带上皮肤包：没有 plugins\config.json 时新房间不带任何插件 → 皮肤显示为「0 套外观」
   if not exist plugins\config.json (
+    set "DEFPLUG=official-skins"
+    if exist plugins\official-skins-part2\plugin.json set "DEFPLUG=official-skins, official-skins-part2"
     >"plugins\config.json" echo {
     >>"plugins\config.json" echo   "rooms": "host",
-    >>"plugins\config.json" echo   "default": ["official-skins"],
+    >>"plugins\config.json" echo   "default": [!DEFPLUG!],
     >>"plugins\config.json" echo   "allow": ["*"],
     >>"plugins\config.json" echo   "classes": { "cosmetic": true, "content": true }
     >>"plugins\config.json" echo }
-    echo    已写入 plugins\config.json：新房间默认启用官方皮肤包。
+    echo    已写入 plugins\config.json：新房间默认启用皮肤包 [!DEFPLUG!]。
   )
   echo.
   echo   ============================================================
-  echo    皮肤包安装完成（64 套皮肤：62 套含战斗内动态模型 + 2 套立绘）
+  echo    皮肤包安装完成（第一批 64 套 + 第二批 36 套 = 100 套皮肤）
   echo   ============================================================
   echo    下一步：重启服务器。新房间默认就带皮肤包（也可以让玩家自己在
   echo    【设置】里开关），到【干员调配】里选皮肤即可。

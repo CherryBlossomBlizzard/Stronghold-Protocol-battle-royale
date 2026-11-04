@@ -173,16 +173,49 @@ if not exist "%SKIN%\plugin.lock.json" (
     )
   )
 )
+rem ---- 第二批皮肤（36 套带战斗模型，42.9 MB）：dynchars 里共 102 个骨骼包，第一批只装了 64 套 ----
+set "SKIN2=plugins\official-skins-part2"
+if not exist "%SKIN2%\plugin.lock.json" (
+  if exist "%SKIN2%\plugin.json" rmdir /s /q "%SKIN2%" 2>nul
+  echo   首次运行：下载官方皮肤包第二批（42.9 MB，36 套皮肤，均含战斗内动态模型）…
+  if exist official-skins-part2.zip del official-skins-part2.zip 2>nul
+  curl -L --retry 2 -o official-skins-part2.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins-part2.zip" >nul 2>nul
+  set "ZC2=!errorlevel!"
+  set "ZS2=0"
+  if exist official-skins-part2.zip for %%F in (official-skins-part2.zip) do set "ZS2=%%~zF"
+  if not "!ZC2!"=="0" (
+    echo   [提示] 第二批皮肤下载失败（curl 退出码 !ZC2!）—— 跳过。可稍后运行 安装皮肤包.bat
+  ) else if !ZS2! LSS 20000000 (
+    echo   [提示] 第二批皮肤不完整（只下到 !ZS2! 字节）—— 已删除，跳过。
+    del official-skins-part2.zip 2>nul
+  ) else (
+    powershell -NoProfile -Command "Expand-Archive -Path 'official-skins-part2.zip' -DestinationPath 'plugins' -Force" >nul 2>nul
+    set "ZEXP2=!errorlevel!"
+    del official-skins-part2.zip 2>nul
+    if exist "%SKIN2%\plugin.json" (
+      echo   第二批皮肤就绪。
+    ) else (
+      echo   [提示] 第二批皮肤解压失败（PowerShell 退出码 !ZEXP2!）—— 跳过，不影响游戏。
+    )
+  )
+)
 rem ---- 让新房间默认带上官方皮肤包：写服务器策略 plugins\config.json（已存在就不动，那是房主自己的策略）----
-rem      没有这个文件时，新房间默认不带任何插件 → 皮肤包里 51 位干员的外观在【干员调配】里显示为「0 套外观」。
-if exist "%SKIN%\plugin.json" if not exist "plugins\config.json" (
-  >"plugins\config.json" echo {
-  >>"plugins\config.json" echo   "rooms": "host",
-  >>"plugins\config.json" echo   "default": ["official-skins"],
-  >>"plugins\config.json" echo   "allow": ["*"],
-  >>"plugins\config.json" echo   "classes": { "cosmetic": true, "content": true }
-  >>"plugins\config.json" echo }
-  echo   已写入 plugins\config.json：新房间默认启用官方皮肤包（玩家不用再手动打开）。
+rem      没有这个文件时，新房间默认不带任何插件 → 皮肤包里的外观在【干员调配】里显示为「0 套外观」。
+if not exist "plugins\config.json" (
+  set "DEFPLUG="
+  if exist "plugins\official-skins\plugin.json" set "DEFPLUG=official-skins"
+  if exist "plugins\official-skins-part2\plugin.json" (
+    if defined DEFPLUG (set "DEFPLUG=!DEFPLUG!, official-skins-part2") else set "DEFPLUG=official-skins-part2"
+  )
+  if defined DEFPLUG (
+    >"plugins\config.json" echo {
+    >>"plugins\config.json" echo   "rooms": "host",
+    >>"plugins\config.json" echo   "default": [!DEFPLUG!],
+    >>"plugins\config.json" echo   "allow": ["*"],
+    >>"plugins\config.json" echo   "classes": { "cosmetic": true, "content": true }
+    >>"plugins\config.json" echo }
+    echo   已写入 plugins\config.json：新房间默认启用皮肤包 [!DEFPLUG!]（玩家不用再手动打开）。
+  )
 )
 goto start
 

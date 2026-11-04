@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""提取 dynchars 皮肤模型 → plugins/official-skins/media/spine/<key>/，并更新 plugin.json 的 spine 字段。
+"""把 arts/dynchars 里**全部**带骨骼的皮肤提取进 plugins/official-skins。
 
-骨骼与 atlas 按**同茎**配对取用（plain 名优先，其次 `_Start`），输出一律写成 plain 名
-（`<key>.skel` / `<key>.atlas` / `<key>.webp`），与 plugin.json 的引用、atlas 里的页名行三者对齐 —— 这样
+以前只遍历 plugin.json 里已有的 skin 键（64 套），而 dynchars 目录里其实有 102 套 —— 漏了 38 套，所以
+【干员调配】里不少干员的皮肤区是空的。现在改成枚举目录：每个 .ab 就是一套皮肤（key 即文件名）。
+
+骨骼与 atlas 按**同茎**配对（plain 名优先，其次 `_Start`），输出统一写成 plain 名（`<base>.skel` /
+`<base>.atlas` / `<base>.webp`），与 plugin.json 的引用、atlas 里的页名行三者对齐 —— 这样
 `render/units.js` 的 `spineEntry(id, { skin })` 才能解析到模型，部署后战斗里的角色小人就会按所选皮肤显示。
-提取完用 `node tools/plugin.mjs pack <插件>` 生成 plugin.lock.json（骨骼动画数据），`check` 会点出仍读不出来的
-皮肤；那些（例如骨骼本身不是 Spine 3.8）应当只留立绘、去掉 spine 字段，别让整包校验失败。
+charId 用 `.cache/gamedata/excel/character_table.json` 里「是 skin key 前缀且最长」的那个算出来。
 
-发布到 dist 分支（GitHub 单文件 100MB 上限）：先按同一尺寸重压 media/spine 下的 webp（quality≈70，尺寸不变，
-atlas 的 UV 仍然有效），再 pack 重生成 lock，最后打包 zip。"""
+提取完用 `node tools/plugin.mjs pack official-skins` 生成 plugin.lock.json（骨骼动画数据），`check` 会点出仍读不
+出来的皮肤；那些（骨骼本身不是 Spine 3.8）应当只留立绘、去掉 spine 字段，别让整包校验失败。
+"""
 import sys, os, json, re
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "local-extract"))
 import aklz4  # noqa: F401 (LZ4AK decoder)
@@ -17,100 +20,117 @@ import UnityPy
 ROOT = os.path.dirname(os.path.abspath(__file__))
 AB_ROOT = r"D:\Hypergryph Launcher\games\Arknights\Arknights_Data\StreamingAssets\AB\Windows\arts\dynchars"
 PLUGIN = os.path.join(ROOT, "plugins", "official-skins")
-MEDIA = os.path.join(PLUGIN, "media")
-SPIPE = os.path.join(MEDIA, "spine")
+SPIPE = os.path.join(PLUGIN, "media", "spine")
+CHARS_JSON = os.path.join(ROOT, ".cache", "gamedata", "excel", "character_table.json")
 
 plugin = json.loads(open(os.path.join(PLUGIN, "plugin.json"), encoding="utf-8").read())
-keys = []
-for cid, rec in plugin['assets']['chars'].items():
-    for sk in (rec.get("skins") or {}):
-        keys.append(sk)
+chars_in_plugin = plugin["assets"]["chars"]
+table = json.loads(open(CHARS_JSON, encoding="utf-8").read())
+char_ids = sorted(table.keys(), key=len, reverse=True)   # 长的在前 → 最长前缀匹配
+
+
+def char_id_of(skin_key):
+    for cid in char_ids:
+        if skin_key == cid or skin_key.startswith(cid + "_"):
+            return cid
+    return None
+
 
 def safe_name(k):
     return k.replace("#", "_").replace("/", "_").replace("+", "_").replace(".", "_")
 
-ok, fail = [], []
+
+keys = sorted(p[:-3] for p in os.listdir(AB_ROOT) if p.endswith(".ab"))
+print(f"dynchars 里共 {len(keys)} 套皮肤")
+
+ok, fail, skipped = [], [], []
 for key in keys:
+    cid = char_id_of(key)
+    if not cid:
+        fail.append((key, "找不到对应干员"))
+        continue
+    skins = chars_in_plugin.setdefault(cid, {}).setdefault("skins", {})
+    if (skins.get(key) or {}).get("spine", {}).get("front", {}).get("skel"):
+        skipped.append(key)                       # 已经提取过
+        continue
     ab = os.path.join(AB_ROOT, key + ".ab")
-    if not os.path.isfile(ab):
-        fail.append((key, "no bundle")); continue
     try:
         env = UnityPy.load(ab)
-        skels = {}   # TextAsset 名 → 字节
-        atlases = {}
-        textures = {}
+        skels, atlases, textures = {}, {}, {}
         for obj in env.objects:
-            if obj.type.name == "TextAsset":
+            tname = getattr(getattr(obj, "type", None), "name", "")
+            if tname == "TextAsset":
                 d = obj.read()
                 n = getattr(d, "m_Name", "") or ""
                 script = getattr(d, "m_Script", "") or ""
-                if isinstance(script, str): script = script.encode("utf-8", "surrogateescape")
+                if isinstance(script, str):
+                    script = script.encode("utf-8", "surrogateescape")
                 if n.startswith("dyn_portrait_"):
-                    continue                      # 立绘用的另一套骨骼，不是战斗小人
-                if n.endswith(".atlas"): atlases[n[:-len(".atlas")]] = script
-                elif n.endswith(".skel"): skels[n[:-len(".skel")]] = script
+                    continue
+                if n.endswith(".atlas"):
+                    atlases[n[:-6]] = script
+                elif n.endswith(".skel"):
+                    skels[n[:-5]] = script
                 elif n == f"dyn_illust_{key}":
-                    skels[n] = script             # 没有扩展名的那种：可能是骨骼，也可能不是（下面按能否配对判断）
-            elif obj.type.name == "Texture2D":
+                    skels[n] = script
+            elif tname == "Texture2D":
                 d = obj.read()
                 n = getattr(d, "m_Name", "") or ""
-                if n.startswith(f"dyn_illust_{key}"):
-                    try:
-                        img = d.image
-                        textures[n] = img
-                    except Exception as e:
-                        fail.append((key, f"tex {n}: {e}"))
-        # 骨骼与 atlas 必须**同茎配对**（pixi-spine 按骨架名找同目录的 .atlas）。优先 plain 名，其次 _Start
-        # （有些皮肤的主骨骼是 `<key>_Start.skel` + `<key>_Start.atlas`；旧实现取「最大的 TextAsset」，会挑到
-        # 一个几 MB 的非骨骼大 blob，导出的 .skel 读不出来 —— 那正是「皮肤只有立绘、部署后不出战斗小人」的成因）。
-        plain = f"dyn_illust_{key}"
-        start = f"dyn_illust_{key}_Start"
-        stem = next((s for s in (plain, start) if s in skels and s in atlases), None)
+                try:
+                    textures[n] = d.image
+                except Exception as e:
+                    fail.append((key, f"tex {n}: {e}"))
+        plain, start = f"dyn_illust_{key}", f"dyn_illust_{key}_Start"
+        stem = next((s for s in (plain, start) if s in skels and s in atlases), None) \
+            or next((s for s in sorted(skels) if s in atlases), None)
+        if stem is None and len(skels) == 1 and len(atlases) == 1:
+            # 少数皮肤骨骼与 atlas 的茎名不一致（例如 char_2014_nian_2：skel 是 dyn_illust_char_2014_nian2、
+            # atlas 是 dyn_illust_char_2014_nian）。只有一个骨骼 + 一个 atlas 时就是它们俩，直接配对。
+            stem = next(iter(skels))
+            atlases[stem] = next(iter(atlases.values()))
         if stem is None:
-            stem = next((s for s in sorted(skels) if s in atlases), None)
-        if stem is None:
-            fail.append((key, f"skel={sorted(skels)} atlas={sorted(atlases)}")); continue
-        skel, atlas = (stem + ".skel", skels[stem]), (stem + ".atlas", atlases[stem])
+            fail.append((key, f"skel={sorted(skels)} atlas={sorted(atlases)}"))
+            continue
         outdir = os.path.join(SPIPE, safe_name(key))
         os.makedirs(outdir, exist_ok=True)
-        # 一律写成 plain 名（与 plugin.json 的 `<base>.skel` / `<base>.atlas` 引用一致），atlas 里的页名行同样改成
-        # plain `<base>.webp`，三者（引用、文件名、atlas 页名）对齐。
         base = safe_name(f"dyn_illust_{key}")
-        with open(os.path.join(outdir, base + ".skel"), "wb") as f: f.write(skel[1])
-        atlas_text = atlas[1].decode("utf-8", "replace")
+        with open(os.path.join(outdir, base + ".skel"), "wb") as f:
+            f.write(skels[stem])
+        atlas_text = atlases[stem].decode("utf-8", "replace")
         src_pages = re.findall(r"^(\S+)\.png\s*$", atlas_text, re.M)
         atlas_text = re.sub(r"^\S+\.png\s*$", base + ".webp", atlas_text, flags=re.M)
-        with open(os.path.join(outdir, base + ".atlas"), "w", encoding="utf-8") as f: f.write(atlas_text)
+        with open(os.path.join(outdir, base + ".atlas"), "w", encoding="utf-8") as f:
+            f.write(atlas_text)
         pages = [base + ".webp"] if src_pages else []
-        for src_page in src_pages[:1]:        # 单页（dynchars 每个皮肤一张图集页）
+        for src_page in src_pages[:1]:
             img = None
             for tn, im in textures.items():
-                if safe_name(tn) == safe_name(src_page): img = im; break
+                if safe_name(tn) == safe_name(src_page):
+                    img = im
+                    break
             if img is None:
                 for tn, im in textures.items():
-                    if safe_name(tn).startswith(base): img = im; break
+                    if safe_name(tn).startswith(base):
+                        img = im
+                        break
             if img is None:
-                fail.append((key, f"page {src_page} not found")); pages = []; continue
-            img.save(os.path.join(outdir, base + ".webp"), "WEBP", lossless=False, quality=90, method=6)
-        # spine 引用（相对插件 media/ 的路径）：文件名一律 plain safe，贴图字段名是 textures（不是 pages）
+                fail.append((key, f"page {src_page} 没找到"))
+                pages = []
+                continue
+            img.save(os.path.join(outdir, base + ".webp"), "WEBP", lossless=False, quality=70, method=6)
         rel = f"media/spine/{safe_name(key)}"
-        entry = plugin["assets"]["chars"]
-        # 找到归属干员
-        for cid, rec in entry.items():
-            skins = rec.get("skins") or {}
-            if key in skins:
-                skins[key]["spine"] = {"front": {"skel": f"{rel}/{base}.skel", "atlas": f"{rel}/{base}.atlas",
-                                                 "textures": [f"{rel}/{p}" for p in pages], "pma": True}}
-                break
+        skins[key] = {"spine": {"front": {"skel": f"{rel}/{base}.skel", "atlas": f"{rel}/{base}.atlas",
+                                          "textures": [f"{rel}/{p}" for p in pages], "pma": True}}}
         ok.append(key)
-        print(f"  OK {key}: {stem} → {base}, {len(pages)} pages, skel {len(skel[1])//1024}KB")
+        print(f"  OK {key} → {cid}（{len(pages)} 页，{len(skels[stem]) // 1024} KB 骨骼）")
     except Exception as e:
-        fail.append((key, repr(e)[:120]))
+        fail.append((key, repr(e)[:140]))
 
 with open(os.path.join(PLUGIN, "plugin.json"), "w", encoding="utf-8") as f:
     json.dump(plugin, f, ensure_ascii=False, indent=2)
 
-print(f"\n== 提取完成: {len(ok)}/{len(keys)} 成功 ==")
-if fail:
-    print("失败:")
-    for k, why in fail: print(f"  {k}: {why}")
+print(f"\n== 新提取 {len(ok)} 套；已存在跳过 {len(skipped)} 套；失败 {len(fail)} 套 ==")
+for k, why in fail:
+    print(f"  失败 {k}: {why}")
+total = sum(len(r.get("skins") or {}) for r in chars_in_plugin.values())
+print(f"插件现在共有 {len(chars_in_plugin)} 位干员 / {total} 套皮肤")

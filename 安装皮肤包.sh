@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")"
+BASE="https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist"
 
-if [ -f plugins/official-skins/plugin.json ] && [ -f plugins/official-skins/plugin.lock.json ]; then
-  echo "  皮肤插件已经安装过了（含 plugin.lock.json）。如需重装请先删除 plugins/official-skins/。"
-  exit 0
+# 装一批皮肤：$1 = 插件目录名（同时是 zip 名）
+install_pack() {
+  local name="$1" size="$2"
+  if [ -f "plugins/$name/plugin.json" ] && [ -f "plugins/$name/plugin.lock.json" ]; then
+    echo "  $name 已经装过了（含 plugin.lock.json）。"
+    return 0
+  fi
+  if [ -f "plugins/$name/plugin.json" ]; then
+    echo "  $name 是旧版（没有 plugin.lock.json，战斗里不会出模型），先删掉重装 …"
+    rm -rf "plugins/$name"
+  fi
+  echo "== 下载 $name（$size）=="
+  [ -f "$name.zip" ] || curl -L --retry 2 -o "$name.zip" "$BASE/$name.zip"
+  echo "== 解压 $name =="
+  if command -v unzip >/dev/null 2>&1; then unzip -o "$name.zip" -d plugins/
+  else python3 -c "import zipfile; zipfile.ZipFile('$name.zip').extractall('plugins/')"; fi
+  rm -f "$name.zip"
+  [ -f "plugins/$name/plugin.json" ] || { echo "[错误] $name 解压失败"; return 1; }
+}
+
+install_pack official-skins "98 MB，64 套"
+install_pack official-skins-part2 "42.9 MB，36 套"
+
+# 让新房间默认带上皮肤包（没有 plugins/config.json 时新房间不带任何插件 → 皮肤显示「0 套外观」）
+if [ -f plugins/official-skins/plugin.json ] && [ ! -f plugins/config.json ]; then
+  DEF="\"official-skins\""
+  [ -f plugins/official-skins-part2/plugin.json ] && DEF="\"official-skins\", \"official-skins-part2\""
+  cat > plugins/config.json <<JSON
+{
+  "rooms": "host",
+  "default": [$DEF],
+  "allow": ["*"],
+  "classes": { "cosmetic": true, "content": true }
+}
+JSON
+  echo "  已写入 plugins/config.json：新房间默认启用皮肤包。"
 fi
-if [ -f plugins/official-skins/plugin.json ]; then
-  echo "  检测到旧版皮肤包（没有 plugin.lock.json，战斗里不会出模型），先删掉旧目录再重装 …"
-  rm -rf plugins/official-skins
-fi
 
-echo "== 下载皮肤包（98 MB）=="
-if [ ! -f official-skins.zip ]; then
-  curl -L -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip"
-fi
-
-echo "== 解压 =="
-if command -v unzip >/dev/null 2>&1; then unzip -o official-skins.zip -d plugins/
-else python3 -c "import zipfile; zipfile.ZipFile('official-skins.zip').extractall('plugins/')"; fi
-rm -f official-skins.zip
-
-[ -f plugins/official-skins/plugin.json ] && echo "== 皮肤包安装完成（64 套皮肤：62 套含战斗内动态模型 + 2 套立绘）== 重启服务器后，玩家在【设置】里打开「官方皮肤包」（装载自动，开关不会替玩家打开）==" || { echo "[错误] 解压失败"; exit 1; }
+echo "== 皮肤包安装完成（64 + 36 = 100 套）== 重启服务器后，新房间默认就带皮肤包；到【干员调配】里选皮肤即可。"
