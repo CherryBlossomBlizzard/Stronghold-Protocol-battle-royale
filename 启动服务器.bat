@@ -18,9 +18,31 @@ where node >nul 2>nul
 if errorlevel 1 (
   echo.
   echo   [错误] 没有找到 Node.js（需要 22 或更高版本）。请先安装，再运行本文件。
+  echo          下载：https://nodejs.org/  （选 LTS，安装时勾选 Add to PATH）
   echo.
   pause
-  exit /b 1
+  goto end
+)
+rem ---- Node 版本闸门：本服要求 22+。旧版本会在「node server\index.js」一启动就报语法错并退出，
+rem      以前那种情况下窗口跟着关掉，看起来就是「闪退」——这里先拦住并说清楚 ----
+set "NODEV="
+for /f "delims=" %%V in ('node -v 2^>nul') do set "NODEV=%%V"
+set "NODEMAJ="
+if defined NODEV for /f "tokens=1 delims=." %%A in ("!NODEV:v=!") do set "NODEMAJ=%%A"
+if not defined NODEMAJ (
+  echo.
+  echo   [错误] 无法识别 Node.js 版本（node -v 没有输出）。请重装 Node 22 或更高版本。
+  echo.
+  pause
+  goto end
+)
+if !NODEMAJ! LSS 22 (
+  echo.
+  echo   [错误] Node.js 版本太低：!NODEV!  （本服需要 22 或更高）
+  echo          请到 https://nodejs.org/ 装 LTS 版本后再运行本文件。
+  echo.
+  pause
+  goto end
 )
 
 :menu
@@ -59,7 +81,7 @@ if "%CH%"=="6" goto askport
 if "%CH%"=="7" goto toggle
 if "%CH%"=="8" goto show
 if "%CH%"=="9" goto uninstall
-if "%CH%"=="0" exit /b 0
+if "%CH%"=="0" goto end
 goto menu
 
 :askport
@@ -103,6 +125,13 @@ if not exist "node_modules" (
 if not exist "public\vendor\preact.module.js" (
   echo   首次运行：下载前端运行库，npm run vendor …
   call npm run vendor
+  if errorlevel 1 (
+    echo.
+    echo   [提示] 前端运行库没下成功。界面可能打不开，但不影响服务器启动。
+    echo          网络恢复后重新运行本文件即可再试一次。
+    echo.
+    pause
+  )
 )
 if not exist "public\assets" (
   echo   首次运行：下载美术与音频，npm run setup，可中断，再次运行会续传 …
@@ -110,6 +139,7 @@ if not exist "public\assets" (
   echo   [提示] 素材没下完也不影响启动，游戏里会自动补齐。
 )
 rem ---- 卫戍协议 · 大逃杀：皮肤包内置化 —— 缺包、或装的是旧版（没有 plugin.lock.json）时自动下载（98 MB）----
+rem      皮肤是可选内容：任何一步失败都只提示、不中断启动，但**不再静默吞掉原因**，并且窗口不会自动关闭。
 set "SKIN=plugins\official-skins"
 if not exist "%SKIN%\plugin.lock.json" (
   if exist "%SKIN%\plugin.json" (
@@ -118,19 +148,56 @@ if not exist "%SKIN%\plugin.lock.json" (
   ) else (
     echo   首次运行：下载官方皮肤包（98 MB，64 套皮肤，其中 62 套含战斗内动态模型）…
   )
-  curl -L -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip" >nul 2>nul
-  if exist official-skins.zip (
+  if exist official-skins.zip del official-skins.zip 2>nul
+  curl -L --retry 2 -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip" >nul 2>nul
+  set "ZCURL=!errorlevel!"
+  set "ZSZ=0"
+  if exist official-skins.zip for %%F in (official-skins.zip) do set "ZSZ=%%~zF"
+  if not "!ZCURL!"=="0" (
+    echo   [提示] 皮肤包下载失败（curl 退出码 !ZCURL!）—— 跳过。可稍后运行 安装皮肤包.bat
+  ) else if !ZSZ! LSS 50000000 (
+    rem 98 MB 的包下成几十 KB，通常是 GitHub 的错误页或网络中断 —— 直接判为坏包，别拿去解压
+    echo   [提示] 皮肤包不完整（只下到 !ZSZ! 字节）—— 已删除，跳过。可稍后运行 安装皮肤包.bat
+    del official-skins.zip 2>nul
+  ) else (
     powershell -NoProfile -Command "Expand-Archive -Path 'official-skins.zip' -DestinationPath 'plugins' -Force" >nul 2>nul
+    set "ZEXP=!errorlevel!"
     del official-skins.zip 2>nul
     if exist "%SKIN%\plugin.json" (
       echo   皮肤包就绪。玩家在【设置】里打开「官方皮肤包」即可使用（不会替玩家自动开启）。
-    ) else echo   [提示] 皮肤包解压失败 —— 跳过（不影响游戏；可稍后运行 安装皮肤包.bat）
-  ) else echo   [提示] 皮肤包下载失败 —— 跳过（不影响游戏；可稍后运行 安装皮肤包.bat）
+    ) else (
+      echo   [提示] 皮肤包解压失败（PowerShell 退出码 !ZEXP!）—— 跳过，不影响游戏。
+      echo          手动补装：右键 安装皮肤包.bat ^> 以管理员身份运行。
+      echo.
+      pause
+    )
+  )
 )
 goto start
 
 :start
 echo.
+rem ---- 预检：目录不完整时直接说人话（否则 node 抛 MODULE_NOT_FOUND，看起来就是「一闪就没」）----
+if not exist "server\index.js" (
+  echo   ============================================================
+  echo    [错误] 这个文件夹不完整：没找到 server\index.js
+  echo   ============================================================
+  echo    本文件必须和仓库/发布包里的其它文件放在一起运行。
+  echo    常见情况：只单独下载了 启动服务器.bat，或者解压时少解了一层目录。
+  echo    做法：把整个发布包完整解压，再双击里面的 启动服务器.bat。
+  echo.
+  pause
+  goto end
+)
+if not exist "package.json" (
+  echo   ============================================================
+  echo    [错误] 这个文件夹不完整：没找到 package.json
+  echo   ============================================================
+  echo    同上 —— 请把整个发布包完整解压后再运行本文件。
+  echo.
+  pause
+  goto end
+)
 echo   == 启动服务器 ==
 echo   端口：%PORT%
 echo   启动完成后浏览器打开：   http://localhost:%PORT%
@@ -138,12 +205,34 @@ echo   局域网玩家用             http://本机IP:%PORT%  进入。
 echo   停止服务器：在本窗口按 Ctrl+C 或直接关掉窗口。
 echo.
 node server\index.js
+set "RC=%errorlevel%"
 echo.
-echo   服务器已退出，退出码 %errorlevel% 。
-echo   端口被别的程序占用时：回菜单换一个端口，或再次启动让它自动清理。
+if "%RC%"=="0" (
+  echo   服务器已正常退出（退出码 0）。
+) else (
+  echo   ============================================================
+  echo    服务器异常退出，退出码 %RC%
+  echo   ============================================================
+  echo    常见原因 ^(按顺序排查^)：
+  echo      1. 端口 %PORT% 被别的程序占用 —— 回菜单换一个端口，或再启动一次让它自动清理
+  echo      2. Node 版本低于 22 —— 本服需要 Node 22+，当前版本：
+  node -v
+  echo      3. 依赖不全或损坏 —— 删掉 node_modules 文件夹后重新运行本文件
+  echo      4. 端口小于 1024 —— 需要右键「以管理员身份运行」
+  echo      5. 皮肤包/插件损坏 —— 删掉 plugins\official-skins 后重新运行本文件
+  echo.
+  echo    把上面的报错整段发出来就能定位。
+)
 echo.
-pause
+echo   按任意键回到菜单（本窗口不会再自己关闭）。
+pause >nul
 goto menu
+
+:end
+echo.
+echo   已退出。按任意键关闭窗口。
+pause >nul
+exit /b 0
 
 :uninstall
 echo.

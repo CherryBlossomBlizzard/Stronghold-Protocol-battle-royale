@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 title 安装官方皮肤包
 
@@ -15,16 +16,31 @@ if exist plugins\official-skins\plugin.json (
 
 echo == 下载皮肤包（98 MB，视网络而定）==
 if not exist official-skins.zip (
-  curl -L -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip"
+  curl -L --retry 2 -o official-skins.zip "https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip"
   if errorlevel 1 (
-    echo   [错误] 下载失败。请检查网络后重试。
+    echo   [错误] 下载失败（curl 退出码 !errorlevel!）。请检查网络后重试。
+    echo          常见原因：证书/代理拦截（curl: 35）、DNS 不通、GitHub 被墙。
+    echo          手动下载地址：
+    echo          https://github.com/CherryBlossomBlizzard/Stronghold-Protocol-battle-royale/raw/dist/official-skins.zip
+    echo          下载后把 official-skins.zip 放到本文件旁边，再运行一次。
     pause
-    exit /b 1
+    goto end
   )
+)
+rem 98 MB 的包若只下到几十 KB，通常是 GitHub 的错误页/中断 —— 直接用会解压失败
+set "ZSZ=0"
+for %%F in (official-skins.zip) do set "ZSZ=%%~zF"
+if %ZSZ% LSS 50000000 (
+  echo   [错误] 下载到的文件不完整（只有 %ZSZ% 字节，正常约 103 MB）。
+  echo          已删除，请重试；或换网络后再运行本文件。
+  del official-skins.zip 2>nul
+  pause
+  goto end
 )
 
 echo == 解压到 plugins\ ==
 powershell -NoProfile -Command "Expand-Archive -Path 'official-skins.zip' -DestinationPath 'plugins' -Force"
+set "RC=%errorlevel%"
 del official-skins.zip 2>nul
 
 if exist plugins\official-skins\plugin.json (
@@ -34,5 +50,18 @@ if exist plugins\official-skins\plugin.json (
   echo   ============================================================
   echo    下一步：重启服务器。玩家在【设置】里打开「官方皮肤包」，
   echo    到【干员调配】选皮肤（装载是自动的，开关不会替玩家打开）。
-) else echo   [错误] 解压后没找到 plugins\official-skins\plugin.json
+) else (
+  echo.
+  echo   [错误] 解压后没找到 plugins\official-skins\plugin.json（PowerShell 退出码 %RC%）
+  echo          常见原因：压缩包不完整、磁盘空间不足、plugins 目录只读。
+  echo          可以重新运行本文件；或手动解压 official-skins.zip 到 plugins\ 下。
+)
+echo.
+echo   按任意键关闭窗口。
 pause
+
+exit /b 0
+
+:end
+endlocal
+exit /b 0
