@@ -303,6 +303,12 @@ function wireNet() {
     }
   });
 
+  // 加入同盟 / 搜寻队友 合并模块：这台服务器上此刻的同盟房列表（room.list → m.rooms，大厅里每 2 秒问一次）。
+  net.on('m.rooms', (msg) => {
+    const rooms = Array.isArray(msg.rooms) ? msg.rooms.filter((r) => r && typeof r.code === 'string') : [];
+    store.set({ rooms });
+  });
+
   // Entering (title → lobby) while already online also needs the deep-link join.
   store.subscribe((s, prev) => {
     if (s.session.entered && !prev.session.entered) schedulePendingJoin();

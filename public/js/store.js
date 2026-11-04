@@ -96,6 +96,9 @@ export const initialState = Object.freeze({
   // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：`m.search` state — null when idle, else
   // { state: 'queued'|'found'|'timeout'|'cancelled', search, difficulty, capacity, queue, timeoutSec, at }.
   search: null,
+  // 加入同盟 / 搜寻队友 合并模块的房间列表（room.list → m.rooms）：[{ code, hostName, mode, difficulty,
+  // capacity, humans, bots, rulesVariant, test, state, joinable, mine }]。在大厅里每 2 秒刷新一次。
+  rooms: [],
   clock: { offset: 0, rtt: null, synced: false },
   ui: { pendingJoin: null, restoring: false, buildStale: false },
 });

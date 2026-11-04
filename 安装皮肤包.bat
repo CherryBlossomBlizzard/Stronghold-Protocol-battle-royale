@@ -44,12 +44,22 @@ set "RC=%errorlevel%"
 del official-skins.zip 2>nul
 
 if exist plugins\official-skins\plugin.json (
+  rem 让新房间默认带上皮肤包：没有 plugins\config.json 时新房间不带任何插件 → 皮肤显示为「0 套外观」
+  if not exist plugins\config.json (
+    >"plugins\config.json" echo {
+    >>"plugins\config.json" echo   "rooms": "host",
+    >>"plugins\config.json" echo   "default": ["official-skins"],
+    >>"plugins\config.json" echo   "allow": ["*"],
+    >>"plugins\config.json" echo   "classes": { "cosmetic": true, "content": true }
+    >>"plugins\config.json" echo }
+    echo    已写入 plugins\config.json：新房间默认启用官方皮肤包。
+  )
   echo.
   echo   ============================================================
   echo    皮肤包安装完成（64 套皮肤：62 套含战斗内动态模型 + 2 套立绘）
   echo   ============================================================
-  echo    下一步：重启服务器。玩家在【设置】里打开「官方皮肤包」，
-  echo    到【干员调配】选皮肤（装载是自动的，开关不会替玩家打开）。
+  echo    下一步：重启服务器。新房间默认就带皮肤包（也可以让玩家自己在
+  echo    【设置】里开关），到【干员调配】里选皮肤即可。
 ) else (
   echo.
   echo   [错误] 解压后没找到 plugins\official-skins\plugin.json（PowerShell 退出码 %RC%）

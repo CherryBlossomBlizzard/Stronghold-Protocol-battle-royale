@@ -173,6 +173,17 @@ if not exist "%SKIN%\plugin.lock.json" (
     )
   )
 )
+rem ---- 让新房间默认带上官方皮肤包：写服务器策略 plugins\config.json（已存在就不动，那是房主自己的策略）----
+rem      没有这个文件时，新房间默认不带任何插件 → 皮肤包里 51 位干员的外观在【干员调配】里显示为「0 套外观」。
+if exist "%SKIN%\plugin.json" if not exist "plugins\config.json" (
+  >"plugins\config.json" echo {
+  >>"plugins\config.json" echo   "rooms": "host",
+  >>"plugins\config.json" echo   "default": ["official-skins"],
+  >>"plugins\config.json" echo   "allow": ["*"],
+  >>"plugins\config.json" echo   "classes": { "cosmetic": true, "content": true }
+  >>"plugins\config.json" echo }
+  echo   已写入 plugins\config.json：新房间默认启用官方皮肤包（玩家不用再手动打开）。
+)
 goto start
 
 :start

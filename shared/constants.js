@@ -28,7 +28,11 @@ export const PLUGIN_API = Object.freeze({ current: 2, min: 1 });
  */
 export const BASE_SEATS = 4;
 export const MAX_SEATS = 20;
-export const DEFAULT_SEATS = 8;
+/**
+ * 新开同盟房默认多少人 —— 本服主打 20 人大逃杀，所以默认直接给满 MAX_SEATS（维护者要求）；
+ * 房主可以在等待室底部的「房间容量」里改小（ROOM_CAPACITIES）。4 人及以下的规模、经济与官方一致。
+ */
+export const DEFAULT_SEATS = MAX_SEATS;
 export const ROOM_CAPACITIES = Object.freeze([4, 8, 10, 16, 20]);
 /** The strategy / 机变 draft hands out more cards the more seats a room holds (shared/playerCapacity.js
  * coopDraftCardCount): one spare pair above the player count, within this ceiling. */

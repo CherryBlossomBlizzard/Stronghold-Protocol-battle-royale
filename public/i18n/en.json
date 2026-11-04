@@ -2214,5 +2214,14 @@
   "{SERVER_NAME} · 血量 30 · 卡池无限 · 装备无限 · 无联防 · 第 20 回合五亿血首领战": "{SERVER_NAME} · 30 LP · unlimited operators · unlimited items · no unite · 500M-HP boss fight on round 20",
   "3 血 → 1 钱": "3 HP → 1 fund",
   "卫戍协议：盟约 · 大逃杀": "Stronghold Protocol: Alliance · Battle Royale",
-  "目标生命值不足 3 点": "Objective HP below 3"
+  "目标生命值不足 3 点": "Objective HP below 3",
+  "服务器上的同盟": "Alliances on this server",
+  "{n} 个房间": "{n} rooms",
+  "暂无": "None",
+  "等待房主": "Waiting for a host",
+  "你在里面": "You are in it",
+  "模拟中": "In match",
+  "加入": "Join",
+  "已满": "Full",
+  "还没有人开同盟房 —— 你可以现在开一个": "No one has opened an alliance room yet — you can open one now"
 }

@@ -514,6 +514,9 @@ export const C2S = {
     capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
   // 退出匹配队列（搜寻中可随时取消）。
   'room.searchCancel': {},
+  // 列出这台服务器上此刻的同盟房（「加入同盟 / 搜寻队友」合并模块的数据源）：无字段，回一条 m.rooms。
+  // 密钥本来就是公开的邀请码，所以列表里直接给，客户端点一下就能一键加入。
+  'room.list': {},
   'room.ready': { ready: isBool },
   'room.setDifficulty': { difficulty: (v) => DIFFICULTIES.includes(v) },
   // the co-op room option 「AI 队友最后选择」 (GitHub #338; host, before the match): the strategy and 机变 drafts order every
@@ -658,6 +661,9 @@ export const S2C = [
   //   state: 'queued' 排队中 / 'found' 已匹配到房间（随后 room.state 到达）/ 'timeout' 等待超时已用 AI 补位开局 /
   //          'cancelled' 已退出队列
   'm.search',
+  // m.rooms { rooms: [{ code, hostName, mode, difficulty, capacity, humans, bots, rulesVariant, test, state,
+  //   joinable, mine }] } — 这台服务器上此刻的同盟房列表（room.list 的回应；state: 'waiting' | 'playing'）。
+  'm.rooms',
   'm.public', 'm.private', 'm.field', 'm.toast', 'm.ticker', 'm.emote', 'm.result',
   // m.layer { playerId, bondId, add } — own live prep layer gain; ephemeral, never replayed on resync.
   'm.layer',

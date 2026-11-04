@@ -42,12 +42,29 @@
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 3.8rem));
-  grid-template-rows: minmax(0, 6rem);
+  grid-auto-rows: minmax(0, 6rem);
   justify-content: center;
   align-content: center;
   gap: .3rem;
   padding: .3rem .6rem .24rem;
+  /* 20 人房是 5 行：座位区自己滚动，绝不把底部设置栏顶出屏幕 */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
+/* 10 人以上：卡片紧凑一档（4×5 也能一屏放下，滚动只作兜底） */
+.seats--many {
+  grid-auto-rows: minmax(0, 4.2rem);
+  gap: .2rem;
+  align-content: start;
+  padding-top: .22rem;
+}
+.seats--many .seat { --bk-l: .12rem; padding: .1rem .14rem 0; gap: .04rem; }
+.seats--many .seat__art .avatar { --av: 1.45rem; }
+.seats--many .seat__name { font-size: calc(.2 * var(--t)); max-width: 2.6rem; }
+.seats--many .seat__no { font-size: calc(.18 * var(--t)); }
+.seats--many .seat__bot-label { font-size: calc(.13 * var(--t)); }
+.seats--many .seat__foot { font-size: calc(.14 * var(--t)); }
 .seats--solo { grid-template-columns: 3.8rem minmax(0, 6.4rem); }
 
 .seat {

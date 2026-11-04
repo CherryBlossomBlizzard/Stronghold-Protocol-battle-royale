@@ -289,3 +289,27 @@
 .search-overlay__count .num { font-size: calc(.5 * var(--t)); line-height: 1; color: var(--mint-400); text-shadow: 0 0 .14rem rgba(23, 249, 183, .45); }
 .search-overlay__count .t-lo { margin-left: .16rem; }
 .search-overlay__tip { font-size: calc(.14 * var(--t)); line-height: 1.5; min-height: .42rem; animation: tip-in var(--t-slow) var(--ease-out); }
+
+/* ---- 服务器上的同盟房列表（「加入同盟 / 搜寻队友」合并模块，room.list → m.rooms）-------------------- */
+.room-dir { display: flex; flex-direction: column; gap: .12rem; margin-bottom: .14rem; }
+.room-dir__head { display: flex; align-items: center; gap: .1rem; }
+.room-dir__title { display: flex; align-items: center; gap: .08rem; font-size: calc(.16 * var(--t)); font-weight: 700; color: var(--text-md); }
+.room-dir__count { margin-left: auto; font-size: calc(.14 * var(--t)); }
+.room-dir__refresh { display: grid; place-items: center; width: .34rem; height: .34rem; background: transparent; color: var(--text-md); border: 1px solid var(--line); }
+.room-dir__refresh:hover:not(:disabled) { color: var(--mint-400); border-color: var(--mint-700); }
+.room-dir__refresh:disabled { opacity: .4; }
+.room-dir__refresh .icon { width: .18rem; height: .18rem; }
+.room-dir__list { display: flex; flex-direction: column; gap: .06rem; max-height: 2.6rem; overflow-y: auto; scrollbar-width: thin; }
+.room-dir__row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .08rem .12rem;
+  padding: .08rem .12rem; background: rgba(255, 255, 255, .02); border: 1px solid var(--line);
+}
+.room-dir__row.is-full { opacity: .62; }
+.room-dir__code { font-size: calc(.2 * var(--t)); font-weight: 700; letter-spacing: .18em; color: var(--mint-400); }
+.room-dir__host { font-size: calc(.16 * var(--t)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-dir__meta { grid-column: 1 / 3; display: flex; flex-wrap: wrap; align-items: center; gap: .06rem .14rem; font-size: calc(.13 * var(--t)); }
+.room-dir__meta b { color: var(--text-md); }
+.room-dir__row > .btn { grid-row: 1 / 3; grid-column: 3; }
+.room-dir__note { grid-row: 1 / 3; grid-column: 3; font-size: calc(.13 * var(--t)); white-space: nowrap; }
+.room-dir__empty { font-size: calc(.15 * var(--t)); padding: .1rem 0; }
+.join-panel .search-panel { margin-top: .14rem; }

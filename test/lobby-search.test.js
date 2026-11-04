@@ -97,6 +97,46 @@ describe('搜寻队友 (matchmaking)', () => {
     assert.ok(s2);
   });
 
+  test('room.list: 这台服务器上的同盟房（密钥 / 房主 / 人数 / 是否可加入），在一键加入前就能看到', async () => {
+    const host = await pool.player('HostList');
+    const created = await host.request({ t: 'room.create', mode: 'coop', difficulty: 'HARD', capacity: 4 });
+    assert.equal(created.t, 'ok');
+    const st = await host.waitFor('room.state');
+    const code = st.code;
+
+    const viewer = await pool.player('Viewer');
+    const res = await viewer.request({ t: 'room.list' });
+    assert.equal(res.t, 'ok');
+    const m = await viewer.waitFor('m.rooms');
+    const row = m.rooms.find((r) => r.code === code);
+    assert.ok(row, '客房出现在列表里');
+    assert.equal(row.difficulty, 'HARD');
+    assert.equal(row.capacity, 4);
+    assert.equal(row.humans, 1);
+    assert.equal(row.bots, 0);
+    assert.equal(row.state, 'waiting');
+    assert.equal(row.joinable, true);
+    assert.equal(row.rulesVariant, 'battle-royale');
+    assert.equal(row.mine, false, '别人的房间');
+    assert.ok(row.hostName, '带房主名字');
+
+    // 房主自己看：mine = true
+    await host.request({ t: 'room.list' });
+    const mine = await host.waitFor('m.rooms');
+    assert.equal(mine.rooms.find((r) => r.code === code).mine, true);
+
+    // 满员 → 不可加入（4 个座位：房主 + 3 个 AI）
+    for (let i = 0; i < 3; i++) await host.request({ t: 'room.addBot' });
+    await viewer.request({ t: 'room.list' });
+    const full = await viewer.waitFor('m.rooms', (x) => {
+      const r = x.rooms.find((y) => y.code === code);
+      return r && r.bots === 3;
+    });
+    const fullRow = full.rooms.find((r) => r.code === code);
+    assert.equal(fullRow.joinable, false, '席位满了就不能一键加入');
+    await host.request({ t: 'room.leave' });
+  });
+
   test('a full group assembles at once: 4/4 fast searchers land in one room, the first entry hosts', async () => {
     clock.t += 10_000;
     const ps = [];

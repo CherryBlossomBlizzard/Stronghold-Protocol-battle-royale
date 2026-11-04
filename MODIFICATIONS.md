@@ -67,7 +67,9 @@
    **限时 2 分钟**，战斗结束（打死领袖，或时间到）即**结束这一把**，不再进入隐秘核心（`noHiddenCore`，
    `GameData.hiddenRound` 恒为 `null`）。
 9. **20 人房**：沿用龙千尘分支的容量规则（`shared/playerCapacity.js`：4 / 8 / 10 / 16 / 20 席位、固定分组表、
-   五人组 III 阶取整、按组数扩展联防）。
+   五人组 III 阶取整、按组数扩展联防）。**新开同盟房默认就是 20 人**（`DEFAULT_SEATS = MAX_SEATS`，维护者要求）；
+   房主在等待室底部的「房间容量」里可改小（4/8/10/16/20）。20 人房是 5 行 × 4 列，座位区自己滚动、卡片自动收紧
+   一档（`.seats--many`），不会把底部设置栏顶出屏幕。
 10. **血量上限统一 30**（`startLp: 30`，`server/match/gamedata.js` 的 `startLp()` 对所有策略返回 30，
     不按 bands.json 的 totalHp 22–45 浮动）；**干员卡池与装备都无限量**（见下）；
     删除联防环节（漏怪直接扣血，`noUnite: true` → `server/match/match/combat.js` 直接结算扣血）；回合数没有上限
@@ -97,13 +99,21 @@
   官方 盟约 没有文字聊天，房间内与对局内都用官方表情。房间界面加了和战斗内同一套表情轮盘（`public/js/ui/emotes.js`
   `EmoteWheel`，36 个官方表情、chatCD 1 秒限频、气泡显示 chatTime 3 秒），发一个表情服务端按官方 chatCD 限频并向
   房间广播 `m.roomEmote { playerId, id }`，每位博士头像上弹气泡。观战席只能看不能发（`SPECTATOR`，与对局内一致）。
-- **搜寻队友**（`room.search` / `room.searchCancel` / `m.search`，官方 联合模拟 matchmaking，research 06 §3.3）：大厅
-  加了官方的匹配入口 —— **精确搜寻**（"更容易搜寻到实力相近的队友"）与**快速搜寻**（"更快速地搜寻队友"），按
-  难度 + 房间容量（`ROOM_CAPACITIES` 4/8/10/16/20）分组排队（`server/lobby.js` searchQueue），组内凑满 capacity 个
-  真人立即组建同盟（首位为房主），凑不满则超时由 AI 队友补位开局（research 06 §3.3 [ASSUMED] "fill with bots"）。
-  本复刻没有官方的奖杯数据，[ASSUMED] 两种搜寻的区别只在等待时长：快速搜寻 `MATCH_FAST_FILL_MS`（15 秒）后补位，
-  精确搜寻等满官方 `matchTimeMax`（`MATCH_TIMEOUT_MS` 120 秒）。搜寻中可 `room.searchCancel` 退出；建房 / 加入房间 /
-  掉线 / 会话过期都会自动出队；服务端每 `MATCH_POLL_MS`（1 秒）清空队列（仅队列非空时开定时器）。
+- **加入同盟 / 搜寻队友（合并成一个模块）**（`room.list` / `m.rooms` + `room.search` / `room.searchCancel` / `m.search`）：
+  大厅原先「按密钥加入」和「搜寻队友」是两块，现在合成「加入同盟」一个模块（`public/js/screens/lobby.js`
+  `RoomDirectory` + `SearchPanel`）：
+  * **服务器上的同盟房列表**（`room.list` → `m.rooms`）：大厅里每 2 秒问一次服务端，列出这台服务器上此刻的同盟房 ——
+    密钥、房主名字、难度、`人数/容量`、AI 数、规则模式（大逃杀 / 官方原版）、测试房标记、是否在模拟中，**能加入的
+    排前面**，每行一个「加入」按钮（一键 `room.join`）。密钥本来就是公开的邀请码，所以列表里直接给；满员 / 模拟中的
+    行灰掉并显示「已满」「模拟中」，自己所在的那间显示「你在里面」。协议见 `docs/design/network.md` §8.1。
+  * **按密钥加入**（保留）：输入框 / 粘贴邀请链接 / 最近同盟 / 观战。
+  * **搜寻队友**（官方 联合模拟 matchmaking，research 06 §3.3）：**精确搜寻**（"更容易搜寻到实力相近的队友"）与
+    **快速搜寻**（"更快速地搜寻队友"），按难度 + 房间容量（`ROOM_CAPACITIES` 4/8/10/16/20）分组排队（`server/lobby.js`
+    searchQueue），组内凑满 capacity 个真人立即组建同盟（首位为房主），凑不满则超时由 AI 队友补位开局
+    （research 06 §3.3 [ASSUMED] "fill with bots"）。本复刻没有官方的奖杯数据，[ASSUMED] 两种搜寻的区别只在等待时长：
+    快速搜寻 `MATCH_FAST_FILL_MS`（15 秒）后补位，精确搜寻等满官方 `matchTimeMax`（`MATCH_TIMEOUT_MS` 120 秒）。
+    搜寻中可 `room.searchCancel` 退出；建房 / 加入房间 / 掉线 / 会话过期都会自动出队；服务端每 `MATCH_POLL_MS`
+    （1 秒）清空队列（仅队列非空时开定时器）。
 - **皮肤部署后的战斗小人**：皮肤系统的战斗内 Spine 模型链路（`Unit.skin` → `snapshot.js` → `render/units.js`
   `_modelEntry` → `assets.js` `spineEntry(id, { skin })`）上游已具备，`docs/SKINS.md` 为准绳；本次修复的是 dist 分支
   `official-skins.zip` 皮肤包数据 —— 上一版 zip 里 Spine 文件缺扩展名（`_skel` / `_atlas`）与 `plugin.json` 的引用

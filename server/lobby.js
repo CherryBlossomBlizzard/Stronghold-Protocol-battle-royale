@@ -694,6 +694,8 @@ export class Lobby {
       case 'room.emote': return this.roomEmote(session, msg);
       case 'room.search': return this.search(session, msg);
       case 'room.searchCancel': return this.searchCancel(session);
+      // 「加入同盟 / 搜寻队友」合并模块：这台服务器上此刻有哪些同盟房（列表里可以直接一键加入）
+      case 'room.list': return this.roomList(session);
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setAiPicksLast': return this.setAiPicksLast(session, msg);
@@ -935,6 +937,41 @@ export class Lobby {
       queue: this.searchQueue.size,
       timeoutSec: Math.round(MATCH_TIMEOUT_MS / 1000),
     });
+  }
+
+  /**
+   * room.list: 这台服务器上此刻的同盟房列表（「加入同盟 / 搜寻队友」合并模块的数据源）。
+   * 只列同盟房（独立模拟的房间没有邀请意义），带密钥、房主名字、难度、人数 / 容量、规则模式、是否在打。
+   * 密钥本身就是公开的邀请码，所以直接给 —— 客户端点一下就是 room.join，一键加入。
+   * @param {import('./net.js').Session} session
+   */
+  roomList(session) {
+    const rooms = [];
+    for (const room of this.rooms.values()) {
+      if (room.disposed || room.mode !== 'coop') continue;
+      const seats = Array.isArray(room.seats) ? room.seats : [];
+      const humans = seats.filter((s) => s && !s.left && !s.isBot).length;
+      const bots = seats.filter((s) => s && !s.left && s.isBot).length;
+      const host = room.hostId ? seats.find((s) => s && s.playerId === room.hostId) : null;
+      const playing = !!room.match;
+      rooms.push({
+        code: room.code,
+        hostName: host ? host.name : null,
+        mode: room.mode,
+        difficulty: room.difficulty,
+        capacity: room.capacity,
+        humans, bots,
+        rulesVariant: room.rulesVariant === 'official' ? 'official' : 'battle-royale',
+        test: !!room.test,
+        state: playing ? 'playing' : 'waiting',
+        joinable: !playing && humans + bots < room.capacity,
+        mine: room.code === session.roomCode,
+      });
+    }
+    // 能加入的排前面，其次人多、人少的排后面
+    rooms.sort((a, b) => (Number(b.joinable) - Number(a.joinable)) || (b.humans - a.humans) || (a.code < b.code ? -1 : 1));
+    sendSession(session, { t: 'm.rooms', rooms, at: this.now() });
+    return OK;
   }
 
   /** The queue-drain timer runs only while anyone is queued (MATCH_POLL_MS; unref'd like net.js's sweep). */

@@ -366,7 +366,7 @@ export function RoomScreen() {
       </div>
     </header>
 
-    <main class=${`seats${coop ? '' : ' seats--solo'}`}>
+    <main class=${`seats${coop ? '' : ' seats--solo'}${facts.seats.length > 8 ? ' seats--many' : ''}`}>
       ${facts.seats.map((s, i) => html`<${SeatCard} key=${s ? `p${s.playerId}` : `e${i}`} seat=${s} index=${i} room=${room} facts=${facts}
         myId=${me.playerId} busy=${busy} onAddBot=${addBot} onRemoveBot=${removeBot} onKick=${kick}
         bubble=${s ? bubbles.get(s.playerId) || null : null} />`)}
@@ -402,16 +402,16 @@ export function RoomScreen() {
                 class=${`rules-variant__opt${room.rulesVariant === 'official' ? ' is-active' : ''}`}
                 disabled=${!!busy} onClick=${() => setRulesVariant('official')}>${t('官方原版')}</button>
             </div>
-                    ${coop && facts.isHost ? html`<div class="rules-variant">
+          </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('规则模式：')}${room.rulesVariant === 'official' ? t('官方原版') : t('大逃杀')}</span>` : null}
+          ${coop && facts.isHost ? html`<div class="rules-variant">
             <span class="room-bar__label">${t('房间容量')}<${MicroLabel}>SEATS<//></span>
             <div class="rules-variant__opts" role="radiogroup" aria-label=${t('房间容量')}>
-              ${[4, 8, 10, 16, 20].map((n) => html`<button key=${n} type="button" role="radio"
+              ${ROOM_CAPACITIES.map((n) => html`<button key=${n} type="button" role="radio"
                 aria-checked=${room.capacity === n ? 'true' : 'false'}
                 class=${`rules-variant__opt${room.capacity === n ? ' is-active' : ''}`}
                 disabled=${!!busy} onClick=${() => setCapacity(n)}>${n}</button>`)}
             </div>
           </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('房间容量：')}${room.capacity}</span>` : null}
-          </div>` : coop ? html`<span class="t-lo rules-variant__read">${t('规则模式：')}${room.rulesVariant === 'official' ? t('官方原版') : t('大逃杀')}</span>` : null}
         </div>
       </div>
       <div class="room-bar__center">

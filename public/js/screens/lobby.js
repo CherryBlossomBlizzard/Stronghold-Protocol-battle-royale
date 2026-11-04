@@ -226,6 +226,37 @@ function TipsPanel() {
 }
 
 /**
+ * 这台服务器上此刻的同盟房（room.list → m.rooms）：密钥 / 房主 / 难度 / 人数 / 规则模式，一个按钮直接加入。
+ * 和 搜寻队友 一起放在「加入同盟」这一个模块里 —— 列表里看得到就直接点，看不到就自己开、或让 AI 补位。
+ */
+function RoomDirectory({ rooms, online, busy, onJoin, onRefresh }) {
+  const list = Array.isArray(rooms) ? rooms : [];
+  return html`<div class="room-dir">
+    <div class="room-dir__head">
+      <span class="room-dir__title">${t('服务器上的同盟')}<${MicroLabel}>ROOMS ON THIS SERVER<//></span>
+      <span class="room-dir__count t-lo">${list.length ? t('{n} 个房间', { n: list.length }) : t('暂无')}</span>
+      <button type="button" class="room-dir__refresh" title=${t('刷新')} disabled=${!online} onClick=${onRefresh}>
+        <${Icon} name="refresh" />
+      </button>
+    </div>
+    ${list.length ? html`<ul class="room-dir__list">
+      ${list.map((r) => html`<li key=${r.code} class=${`room-dir__row${r.joinable ? '' : ' is-full'}`}>
+        <span class="room-dir__code num">${r.code}</span>
+        <span class="room-dir__host">${r.hostName || t('等待房主')}</span>
+        <span class="room-dir__meta t-dim">
+          ${DIFFICULTY_NAMES[r.difficulty] ? t(DIFFICULTY_NAMES[r.difficulty]) : r.difficulty}
+          <b class="num">${r.humans}/${r.capacity}</b>${r.bots ? html` <span>AI ${r.bots}</span>` : null}${r.rulesVariant === 'official' ? html` <span>${t('官方原版')}</span>` : null}${r.test ? html` <span>${t('测试')}</span>` : null}
+        </span>
+        ${r.mine ? html`<span class="room-dir__note t-dim">${t('你在里面')}</span>`
+          : r.state === 'playing' ? html`<span class="room-dir__note t-dim">${t('模拟中')}</span>`
+          : html`<${Button} size="sm" variant=${r.joinable ? 'primary' : 'secondary'} disabled=${!online || !r.joinable || !!busy}
+              loading=${busy === `join:${r.code}`} onClick=${() => onJoin(r.code)}>${r.joinable ? t('加入') : t('已满')}<//>`}
+      </li>`)}
+    </ul>` : html`<p class="room-dir__empty t-dim">${online ? t('还没有人开同盟房 —— 你可以现在开一个') : t('正在连接服务器…')}</p>`}
+  </div>`;
+}
+
+/**
  * 搜寻队友 (官方 联合模拟 matchmaking, research 06 §3.3): pick the search mode and room capacity, then 开始搜寻. The
  * server queues the player with everyone searching the same 难度+容量 and assembles a 同盟 once enough real players
  * gather (or fills with AI on timeout). Disabled while solo is selected — matchmaking is a co-op thing.
@@ -341,6 +372,8 @@ export function LobbyScreen() {
   const conn = useStore((s) => s.connection, shallowEqual);
   // 搜寻队友（官方 联合模拟 matchmaking，research 06 §3.3）：m.search 的排队状态（store.js search）。
   const search = useStore((s) => s.search);
+  // 「加入同盟 / 搜寻队友」合并模块：这台服务器上此刻的同盟房（room.list → m.rooms，每 2 秒刷一次）。
+  const rooms = useStore((s) => s.rooms);
   useData('config');
   const [roomMode, setRoomMode] = useState(() => (loadPref('lobby.mode', 'coop') === 'solo' ? 'solo' : 'coop'));
   const [difficulty, setDifficulty] = useState(() => {
@@ -387,6 +420,18 @@ export function LobbyScreen() {
   // 搜寻队友（coop only）：进入匹配队列；房间凑齐 / 超时后由服务端组建同盟并推送 room.state。
   const startSearch = () => run('search', () => net.request('room.search', { search: searchMode, difficulty, capacity }));
   const cancelSearch = () => run('searchCancel', () => net.request('room.searchCancel', {}));
+  // 房间列表：大厅里每 2 秒问一次服务端（room.list → m.rooms）；只在线上、且不在房间里时问。
+  useEffect(() => {
+    if (!online) return undefined;
+    let stop = false;
+    const ask = () => { if (!stop) net.request('room.list', {}).catch(() => {}); };
+    ask();
+    const id = setInterval(ask, 2000);
+    return () => { stop = true; clearInterval(id); };
+  }, [online]);
+  const refreshRooms = () => { net.request('room.list', {}).catch(() => {}); };
+  // 一键加入：列表里那一行直接 room.join（密钥就来自服务端给的列表）
+  const joinListed = (c) => run(`join:${c}`, () => joinKnown('room.join', c));
   const join = (c = code) => {
     // `onClick=${join}` hands the click EVENT as the first argument, and a default parameter only applies to
     // `undefined` — codeArg keeps an event target out of the key and falls back to the input field
@@ -458,8 +503,9 @@ export function LobbyScreen() {
           ${MODE_CARDS.map((c) => html`<${ModeCard} key=${c.id} card=${c} selected=${roomMode === c.id} onSelect=${pickMode} />`)}
         </div>
 
-        <div class="section-label"><span class="section-label__idx num">03</span>${t('加入同盟')}<${MicroLabel}>JOIN WITH ALLIANCE KEY<//></div>
+        <div class="section-label"><span class="section-label__idx num">03</span>${t('加入同盟')}<${MicroLabel}>JOIN / MATCHMAKING<//></div>
         <${Panel} class="join-panel" tone="amber">
+          ${roomMode === 'coop' ? html`<${RoomDirectory} rooms=${rooms} online=${online} busy=${busy} onJoin=${joinListed} onRefresh=${refreshRooms} />` : null}
           <div class="join-row">
             <${TextField} size="code" icon="key" value=${code} placeholder=${t('输入同盟密钥 / 粘贴邀请链接')}
               transform=${normalizeCode} onInput=${(v) => setCode(normalizeCode(v))} onEnter=${() => join()} />
@@ -474,6 +520,8 @@ export function LobbyScreen() {
                 onClick=${() => setCode(c)}>${c}${Array.isArray(marks) && marks.includes(c) ? html` <${TestMark} />` : null}</button>`)}`
               : html`<span class="t-dim">${t('向同伴索取 {ROOM_CODE_LEN} 位同盟密钥，或直接打开邀请链接', { ROOM_CODE_LEN })}</span>`}
           </div>
+          ${roomMode === 'coop' ? html`<${SearchPanel} roomMode=${roomMode} searchMode=${searchMode} capacity=${capacity} online=${online} busy=${busy}
+            onPickMode=${pickSearchMode} onPickCapacity=${pickCapacity} onSearch=${startSearch} />` : null}
         <//>
         <${TipsPanel} />
       </section>
@@ -500,9 +548,6 @@ export function LobbyScreen() {
               : html`<${Spinner} size="sm" label="CONNECTING" />`}
           </div>
         </div>
-        ${roomMode === 'coop' ? html`<div class="section-label"><span class="section-label__idx num">04</span>${t('搜寻队友')}<${MicroLabel}>FIND TEAMMATES<//></div>
-          <${SearchPanel} roomMode=${roomMode} searchMode=${searchMode} capacity=${capacity} online=${online} busy=${busy}
-            onPickMode=${pickSearchMode} onPickCapacity=${pickCapacity} onSearch=${startSearch} />` : null}
       </section>
     </div>
     ${search && search.state === 'queued' ? html`<${SearchOverlay} search=${search} busy=${busy} onCancel=${cancelSearch} />` : null}
